@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<marathon>
+  <weapons>
+    <weapon index="0" speed="200" damage="50"/>
+    <weapon index="1" speed="150" damage="75"/>
+  </weapons>
+  <monsters>
+    <monster index="0" vitality="100" speed="50"/>
+  </monsters>
+  <dynamic_limits>
+    <max_objects value="1024"/>
+    <max_monsters value="256"/>
+  </dynamic_limits>
+  <sounds>
+    <ambient index="0" volume="128"/>
+  </sounds>
+</marathon>

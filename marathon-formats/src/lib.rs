@@ -19,6 +19,19 @@ pub use map::{
     ObjectFrequencyDefinition, Polygon, RandomSoundImage, Side, StaticLightData,
     StaticPlatformData,
 };
+pub use mml::{MmlDocument, MmlElement, MmlSection};
+pub use physics::{
+    AttackDefinition, EffectDefinition, MonsterDefinition, PhysicsConstants, PhysicsData,
+    ProjectileDefinition, TriggerDefinition, WeaponDefinition,
+};
+pub use plugin::{
+    MapPatch, MapResource, PluginMetadata, ScenarioRequirement, ShapesPatch, SoloLuaWriteAccess,
+};
+pub use shapes::{
+    Bitmap, Collection, CollectionDefinition, CollectionHeader, CollectionType, ColorValue,
+    HighLevelShape, LowLevelShape, LowLevelShapeFlags, ShapesFile,
+};
+pub use sounds::{SoundBehavior, SoundDefinition, SoundFileHeader, SoundFlags, SoundsFile};
 pub use tags::WadTag;
 pub use types::{DamageDefinition, ShapeDescriptor, SideTexture, WorldPoint2d, WorldPoint3d};
 pub use wad::{WadEntry, WadFile, WadHeader};

@@ -1,0 +1,14 @@
+# Exclude copyrighted Marathon data files from version control.
+# Only sample/test fixtures (MML, Plugin.xml) are committed.
+*.sceA
+*.scen
+*.sce2
+*.shpA
+*.shp2
+*.sndA
+*.snd2
+Shapes
+Sounds
+Physics Model
+Map
+*.wad

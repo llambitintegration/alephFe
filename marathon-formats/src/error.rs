@@ -77,6 +77,8 @@ pub enum SoundError {
     InvalidTag(i32),
     #[error("invalid sound file version: {0}")]
     InvalidVersion(i32),
+    #[error("negative sound file counts: source_count={source_count}, sound_count={sound_count}")]
+    NegativeCounts { source_count: i16, sound_count: i16 },
     #[error("permutation index {index} out of range (max {max})")]
     PermutationOutOfRange { index: usize, max: usize },
     #[error("audio data offset {offset} exceeds file size {file_size}")]

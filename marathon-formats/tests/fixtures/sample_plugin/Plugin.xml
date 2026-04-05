@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<plugin name="Sample Plugin" version="1.0" description="A sample plugin for testing">
+  <scenario name="Marathon Infinity" id="minf" version="1.0"/>
+  <mml file="overrides.mml"/>
+  <shapes_patch file="sprites.shpA" requires_opengl="true"/>
+  <sounds_patch file="effects.sndA"/>
+</plugin>
