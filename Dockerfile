@@ -1,4 +1,4 @@
-FROM rust:1.82-slim AS base
+FROM rust:slim AS base
 WORKDIR /app
 COPY . .
 
@@ -15,8 +15,9 @@ RUN rustup component add rustfmt
 RUN cargo fmt --check 2>&1
 
 FROM base AS coverage
-RUN cargo install cargo-tarpaulin --locked
+RUN rustup component add llvm-tools-preview
+RUN cargo install cargo-llvm-cov --locked
 RUN THRESHOLD=$(cat .coverage-threshold 2>/dev/null || echo 0) && \
-    cargo tarpaulin --out stdout --fail-under "$THRESHOLD" 2>&1
+    cargo llvm-cov --fail-under-lines "$THRESHOLD" 2>&1
 
 CMD ["cargo", "test"]
