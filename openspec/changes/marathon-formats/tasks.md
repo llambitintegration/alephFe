@@ -42,25 +42,25 @@ Implementation checklist for the `marathon-formats` crate. Tasks are ordered by 
 
 ## 4. Map Geometry
 
-- [ ] 4.1 Implement `Endpoint` struct from EPNT tag (16 bytes: flags, heights, vertex, transformed, supporting_polygon_index) with `BinRead`; implement legacy PNTS fallback (4 bytes: x, y with default fields)
-- [ ] 4.2 Implement PNTS-over-EPNT precedence logic: when both tags are present, use PNTS data
-- [ ] 4.3 Implement `Line` struct from LINS tag (32 bytes) with `BinRead`; implement `LineFlags` bitflags (solid, transparent, landscape, elevation, variable_elevation, has_transparent_side, decorative)
-- [ ] 4.4 Implement `Side` struct from SIDS tag (64 bytes) with `BinRead` using `SideTexture` for the three texture definitions; implement `SideFlags` bitflags (control_panel_status, is_control_panel, is_repair_switch, etc.)
-- [ ] 4.5 Implement `Polygon` struct from POLY tag (128 bytes) with `BinRead`; implement `PolygonType` enum (normal through superglue, 24 variants); handle 8-element index arrays with `vertex_count` validity
-- [ ] 4.6 Implement `MapObject` struct from OBJS tag (16 bytes) with `BinRead`; implement `MapObjectType` enum (monster, scenery, item, player, goal, sound_source); implement `MapObjectFlags` bitflags
-- [ ] 4.7 Implement `StaticLightData` struct from LITE tag (100 bytes) with `BinRead`; implement `LightingFunctionSpec` sub-struct (14 bytes with fixed-point intensity fields); implement old M1 light format (32 bytes)
-- [ ] 4.8 Implement `StaticPlatformData` struct from plat tag (32 bytes) with `BinRead`; implement platform flags as `u32` bitflags
-- [ ] 4.9 Implement `MediaData` struct from medi tag (32 bytes) with `BinRead`; implement media type enum (water, lava, goo, sewage, jjaro); convert fixed-point light intensity
-- [ ] 4.10 Implement `MapAnnotation` struct from NOTE tag (72 bytes) with `BinRead`; handle 64-byte null-terminated text field
-- [ ] 4.11 Implement terminal data parsing from term tag: parse `StaticPreprocessedTerminalData` header (10 bytes), grouping records (12 bytes each), font change records (6 bytes each), and text body; handle variable-length format
-- [ ] 4.12 Implement `AmbientSoundImage` struct from ambi tag (16 bytes) and `RandomSoundImage` struct from bonk tag (32 bytes) with `BinRead`; convert fixed-point pitch/delta fields
-- [ ] 4.13 Implement `MapInfo` struct from Minf tag (88 bytes) with `BinRead`; implement `MissionFlags`, `EnvironmentFlags`, and `EntryPointFlags` bitflags; handle 66-byte level name
-- [ ] 4.14 Implement `ObjectFrequencyDefinition` struct from plac tag (12 bytes) with `BinRead`
-- [ ] 4.15 Implement guard path stub from `p\x8Cth` tag: parse as opaque byte data
-- [ ] 4.16 Implement `MapData::from_entry(WadEntry)` convenience method that parses all known map tags from a WAD entry into a single `MapData` struct with optional fields
-- [ ] 4.17 Implement tag data length validation: verify `tag_length % struct_size == 0` for all fixed-size map tags; return `MapError` on mismatch
-- [ ] 4.18 Implement cross-reference validation: check polygon endpoint/line/side/adjacent references, line endpoint/polygon references, side polygon/line back-references, object polygon references; collect errors without aborting; make validation opt-in
-- [ ] 4.19 Write unit tests for each map struct parser (construct minimal binary payloads, verify field values, flag decoding, type discrimination, and error cases)
+- [x] 4.1 Implement `Endpoint` struct from EPNT tag (16 bytes: flags, heights, vertex, transformed, supporting_polygon_index) with `BinRead`; implement legacy PNTS fallback (4 bytes: x, y with default fields)
+- [x] 4.2 Implement PNTS-over-EPNT precedence logic: when both tags are present, use PNTS data
+- [x] 4.3 Implement `Line` struct from LINS tag (32 bytes) with `BinRead`; implement `LineFlags` bitflags (solid, transparent, landscape, elevation, variable_elevation, has_transparent_side, decorative)
+- [x] 4.4 Implement `Side` struct from SIDS tag (64 bytes) with `BinRead` using `SideTexture` for the three texture definitions; implement `SideFlags` bitflags (control_panel_status, is_control_panel, is_repair_switch, etc.)
+- [x] 4.5 Implement `Polygon` struct from POLY tag (128 bytes) with `BinRead`; implement `PolygonType` enum (normal through superglue, 24 variants); handle 8-element index arrays with `vertex_count` validity
+- [x] 4.6 Implement `MapObject` struct from OBJS tag (16 bytes) with `BinRead`; implement `MapObjectType` enum (monster, scenery, item, player, goal, sound_source); implement `MapObjectFlags` bitflags
+- [x] 4.7 Implement `StaticLightData` struct from LITE tag (100 bytes) with `BinRead`; implement `LightingFunctionSpec` sub-struct (14 bytes with fixed-point intensity fields); implement old M1 light format (32 bytes)
+- [x] 4.8 Implement `StaticPlatformData` struct from plat tag (32 bytes) with `BinRead`; implement platform flags as `u32` bitflags
+- [x] 4.9 Implement `MediaData` struct from medi tag (32 bytes) with `BinRead`; implement media type enum (water, lava, goo, sewage, jjaro); convert fixed-point light intensity
+- [x] 4.10 Implement `MapAnnotation` struct from NOTE tag (72 bytes) with `BinRead`; handle 64-byte null-terminated text field
+- [x] 4.11 Implement terminal data parsing from term tag: parse `StaticPreprocessedTerminalData` header (10 bytes), grouping records (12 bytes each), font change records (6 bytes each), and text body; handle variable-length format
+- [x] 4.12 Implement `AmbientSoundImage` struct from ambi tag (16 bytes) and `RandomSoundImage` struct from bonk tag (32 bytes) with `BinRead`; convert fixed-point pitch/delta fields
+- [x] 4.13 Implement `MapInfo` struct from Minf tag (88 bytes) with `BinRead`; implement `MissionFlags`, `EnvironmentFlags`, and `EntryPointFlags` bitflags; handle 66-byte level name
+- [x] 4.14 Implement `ObjectFrequencyDefinition` struct from plac tag (12 bytes) with `BinRead`
+- [x] 4.15 Implement guard path stub from `p\x8Cth` tag: parse as opaque byte data
+- [x] 4.16 Implement `MapData::from_entry(WadEntry)` convenience method that parses all known map tags from a WAD entry into a single `MapData` struct with optional fields
+- [x] 4.17 Implement tag data length validation: verify `tag_length % struct_size == 0` for all fixed-size map tags; return `MapError` on mismatch
+- [x] 4.18 Implement cross-reference validation: check polygon endpoint/line/side/adjacent references, line endpoint/polygon references, side polygon/line back-references, object polygon references; collect errors without aborting; make validation opt-in
+- [x] 4.19 Write unit tests for each map struct parser (construct minimal binary payloads, verify field values, flag decoding, type discrimination, and error cases)
 
 ## 5. Shape Collections
 

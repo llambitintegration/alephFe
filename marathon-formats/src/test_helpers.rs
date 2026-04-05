@@ -387,33 +387,58 @@ impl MapDataBuilder {
     /// Build a single 128-byte POLY record.
     pub fn polygon(vertex_count: u16, endpoint_indexes: &[i16], line_indexes: &[i16]) -> Vec<u8> {
         let mut w = BinaryWriter::new()
-            .write_i16(0) // type (normal)
+            .write_i16(0) // polygon_type (normal)
             .write_u16(0) // flags
-            .write_u16(0) // permutation
+            .write_i16(0) // permutation
             .write_u16(vertex_count);
 
         // endpoint_indexes[8]
         for i in 0..8 {
-            let idx = endpoint_indexes.get(i).copied().unwrap_or(-1);
-            w = w.write_i16(idx);
+            w = w.write_i16(endpoint_indexes.get(i).copied().unwrap_or(-1));
         }
-
         // line_indexes[8]
         for i in 0..8 {
-            let idx = line_indexes.get(i).copied().unwrap_or(-1);
-            w = w.write_i16(idx);
+            w = w.write_i16(line_indexes.get(i).copied().unwrap_or(-1));
         }
+
+        w = w
+            .write_u16(0xFFFF) // floor_texture (NONE)
+            .write_u16(0xFFFF) // ceiling_texture (NONE)
+            .write_i16(0) // floor_height
+            .write_i16(1024) // ceiling_height
+            .write_i16(0) // floor_lightsource_index
+            .write_i16(0) // ceiling_lightsource_index
+            .write_i32(0) // area
+            .write_padding(8) // runtime: first_object, first_exclusion_zone_index, line/point_exclusion_zone_count
+            .write_i16(0) // floor_transfer_mode
+            .write_i16(0); // ceiling_transfer_mode
+
+        // adjacent_polygon_indexes[8]
+        for _ in 0..8 {
+            w = w.write_i16(-1);
+        }
+
+        w = w
+            .write_padding(4) // runtime: first_neighbor_index, neighbor_count
+            .write_i16(0) // center.x
+            .write_i16(0); // center.y
 
         // side_indexes[8] — all NONE
         for _ in 0..8 {
             w = w.write_i16(-1);
         }
 
-        // Fill remaining 128 - (8 + 16 + 16 + 16) = 72 bytes with defaults
-        // floor_texture(2) + ceiling_texture(2) + floor_height(2) + ceiling_height(2)
-        // + floor_lightsource(2) + ceiling_lightsource(2) + ...
-        let written = 8 + 16 + 16 + 16; // 56 bytes so far
-        w = w.write_padding(128 - written);
+        w = w
+            .write_i16(0) // floor_origin.x
+            .write_i16(0) // floor_origin.y
+            .write_i16(0) // ceiling_origin.x
+            .write_i16(0) // ceiling_origin.y
+            .write_i16(-1) // media_index
+            .write_i16(-1) // media_lightsource_index
+            .write_i16(-1) // sound_source_indexes
+            .write_i16(-1) // ambient_sound_image_index
+            .write_i16(-1) // random_sound_image_index
+            .write_padding(2); // unused
 
         w.build()
     }

@@ -14,6 +14,11 @@ pub mod types;
 pub mod wad;
 
 pub use error::ParseError;
+pub use map::{
+    AmbientSoundImage, Endpoint, Line, MapAnnotation, MapData, MapInfo, MapObject, MediaData,
+    ObjectFrequencyDefinition, Polygon, RandomSoundImage, Side, StaticLightData,
+    StaticPlatformData,
+};
 pub use tags::WadTag;
 pub use types::{DamageDefinition, ShapeDescriptor, SideTexture, WorldPoint2d, WorldPoint3d};
 pub use wad::{WadEntry, WadFile, WadHeader};
