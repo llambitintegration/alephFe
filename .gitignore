@@ -1,0 +1,9 @@
+/target
+marathon-formats/target
+tests/fixtures/
+*.sceA
+*.shpA
+*.sndA
+*.phyA
+*.sgaA
+*.filA

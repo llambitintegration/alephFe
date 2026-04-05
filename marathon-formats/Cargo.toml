@@ -1,0 +1,16 @@
+[package]
+name = "marathon-formats"
+version = "0.1.0"
+edition = "2021"
+description = "Parser for Marathon (Aleph One) binary content formats: WAD, maps, shapes, sounds, physics, MML, and plugins"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/llambit/alephone-rust"
+
+[dependencies]
+binrw = "0.14"
+thiserror = "2"
+bitflags = "2"
+quick-xml = "0.37"
+
+[dev-dependencies]
+pretty_assertions = "1"
