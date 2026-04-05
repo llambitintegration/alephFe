@@ -12,5 +12,9 @@ thiserror = "2"
 bitflags = "2"
 quick-xml = "0.37"
 
+[features]
+test-helpers = []
+
 [dev-dependencies]
 pretty_assertions = "1"
+marathon-formats = { path = ".", features = ["test-helpers"] }

@@ -185,7 +185,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tag_roundtrip() {
+    fn test_tags_known_roundtrip() {
         let tags = [
             WadTag::Points,
             WadTag::Endpoints,
@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unknown_tag() {
+    fn test_tags_unknown_preserved() {
         let tag = WadTag::from(0xDEADBEEF);
         assert_eq!(tag, WadTag::Unknown(0xDEADBEEF));
         let code: u32 = tag.into();

@@ -98,7 +98,10 @@ pub struct WadEntry {
 impl WadEntry {
     /// Get raw data for a specific tag, if present.
     pub fn get_tag_data(&self, tag: WadTag) -> Option<&[u8]> {
-        self.tags.iter().find(|t| t.tag == tag).map(|t| t.data.as_slice())
+        self.tags
+            .iter()
+            .find(|t| t.tag == tag)
+            .map(|t| t.data.as_slice())
     }
 
     /// Get all tags in this entry.
@@ -107,13 +110,16 @@ impl WadEntry {
     }
 
     /// Parse a tag's data into a typed struct.
-    pub fn parse_tag<T: for<'a> BinRead<Args<'a> = ()> + binrw::meta::ReadEndian>(&self, tag: WadTag) -> Result<T, WadError> {
-        let data = self
-            .get_tag_data(tag)
-            .ok_or_else(|| WadError::BinRw(binrw::Error::AssertFail {
+    pub fn parse_tag<T: for<'a> BinRead<Args<'a> = ()> + binrw::meta::ReadEndian>(
+        &self,
+        tag: WadTag,
+    ) -> Result<T, WadError> {
+        let data = self.get_tag_data(tag).ok_or_else(|| {
+            WadError::BinRw(binrw::Error::AssertFail {
                 pos: 0,
                 message: format!("tag {:?} not found in entry", tag),
-            }))?;
+            })
+        })?;
         let mut cursor = Cursor::new(data);
         T::read(&mut cursor).map_err(WadError::BinRw)
     }
@@ -242,7 +248,10 @@ impl WadFile {
     }
 }
 
-fn parse_tag_chain(entry_data: &[u8], entry_header_size: usize) -> Result<Vec<RawTagData>, WadError> {
+fn parse_tag_chain(
+    entry_data: &[u8],
+    entry_header_size: usize,
+) -> Result<Vec<RawTagData>, WadError> {
     let mut tags = Vec::new();
     let mut offset = 0usize;
     let mut visited = HashSet::new();
@@ -306,13 +315,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_header_too_short() {
+    fn test_wad_header_too_short() {
         let result = WadFile::from_bytes(&[0u8; 64]);
         assert!(matches!(result, Err(WadError::HeaderTooShort(64))));
     }
 
     #[test]
-    fn test_invalid_version() {
+    fn test_wad_invalid_version() {
         let mut data = [0u8; 128];
         // Set version to 99 (big-endian i16)
         data[0] = 0;
@@ -322,7 +331,7 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_wad() {
+    fn test_wad_empty() {
         let mut data = [0u8; 128];
         // version = 4
         data[1] = 4;

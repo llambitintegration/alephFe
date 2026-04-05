@@ -103,7 +103,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_fixed_to_f32() {
+    fn test_types_fixed_to_f32() {
         assert_eq!(fixed_to_f32(0x10000), 1.0);
         assert_eq!(fixed_to_f32(0x8000), 0.5);
         assert_eq!(fixed_to_f32(0), 0.0);
@@ -112,14 +112,14 @@ mod tests {
     }
 
     #[test]
-    fn test_world_distance_to_f32() {
+    fn test_types_world_distance_to_f32() {
         assert_eq!(world_distance_to_f32(1024), 1.0);
         assert_eq!(world_distance_to_f32(512), 0.5);
         assert_eq!(world_distance_to_f32(0), 0.0);
     }
 
     #[test]
-    fn test_marathon_angle() {
+    fn test_types_marathon_angle() {
         let a = MarathonAngle(128); // quarter turn
         assert!((a.to_degrees() - 90.0).abs() < 0.01);
         assert!((a.to_radians() - std::f32::consts::FRAC_PI_2).abs() < 0.01);
@@ -129,13 +129,13 @@ mod tests {
     }
 
     #[test]
-    fn test_four_chars() {
+    fn test_types_four_chars() {
         assert_eq!(four_chars(b'P', b'N', b'T', b'S'), 0x504E5453);
         assert_eq!(four_chars(b'L', b'I', b'N', b'S'), 0x4C494E53);
     }
 
     #[test]
-    fn test_shape_descriptor() {
+    fn test_types_shape_descriptor_roundtrip() {
         // collection=5, clut=2, shape=42
         let sd = ShapeDescriptor::from_parts(5, 2, 42);
         assert_eq!(sd.collection(), 5);

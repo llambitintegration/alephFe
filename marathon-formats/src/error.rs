@@ -45,7 +45,9 @@ pub enum WadError {
 
 #[derive(Debug, Error)]
 pub enum MapError {
-    #[error("tag data length {length} is not a multiple of struct size {struct_size} for tag {tag}")]
+    #[error(
+        "tag data length {length} is not a multiple of struct size {struct_size} for tag {tag}"
+    )]
     InvalidTagLength {
         tag: String,
         length: usize,
@@ -85,7 +87,9 @@ pub enum SoundError {
 
 #[derive(Debug, Error)]
 pub enum PhysicsError {
-    #[error("tag data length {length} is not a multiple of record size {record_size} for tag {tag}")]
+    #[error(
+        "tag data length {length} is not a multiple of record size {record_size} for tag {tag}"
+    )]
     InvalidTagLength {
         tag: String,
         length: usize,
@@ -118,8 +122,7 @@ impl std::fmt::Display for XmlContextMessage {
     }
 }
 
-impl std::error::Error for XmlContextMessage {
-}
+impl std::error::Error for XmlContextMessage {}
 
 #[derive(Debug, Error)]
 pub enum PluginError {

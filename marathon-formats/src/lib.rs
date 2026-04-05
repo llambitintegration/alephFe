@@ -6,6 +6,10 @@ pub mod plugin;
 pub mod shapes;
 pub mod sounds;
 pub mod tags;
+/// Test helpers for constructing synthetic Marathon binary data.
+/// Available when the `test-helpers` feature is enabled or during `cargo test`.
+#[cfg(any(test, feature = "test-helpers"))]
+pub mod test_helpers;
 pub mod types;
 pub mod wad;
 
