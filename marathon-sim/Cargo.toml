@@ -1,0 +1,19 @@
+[package]
+name = "marathon-sim"
+version = "0.1.0"
+edition = "2021"
+description = "Deterministic game simulation for Marathon (Aleph One): player physics, monster AI, combat, and world mechanics"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/llambit/alephone-rust"
+
+[dependencies]
+marathon-formats = { path = "../marathon-formats" }
+bevy_ecs = "0.15"
+glam = { version = "0.29", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+rand = "0.8"
+thiserror = "2"
+
+[dev-dependencies]
+pretty_assertions = "1"

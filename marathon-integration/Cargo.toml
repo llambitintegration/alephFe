@@ -1,0 +1,23 @@
+[package]
+name = "marathon-integration"
+version = "0.1.0"
+edition = "2021"
+description = "Game integration layer for Marathon (Aleph One): input, HUD, menus, terminals, game shell, and game modes"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/llambit/alephone-rust"
+
+[dependencies]
+marathon-formats = { path = "../marathon-formats" }
+marathon-audio = { path = "../marathon-audio" }
+bevy_ecs = "0.15"
+winit = "0.30"
+wgpu = "24"
+glyphon = "0.7"
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
+bitflags = "2"
+rand = "0.8"
+thiserror = "2"
+
+[dev-dependencies]
+pretty_assertions = "1"
