@@ -1,0 +1,42 @@
+services:
+  # Fetch Marathon 2 game data into a shared volume
+  data:
+    build:
+      context: .
+      dockerfile: Dockerfile.e2e
+      target: fetch-data
+    volumes:
+      - game-data:/mnt
+    entrypoint: ["sh", "-c", "cp -r /data/* /mnt/ && echo 'Data ready'"]
+
+  # Web server: builds WASM and serves via nginx
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    volumes:
+      - game-data:/data:ro
+    depends_on:
+      data:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost/"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+      start_period: 3s
+
+  # Playwright e2e test runner
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.e2e
+      target: runner
+    depends_on:
+      web:
+        condition: service_healthy
+    environment:
+      - BASE_URL=http://web:80
+
+volumes:
+  game-data:

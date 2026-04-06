@@ -7,7 +7,7 @@ services:
     container_name: agentic-marathon
     volumes:
       # Mount Marathon 2 game data
-      - ../alephone/data/Scenarios/Marathon 2/Map.sceA:/data/Map.sceA:ro
+      - ../alephone/data/Scenarios/Marathon 2/Map.stripped.sceA:/data/Map.sceA:ro
       - ../alephone/data/Scenarios/Marathon 2/Shapes.shpA:/data/Shapes.shpA:ro
       - "../alephone/data/Scenarios/Marathon 2/Physics Models/Standard.phyA:/data/Physics.phyA:ro"
     expose:

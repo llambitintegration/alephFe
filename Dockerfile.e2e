@@ -1,0 +1,26 @@
+FROM debian:bookworm-slim AS fetch-data
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates && rm -rf /var/lib/apt/lists/*
+
+# Clone Marathon 2 data (same pinned commit as main Dockerfile)
+RUN git clone --depth 1 https://github.com/Aleph-One-Marathon/data-marathon-2.git /tmp/m2-data \
+ && cd /tmp/m2-data && git fetch --depth 1 origin eaf21a7e9f72706c4c2ff9a2960c4367f739f04d \
+ && git checkout eaf21a7e9f72706c4c2ff9a2960c4367f739f04d
+
+# Prepare data files with names the web server expects
+RUN mkdir -p /data \
+ && dd if=/tmp/m2-data/Map.sceA of=/data/Map.sceA bs=128 skip=1 \
+ && cp /tmp/m2-data/Shapes.shpA /data/Shapes.shpA \
+ && cp "/tmp/m2-data/Physics Models/Standard.phyA" /data/Physics.phyA \
+ && rm -rf /tmp/m2-data
+
+# ─── Playwright runner ──────────────────────────────────────────────────────
+FROM mcr.microsoft.com/playwright:v1.48.0-noble AS runner
+
+WORKDIR /e2e
+COPY e2e/package.json e2e/package-lock.json e2e/tsconfig.json e2e/playwright.config.ts ./
+RUN npm ci
+
+COPY e2e/tests/ ./tests/
+
+CMD ["npx", "playwright", "test"]
