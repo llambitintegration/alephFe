@@ -1,0 +1,22 @@
+[package]
+name = "marathon-game"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "marathon-game"
+path = "src/main.rs"
+
+[dependencies]
+marathon-formats = { path = "../marathon-formats" }
+marathon-sim = { path = "../marathon-sim" }
+marathon-audio = { path = "../marathon-audio" }
+marathon-integration = { path = "../marathon-integration" }
+wgpu = "24"
+winit = "0.30"
+clap = { version = ">=4.0, <4.6", features = ["derive"] }
+glam = "0.29"
+bytemuck = { version = "1", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+pollster = "0.4"

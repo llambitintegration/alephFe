@@ -34,4 +34,7 @@ RUN cargo install cargo-llvm-cov --locked
 RUN THRESHOLD=$(cat .coverage-threshold 2>/dev/null || echo 0) && \
     cargo llvm-cov --fail-under-lines "$THRESHOLD" 2>&1
 
+FROM fetch-data AS release
+RUN cargo build --release --bin marathon-game 2>&1
+
 CMD ["cargo", "test"]

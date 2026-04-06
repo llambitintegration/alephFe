@@ -1709,6 +1709,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "marathon-game"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "clap",
+ "env_logger",
+ "glam 0.29.3",
+ "log",
+ "marathon-audio",
+ "marathon-formats",
+ "marathon-integration",
+ "marathon-sim",
+ "pollster",
+ "wgpu 24.0.5",
+ "winit",
+]
+
+[[package]]
 name = "marathon-integration"
 version = "0.1.0"
 dependencies = [
