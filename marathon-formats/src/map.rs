@@ -35,7 +35,7 @@ fn validate_tag_length(
     data_len: usize,
     struct_size: usize,
 ) -> Result<(), MapError> {
-    if !data_len.is_multiple_of(struct_size) {
+    if struct_size == 0 || data_len % struct_size != 0 {
         return Err(MapError::InvalidTagLength {
             tag: tag_name.to_string(),
             length: data_len,
