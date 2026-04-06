@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Marathon</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #0a0a0f; color: #ccc; font-family: monospace; overflow: hidden; }
+        #loading {
+            position: fixed; inset: 0; display: flex; flex-direction: column;
+            justify-content: center; align-items: center; z-index: 10;
+        }
+        #loading h1 { color: #4a9; font-size: 2em; margin-bottom: 1em; }
+        #loading .progress { width: 300px; height: 6px; background: #222; border-radius: 3px; }
+        #loading .progress-bar { height: 100%; background: #4a9; border-radius: 3px; width: 0%; transition: width 0.3s; }
+        #loading .status { margin-top: 1em; font-size: 0.9em; color: #888; }
+        #loading .error { color: #c44; margin-top: 1em; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        #controls {
+            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 8px;
+            font-size: 0.8em; color: #888; z-index: 5; pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="loading">
+        <h1>MARATHON</h1>
+        <div class="progress"><div class="progress-bar" id="progress-bar"></div></div>
+        <div class="status" id="status">Initializing...</div>
+        <div class="error" id="error" style="display:none"></div>
+    </div>
+    <canvas id="marathon-canvas" tabindex="0"></canvas>
+    <div id="controls">WASD: Move | Mouse: Look | Click: Capture mouse | Space: Action</div>
+
+    <script type="module">
+        const status = document.getElementById('status');
+        const progressBar = document.getElementById('progress-bar');
+        const error = document.getElementById('error');
+        const loading = document.getElementById('loading');
+
+        function setProgress(pct, msg) {
+            progressBar.style.width = pct + '%';
+            status.textContent = msg;
+        }
+
+        function showError(msg) {
+            error.textContent = msg;
+            error.style.display = 'block';
+        }
+
+        async function fetchData(url, label) {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`Failed to fetch ${label}: ${response.status}`);
+            return new Uint8Array(await response.arrayBuffer());
+        }
+
+        async function main() {
+            try {
+                setProgress(10, 'Loading WASM module...');
+                const wasm = await import('./pkg/marathon_web.js');
+                await wasm.default();
+
+                setProgress(30, 'Fetching map data...');
+                const mapData = await fetchData('/data/Map.sceA', 'Map');
+                setProgress(50, 'Fetching shapes data...');
+                const shapesData = await fetchData('/data/Shapes.shpA', 'Shapes');
+                setProgress(70, 'Fetching physics data...');
+                const physicsData = await fetchData('/data/Physics.phyA', 'Physics');
+
+                setProgress(90, 'Starting game...');
+                loading.style.display = 'none';
+                document.getElementById('marathon-canvas').focus();
+                await wasm.start_game(mapData, shapesData, physicsData);
+            } catch (e) {
+                console.error('Marathon init failed:', e);
+                showError(String(e));
+            }
+        }
+
+        main();
+    </script>
+</body>
+</html>
