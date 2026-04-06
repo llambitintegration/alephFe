@@ -41,6 +41,32 @@ pub const ITEM_ORANGE_BALL: i16 = 36;
 pub const ITEM_BLUE_BALL: i16 = 37;
 pub const ITEM_GREEN_BALL: i16 = 38;
 
+/// Timer-based item respawn for multiplayer modes.
+#[derive(Debug, Clone)]
+pub struct ItemRespawnState {
+    pub item_type: i16,
+    pub remaining: u16,
+}
+
+impl ItemRespawnState {
+    pub fn new(item_type: i16, delay_ticks: u16) -> Self {
+        Self {
+            item_type,
+            remaining: delay_ticks,
+        }
+    }
+
+    /// Tick the respawn timer. Returns true when the item should respawn.
+    pub fn tick(&mut self) -> bool {
+        if self.remaining > 0 {
+            self.remaining -= 1;
+            self.remaining == 0
+        } else {
+            false
+        }
+    }
+}
+
 /// Effect of picking up an item.
 #[derive(Debug, Clone)]
 pub enum ItemEffect {
@@ -130,5 +156,20 @@ mod tests {
     #[test]
     fn unknown_item_type() {
         assert!(item_effect(999).is_none());
+    }
+
+    #[test]
+    fn respawn_timer_counts_down() {
+        let mut state = ItemRespawnState::new(5, 100);
+        assert!(!state.tick());
+        assert!(!state.tick());
+        assert_eq!(state.remaining, 98);
+    }
+
+    #[test]
+    fn respawn_timer_fires() {
+        let mut state = ItemRespawnState::new(5, 2);
+        assert!(!state.tick());
+        assert!(state.tick());
     }
 }

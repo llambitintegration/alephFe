@@ -1,6 +1,8 @@
 use glam::{Vec2, Vec3};
 
+use crate::collision::{find_polygon_for_point, segment_intersection, slide_along_wall, wall_normal};
 use crate::tick::ActionFlags;
+use crate::world::MapGeometry;
 
 /// Player movement parameters extracted from PhysicsConstants.
 #[derive(Debug, Clone)]
@@ -166,6 +168,157 @@ pub fn compute_vertical_look(
     look.clamp(-params.maximum_elevation, params.maximum_elevation)
 }
 
+/// Result of applying collision response to player movement.
+#[derive(Debug, Clone)]
+pub struct CollisionResult {
+    /// Final position after collision.
+    pub position: Vec3,
+    /// Final velocity after collision (may be zeroed or projected).
+    pub velocity: Vec3,
+    /// New polygon index.
+    pub polygon_index: usize,
+    /// Whether the player is grounded.
+    pub grounded: bool,
+}
+
+/// Apply wall collision, step climbing, and ceiling checks to player movement.
+///
+/// Given an attempted new position (old_pos + velocity), this function:
+/// 1. Checks each line in the current polygon for crossings
+/// 2. If a line is solid (or too tall to step/too low ceiling), slides along it
+/// 3. If passable with valid step/ceiling, allows crossing and updates polygon
+/// 4. Handles gravity grounding (Z clamped to floor)
+pub fn apply_player_collision(
+    old_pos: Vec3,
+    new_pos: Vec3,
+    velocity: Vec3,
+    current_polygon: usize,
+    params: &PlayerPhysicsParams,
+    geometry: &MapGeometry,
+) -> CollisionResult {
+    let old_2d = Vec2::new(old_pos.x, old_pos.y);
+    let mut pos_2d = Vec2::new(new_pos.x, new_pos.y);
+    let mut vel = velocity;
+    let mut poly = current_polygon;
+    let mut z = new_pos.z;
+
+    // Iterate up to 3 times for multi-wall slides
+    for _ in 0..3 {
+        let mut blocked = false;
+
+        for &(line_idx, adj) in &geometry.polygon_adjacency[poly] {
+            let (la, lb) = geometry.line_endpoints[line_idx];
+
+            // Check if movement crosses this line
+            if let Some(_hit) = segment_intersection(old_2d, pos_2d, la, lb) {
+                let can_pass = if let Some(adj_idx) = adj {
+                    // Check step delta and ceiling clearance
+                    let adj_floor = geometry.floor_heights[adj_idx];
+                    let adj_ceiling = geometry.ceiling_heights[adj_idx];
+                    let cur_floor = geometry.floor_heights[poly];
+                    let floor_diff = adj_floor - cur_floor;
+                    let player_z = z.max(cur_floor);
+                    let clearance = adj_ceiling - adj_floor;
+
+                    floor_diff <= params.step_delta && clearance >= params.height
+                        && (adj_ceiling - player_z.max(adj_floor)) >= params.height
+                } else {
+                    false
+                };
+
+                if can_pass {
+                    let adj_idx = adj.unwrap();
+                    let adj_floor = geometry.floor_heights[adj_idx];
+                    let cur_floor = geometry.floor_heights[poly];
+
+                    // Step up if needed
+                    if adj_floor > cur_floor {
+                        z = z.max(adj_floor);
+                    }
+                    poly = adj_idx;
+                } else {
+                    // Slide along wall
+                    let normal = wall_normal(la, lb);
+                    let movement = pos_2d - old_2d;
+                    let slid = slide_along_wall(movement, normal);
+                    pos_2d = old_2d + slid;
+
+                    // Also project velocity
+                    let vel_2d = Vec2::new(vel.x, vel.y);
+                    let slid_vel = slide_along_wall(vel_2d, normal);
+                    vel = Vec3::new(slid_vel.x, slid_vel.y, vel.z);
+
+                    blocked = true;
+                    break;
+                }
+            }
+        }
+
+        if !blocked {
+            break;
+        }
+    }
+
+    // Update polygon index based on final position
+    poly = find_polygon_for_point(
+        pos_2d,
+        poly,
+        &geometry.polygon_vertices,
+        &geometry.polygon_adjacency,
+    );
+
+    // Ground the player
+    let floor = geometry.floor_heights[poly];
+    let grounded = z <= floor + f32::EPSILON;
+    if grounded {
+        z = floor;
+        vel.z = 0.0;
+    }
+
+    CollisionResult {
+        position: Vec3::new(pos_2d.x, pos_2d.y, z),
+        velocity: vel,
+        polygon_index: poly,
+        grounded,
+    }
+}
+
+/// Apply media submersion effects to the player.
+///
+/// Returns (new_velocity, oxygen_change, drowning_damage).
+/// - velocity is reduced by drag when submerged
+/// - oxygen decreases when submerged, increases when above surface
+/// - drowning damage applied when oxygen <= 0
+pub fn apply_media_effects(
+    velocity: Vec3,
+    player_z: f32,
+    media_height: Option<f32>,
+    media_type: Option<i16>,
+    current_oxygen: i16,
+    max_oxygen: i16,
+) -> (Vec3, i16, i16) {
+    let Some(surface_height) = media_height else {
+        // No media — recharge oxygen
+        let oxygen_change = if current_oxygen < max_oxygen { 1 } else { 0 };
+        return (velocity, oxygen_change, 0);
+    };
+
+    if player_z >= surface_height {
+        // Above surface — recharge oxygen
+        let oxygen_change = if current_oxygen < max_oxygen { 1 } else { 0 };
+        return (velocity, oxygen_change, 0);
+    }
+
+    // Submerged
+    let drag = crate::world_mechanics::media::media_drag_factor(media_type.unwrap_or(0));
+    let new_vel = Vec3::new(velocity.x * drag, velocity.y * drag, velocity.z);
+
+    let oxygen_change: i16 = -2; // deplete 2 per tick when submerged
+    let drowning_damage = if current_oxygen <= 0 { 5 } else { 0 };
+
+    (new_vel, oxygen_change, drowning_damage)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -240,5 +393,166 @@ mod tests {
             look = compute_vertical_look(look, &flags, &params);
         }
         assert!(look <= params.maximum_elevation + f32::EPSILON);
+    }
+
+    fn two_polygon_geometry() -> MapGeometry {
+        // Two adjacent 1x1 squares side by side: poly 0 (0,0)-(1,1), poly 1 (1,0)-(2,1)
+        // Line 0 is the shared line between them at x=1
+        // Line 1-4 are outer walls of poly 0
+        // Line 5-7 are outer walls of poly 1
+        MapGeometry {
+            polygon_vertices: vec![
+                vec![
+                    Vec2::new(0.0, 0.0),
+                    Vec2::new(1.0, 0.0),
+                    Vec2::new(1.0, 1.0),
+                    Vec2::new(0.0, 1.0),
+                ],
+                vec![
+                    Vec2::new(1.0, 0.0),
+                    Vec2::new(2.0, 0.0),
+                    Vec2::new(2.0, 1.0),
+                    Vec2::new(1.0, 1.0),
+                ],
+            ],
+            floor_heights: vec![0.0, 0.0],
+            ceiling_heights: vec![2.0, 2.0],
+            polygon_adjacency: vec![
+                vec![
+                    (1, None),  // bottom wall
+                    (0, Some(1)), // shared line -> poly 1
+                    (2, None),  // top wall
+                    (3, None),  // left wall
+                ],
+                vec![
+                    (4, None),  // bottom wall
+                    (5, None),  // right wall
+                    (6, None),  // top wall
+                    (0, Some(0)), // shared line -> poly 0
+                ],
+            ],
+            line_endpoints: vec![
+                (Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0)), // shared
+                (Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0)), // bottom 0
+                (Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0)), // top 0
+                (Vec2::new(0.0, 0.0), Vec2::new(0.0, 1.0)), // left 0
+                (Vec2::new(1.0, 0.0), Vec2::new(2.0, 0.0)), // bottom 1
+                (Vec2::new(2.0, 0.0), Vec2::new(2.0, 1.0)), // right 1
+                (Vec2::new(1.0, 1.0), Vec2::new(2.0, 1.0)), // top 1
+            ],
+            line_solid: vec![false, true, true, true, true, true, true],
+            line_transparent: vec![true, false, false, false, false, false, false],
+        }
+    }
+
+    #[test]
+    fn collision_passes_through_adjacent_polygon() {
+        let params = test_params();
+        let geometry = two_polygon_geometry();
+        let result = apply_player_collision(
+            Vec3::new(0.8, 0.5, 0.0),
+            Vec3::new(1.2, 0.5, 0.0),
+            Vec3::new(0.4, 0.0, 0.0),
+            0,
+            &params,
+            &geometry,
+        );
+        assert_eq!(result.polygon_index, 1);
+        assert!(result.position.x > 1.0);
+    }
+
+    #[test]
+    fn collision_slides_along_solid_wall() {
+        let params = test_params();
+        let geometry = two_polygon_geometry();
+        // Try to walk into the left wall (solid, line index 3)
+        let result = apply_player_collision(
+            Vec3::new(0.2, 0.5, 0.0),
+            Vec3::new(-0.2, 0.6, 0.0),
+            Vec3::new(-0.4, 0.1, 0.0),
+            0,
+            &params,
+            &geometry,
+        );
+        // Should be blocked from going through the wall
+        assert!(result.position.x >= 0.0);
+        assert_eq!(result.polygon_index, 0);
+    }
+
+    #[test]
+    fn step_climbing_small_ledge() {
+        let params = test_params();
+        let mut geometry = two_polygon_geometry();
+        geometry.floor_heights[1] = 0.2; // Small step up (within step_delta=0.25)
+        let result = apply_player_collision(
+            Vec3::new(0.8, 0.5, 0.0),
+            Vec3::new(1.2, 0.5, 0.0),
+            Vec3::new(0.4, 0.0, 0.0),
+            0,
+            &params,
+            &geometry,
+        );
+        assert_eq!(result.polygon_index, 1);
+        assert!(result.position.z >= 0.2 - f32::EPSILON);
+    }
+
+    #[test]
+    fn blocked_by_tall_ledge() {
+        let params = test_params();
+        let mut geometry = two_polygon_geometry();
+        geometry.floor_heights[1] = 0.5; // Too tall for step_delta=0.25
+        let result = apply_player_collision(
+            Vec3::new(0.8, 0.5, 0.0),
+            Vec3::new(1.2, 0.5, 0.0),
+            Vec3::new(0.4, 0.0, 0.0),
+            0,
+            &params,
+            &geometry,
+        );
+        assert_eq!(result.polygon_index, 0);
+    }
+
+    #[test]
+    fn blocked_by_low_ceiling() {
+        let params = test_params();
+        let mut geometry = two_polygon_geometry();
+        geometry.ceiling_heights[1] = 0.5; // Too low for player height=0.8
+        let result = apply_player_collision(
+            Vec3::new(0.8, 0.5, 0.0),
+            Vec3::new(1.2, 0.5, 0.0),
+            Vec3::new(0.4, 0.0, 0.0),
+            0,
+            &params,
+            &geometry,
+        );
+        assert_eq!(result.polygon_index, 0);
+    }
+
+    #[test]
+    fn media_submersion_applies_drag() {
+        let vel = Vec3::new(1.0, 1.0, 0.0);
+        let (new_vel, oxy_change, dmg) =
+            apply_media_effects(vel, 0.0, Some(1.0), Some(0), 600, 600);
+        assert!(new_vel.x < 1.0);
+        assert!(new_vel.y < 1.0);
+        assert!(oxy_change < 0);
+        assert_eq!(dmg, 0);
+    }
+
+    #[test]
+    fn media_drowning_damage_at_zero_oxygen() {
+        let vel = Vec3::new(0.0, 0.0, 0.0);
+        let (_, _, dmg) = apply_media_effects(vel, 0.0, Some(1.0), Some(0), 0, 600);
+        assert!(dmg > 0);
+    }
+
+    #[test]
+    fn above_media_recharges_oxygen() {
+        let vel = Vec3::new(1.0, 0.0, 0.0);
+        let (new_vel, oxy_change, dmg) =
+            apply_media_effects(vel, 2.0, Some(1.0), Some(0), 500, 600);
+        assert_eq!(new_vel, vel); // no drag
+        assert!(oxy_change > 0);
+        assert_eq!(dmg, 0);
     }
 }

@@ -55,6 +55,68 @@ pub fn calculate_aoe_damage(
     (base_damage as f32 * scale) as i16
 }
 
+/// Result of applying damage to an entity.
+#[derive(Debug, Clone)]
+pub struct DamageResult {
+    /// Amount actually applied to shield.
+    pub shield_damage: i16,
+    /// Amount actually applied to health.
+    pub health_damage: i16,
+    /// Whether the entity was killed (health reached 0 or below).
+    pub killed: bool,
+}
+
+/// Apply damage to an entity, subtracting from shield first, then health.
+pub fn apply_damage(
+    damage: i16,
+    current_health: i16,
+    current_shield: i16,
+) -> (i16, i16, DamageResult) {
+    if damage <= 0 {
+        return (
+            current_health,
+            current_shield,
+            DamageResult {
+                shield_damage: 0,
+                health_damage: 0,
+                killed: false,
+            },
+        );
+    }
+
+    let mut remaining = damage;
+    let mut shield = current_shield;
+    let mut health = current_health;
+    let mut shield_damage = 0i16;
+    let mut health_damage = 0i16;
+
+    // Shield absorbs damage first
+    if shield > 0 {
+        let absorbed = remaining.min(shield);
+        shield -= absorbed;
+        remaining -= absorbed;
+        shield_damage = absorbed;
+    }
+
+    // Remaining damage goes to health
+    if remaining > 0 {
+        health_damage = remaining;
+        health -= remaining;
+    }
+
+    let killed = health <= 0;
+
+    (
+        health,
+        shield,
+        DamageResult {
+            shield_damage,
+            health_damage,
+            killed,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,5 +191,41 @@ mod tests {
     #[test]
     fn aoe_zero_beyond_radius() {
         assert_eq!(calculate_aoe_damage(100, 8.0, 5.0), 0);
+    }
+
+    #[test]
+    fn damage_absorbed_by_shield() {
+        let (health, shield, result) = apply_damage(30, 100, 50);
+        assert_eq!(shield, 20);
+        assert_eq!(health, 100);
+        assert_eq!(result.shield_damage, 30);
+        assert_eq!(result.health_damage, 0);
+        assert!(!result.killed);
+    }
+
+    #[test]
+    fn damage_spills_to_health() {
+        let (health, shield, result) = apply_damage(80, 100, 50);
+        assert_eq!(shield, 0);
+        assert_eq!(health, 70);
+        assert_eq!(result.shield_damage, 50);
+        assert_eq!(result.health_damage, 30);
+        assert!(!result.killed);
+    }
+
+    #[test]
+    fn lethal_damage() {
+        let (health, shield, result) = apply_damage(200, 100, 50);
+        assert_eq!(shield, 0);
+        assert!(health <= 0);
+        assert!(result.killed);
+    }
+
+    #[test]
+    fn zero_damage_no_effect() {
+        let (health, shield, result) = apply_damage(0, 100, 50);
+        assert_eq!(health, 100);
+        assert_eq!(shield, 50);
+        assert!(!result.killed);
     }
 }

@@ -405,6 +405,274 @@ fn spawn_media(world: &mut World, map_data: &MapData) {
     }
 }
 
+/// Serializable snapshot of the simulation state for save/load.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SimSnapshot {
+    pub tick_count: u64,
+    /// We store the original seed so we can recreate RNG state by
+    /// fast-forwarding. For save/load, the tick_count tells us how many
+    /// draws were made. In practice, we re-seed from a combined value.
+    pub rng_seed: u64,
+    pub player: Option<PlayerSnapshot>,
+    pub monsters: Vec<MonsterSnapshot>,
+    pub projectiles: Vec<ProjectileSnapshot>,
+    pub items: Vec<ItemSnapshot>,
+    pub platforms: Vec<crate::components::Platform>,
+    pub lights: Vec<crate::components::Light>,
+    pub media: Vec<crate::components::Media>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PlayerSnapshot {
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub facing: f32,
+    pub vertical_look: f32,
+    pub health: i16,
+    pub shield: i16,
+    pub oxygen: i16,
+    pub polygon_index: usize,
+    pub grounded: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct MonsterSnapshot {
+    pub definition_index: usize,
+    pub state: crate::components::MonsterState,
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub facing: f32,
+    pub health: i16,
+    pub polygon_index: usize,
+    pub attack_cooldown: u16,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ProjectileSnapshot {
+    pub definition_index: usize,
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub distance_traveled: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ItemSnapshot {
+    pub item_type: i16,
+    pub position: Vec3,
+    pub polygon_index: usize,
+}
+
+use serde::{Serialize, Deserialize};
+
+impl SimWorld {
+    /// Create a serializable snapshot of the current simulation state.
+    pub fn snapshot(&mut self) -> SimSnapshot {
+        // Player
+        let player = {
+            let mut q = self.world.query_filtered::<(
+                &Position, &Velocity, &Facing, &crate::components::VerticalLook,
+                &Health, &Shield, &Oxygen, &PolygonIndex, &Grounded,
+            ), bevy_ecs::prelude::With<Player>>();
+            q.iter(&self.world).next().map(|(pos, vel, fac, vlook, hp, sh, ox, poly, gr)| {
+                PlayerSnapshot {
+                    position: pos.0,
+                    velocity: vel.0,
+                    facing: fac.0,
+                    vertical_look: vlook.0,
+                    health: hp.0,
+                    shield: sh.0,
+                    oxygen: ox.0,
+                    polygon_index: poly.0,
+                    grounded: gr.0,
+                }
+            })
+        };
+
+        // Monsters
+        let monsters = {
+            let mut q = self.world.query::<(
+                &Monster, &crate::components::MonsterState, &Position, &Velocity,
+                &Facing, &Health, &PolygonIndex, &AttackCooldown,
+            )>();
+            q.iter(&self.world).map(|(m, state, pos, vel, fac, hp, poly, cd)| {
+                MonsterSnapshot {
+                    definition_index: m.definition_index,
+                    state: *state,
+                    position: pos.0,
+                    velocity: vel.0,
+                    facing: fac.0,
+                    health: hp.0,
+                    polygon_index: poly.0,
+                    attack_cooldown: cd.0,
+                }
+            }).collect()
+        };
+
+        // Projectiles
+        let projectiles = {
+            let mut q = self.world.query::<(&Projectile, &Position, &Velocity)>();
+            q.iter(&self.world).map(|(p, pos, vel)| {
+                ProjectileSnapshot {
+                    definition_index: p.definition_index,
+                    position: pos.0,
+                    velocity: vel.0,
+                    distance_traveled: p.distance_traveled,
+                }
+            }).collect()
+        };
+
+        // Items
+        let items = {
+            let mut q = self.world.query::<(&Item, &Position, &PolygonIndex)>();
+            q.iter(&self.world).map(|(item, pos, poly)| {
+                ItemSnapshot {
+                    item_type: item.item_type,
+                    position: pos.0,
+                    polygon_index: poly.0,
+                }
+            }).collect()
+        };
+
+        // Platforms
+        let platforms = {
+            let mut q = self.world.query::<&crate::components::Platform>();
+            q.iter(&self.world).cloned().collect()
+        };
+
+        // Lights
+        let lights = {
+            let mut q = self.world.query::<&crate::components::Light>();
+            q.iter(&self.world).cloned().collect()
+        };
+
+        // Media
+        let media_vec = {
+            let mut q = self.world.query::<&crate::components::Media>();
+            q.iter(&self.world).cloned().collect()
+        };
+
+        // For RNG, we store a combined seed derived from tick count
+        // This allows recreating a usable (but not identical) RNG on load.
+        let tick_count = self.world.resource::<TickCounter>().0;
+        let rng_seed = tick_count.wrapping_mul(6364136223846793005).wrapping_add(1);
+
+        SimSnapshot {
+            tick_count,
+            rng_seed,
+            player,
+            monsters,
+            projectiles,
+            items,
+            platforms,
+            lights,
+            media: media_vec,
+        }
+    }
+
+    /// Serialize the simulation state to bytes.
+    pub fn serialize(&mut self) -> Result<Vec<u8>, bincode::Error> {
+        let snapshot = self.snapshot();
+        bincode::serialize(&snapshot)
+    }
+
+    /// Deserialize simulation state from bytes, requiring map/physics data to rebuild geometry.
+    pub fn deserialize(
+        data: &[u8],
+        map_data: &MapData,
+        physics_data: &PhysicsData,
+    ) -> Result<Self, SimWorldError> {
+        let snapshot: SimSnapshot = bincode::deserialize(data)
+            .map_err(|e| SimWorldError::MissingPhysicsData(format!("deserialize error: {}", e)))?;
+
+        let mut world = World::new();
+
+        // Rebuild geometry and resources
+        let geometry = build_map_geometry(map_data);
+        world.insert_resource(geometry);
+        world.insert_resource(PhysicsTables { data: physics_data.clone() });
+        world.insert_resource(TickCounter(snapshot.tick_count));
+        world.insert_resource(SimEvents::default());
+
+        // Restore RNG from seed
+        world.insert_resource(SimRng(StdRng::seed_from_u64(snapshot.rng_seed)));
+
+        // Restore player
+        if let Some(p) = snapshot.player {
+            world.spawn((
+                Player,
+                Position(p.position),
+                Velocity(p.velocity),
+                Facing(p.facing),
+                crate::components::VerticalLook(p.vertical_look),
+                Health(p.health),
+                Shield(p.shield),
+                Oxygen(p.oxygen),
+                PolygonIndex(p.polygon_index),
+                Grounded(p.grounded),
+                CollisionRadius(0.25),
+                EntityHeight(0.8),
+            ));
+        }
+
+        // Restore monsters
+        for m in snapshot.monsters {
+            world.spawn((
+                Monster { definition_index: m.definition_index },
+                m.state,
+                crate::components::Target::default(),
+                AttackCooldown(m.attack_cooldown),
+                Position(m.position),
+                Velocity(m.velocity),
+                Facing(m.facing),
+                Health(m.health),
+                PolygonIndex(m.polygon_index),
+                Grounded(true),
+                CollisionRadius(0.25),
+                EntityHeight(0.8),
+                SpriteShape(0),
+                AnimationFrame::default(),
+            ));
+        }
+
+        // Restore projectiles
+        for p in snapshot.projectiles {
+            world.spawn((
+                Projectile {
+                    definition_index: p.definition_index,
+                    distance_traveled: p.distance_traveled,
+                },
+                Position(p.position),
+                Velocity(p.velocity),
+            ));
+        }
+
+        // Restore items
+        for item in snapshot.items {
+            world.spawn((
+                Item { item_type: item.item_type },
+                Position(item.position),
+                PolygonIndex(item.polygon_index),
+                CollisionRadius(0.25),
+                SpriteShape(0),
+                AnimationFrame::default(),
+            ));
+        }
+
+        // Restore platforms, lights, media
+        for platform in snapshot.platforms {
+            world.spawn(platform);
+        }
+        for light in snapshot.lights {
+            world.spawn(light);
+        }
+        for media in snapshot.media {
+            world.spawn(media);
+        }
+
+        Ok(Self { world })
+    }
+}
+
 /// Errors during simulation world construction.
 #[derive(Debug, thiserror::Error)]
 pub enum SimWorldError {

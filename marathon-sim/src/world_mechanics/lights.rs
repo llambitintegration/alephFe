@@ -94,12 +94,12 @@ mod tests {
 
     #[test]
     fn phase_offset() {
-        let mut light_a = make_light(LightFunction::Linear, 100);
+        let light_a = make_light(LightFunction::Linear, 100);
         let mut light_b = make_light(LightFunction::Linear, 100);
         light_b.phase = 25;
         let mut rng = StdRng::seed_from_u64(42);
 
-        let a_at_0 = compute_light_intensity(&light_a, 0, &mut rng);
+        let _a_at_0 = compute_light_intensity(&light_a, 0, &mut rng);
         let b_at_0 = compute_light_intensity(&light_b, 0, &mut rng);
 
         // light_b at tick 0 should equal light_a at tick 25

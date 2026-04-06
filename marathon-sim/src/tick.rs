@@ -102,6 +102,120 @@ impl SimWorld {
         let mut query = self.world.query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Player>>();
         query.iter(&self.world).next().map(|p| p.0)
     }
+
+    /// Return all active entities with their rendering state.
+    ///
+    /// This includes monsters (not Dead), projectiles, items, and effects.
+    /// Does not include the player entity (queried separately).
+    pub fn entities(&mut self) -> Vec<EntityRenderState> {
+        let mut result = Vec::new();
+
+        // Monsters (exclude Dead)
+        {
+            let mut query = self.world.query::<(
+                &crate::Monster,
+                &crate::Position,
+                &crate::Facing,
+                &crate::MonsterState,
+                &crate::SpriteShape,
+                &crate::AnimationFrame,
+            )>();
+            for (monster, pos, facing, state, shape, frame) in query.iter(&self.world) {
+                if *state == crate::MonsterState::Dead {
+                    continue;
+                }
+                result.push(EntityRenderState {
+                    entity_type: RenderEntityType::Monster {
+                        definition_index: monster.definition_index,
+                    },
+                    position: pos.0,
+                    facing: facing.0,
+                    shape: shape.0,
+                    frame: frame.0,
+                });
+            }
+        }
+
+        // Projectiles
+        {
+            let mut query = self.world.query::<(
+                &crate::Projectile,
+                &crate::Position,
+            )>();
+            for (proj, pos) in query.iter(&self.world) {
+                result.push(EntityRenderState {
+                    entity_type: RenderEntityType::Projectile {
+                        definition_index: proj.definition_index,
+                    },
+                    position: pos.0,
+                    facing: 0.0,
+                    shape: 0,
+                    frame: 0,
+                });
+            }
+        }
+
+        // Items
+        {
+            let mut query = self.world.query::<(
+                &crate::Item,
+                &crate::Position,
+                &crate::SpriteShape,
+                &crate::AnimationFrame,
+            )>();
+            for (item, pos, shape, frame) in query.iter(&self.world) {
+                result.push(EntityRenderState {
+                    entity_type: RenderEntityType::Item {
+                        item_type: item.item_type,
+                    },
+                    position: pos.0,
+                    facing: 0.0,
+                    shape: shape.0,
+                    frame: frame.0,
+                });
+            }
+        }
+
+        // Effects
+        {
+            let mut query = self.world.query::<(
+                &crate::Effect,
+                &crate::Position,
+            )>();
+            for (effect, pos) in query.iter(&self.world) {
+                result.push(EntityRenderState {
+                    entity_type: RenderEntityType::Effect {
+                        definition_index: effect.definition_index,
+                    },
+                    position: pos.0,
+                    facing: 0.0,
+                    shape: 0,
+                    frame: 0,
+                });
+            }
+        }
+
+        result
+    }
+}
+
+/// Rendering data for an active entity.
+#[derive(Debug, Clone)]
+pub struct EntityRenderState {
+    pub entity_type: RenderEntityType,
+    pub position: glam::Vec3,
+    pub facing: f32,
+    pub shape: u16,
+    pub frame: u16,
+}
+
+/// Type of entity for rendering purposes.
+#[derive(Debug, Clone)]
+pub enum RenderEntityType {
+    Monster { definition_index: usize },
+    Projectile { definition_index: usize },
+    Item { item_type: i16 },
+    Effect { definition_index: usize },
 }
 
 #[cfg(test)]

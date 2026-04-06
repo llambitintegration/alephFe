@@ -70,6 +70,119 @@ pub fn activate_platform(platform: &mut Platform) {
     }
 }
 
+/// Platform activation type flag constants.
+pub const PLATFORM_ACTIVATE_ON_PLAYER_ENTRY: u32 = 0x0001;
+pub const PLATFORM_ACTIVATE_ON_ACTION_KEY: u32 = 0x0004;
+pub const PLATFORM_ACTIVATE_ON_MONSTER_ENTRY: u32 = 0x0010;
+pub const PLATFORM_ACTIVATE_ON_PROJECTILE: u32 = 0x0040;
+
+/// Check if a platform should be activated based on trigger type.
+pub fn should_activate(platform: &Platform, trigger: PlatformTrigger) -> bool {
+    if platform.state != PlatformState::AtRest {
+        return false;
+    }
+
+    match trigger {
+        PlatformTrigger::PlayerEntry => {
+            platform.activation_flags & PLATFORM_ACTIVATE_ON_PLAYER_ENTRY != 0
+        }
+        PlatformTrigger::ActionKey => {
+            platform.activation_flags & PLATFORM_ACTIVATE_ON_ACTION_KEY != 0
+        }
+        PlatformTrigger::MonsterEntry => {
+            platform.activation_flags & PLATFORM_ACTIVATE_ON_MONSTER_ENTRY != 0
+        }
+        PlatformTrigger::ProjectileImpact => {
+            platform.activation_flags & PLATFORM_ACTIVATE_ON_PROJECTILE != 0
+        }
+    }
+}
+
+/// Types of triggers that can activate a platform.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlatformTrigger {
+    PlayerEntry,
+    ActionKey,
+    MonsterEntry,
+    ProjectileImpact,
+}
+
+/// Check if a platform is crushing an entity.
+///
+/// Returns damage if crushing, or whether the platform should reverse.
+pub fn check_platform_crush(
+    platform: &Platform,
+    entity_z: f32,
+    entity_height: f32,
+) -> PlatformCrushResult {
+    let clearance = platform.current_ceiling - platform.current_floor;
+    if clearance < entity_height && entity_z >= platform.current_floor - f32::EPSILON {
+        if platform.crushes {
+            PlatformCrushResult::Crush { damage: 10 }
+        } else {
+            PlatformCrushResult::Reverse
+        }
+    } else {
+        PlatformCrushResult::None
+    }
+}
+
+/// Result of a platform crush check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlatformCrushResult {
+    None,
+    Crush { damage: i16 },
+    Reverse,
+}
+
+/// A trigger event that fires when a platform reaches a position.
+#[derive(Debug, Clone)]
+pub struct PlatformTriggerEvent {
+    pub trigger_type: PlatformTriggerEventType,
+    pub target_index: usize,
+}
+
+/// Types of events a platform can trigger.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlatformTriggerEventType {
+    ActivatePlatform,
+    ToggleLight,
+}
+
+/// Check if a platform should fire its triggers.
+///
+/// Returns triggers to fire when a platform reaches its extended or resting position.
+pub fn check_platform_triggers(
+    platform: &Platform,
+    linked_platforms: &[usize],
+    linked_lights: &[usize],
+) -> Vec<PlatformTriggerEvent> {
+    let mut events = Vec::new();
+
+    let at_destination = platform.state == PlatformState::AtExtended
+        || platform.state == PlatformState::AtRest;
+
+    if !at_destination {
+        return events;
+    }
+
+    for &idx in linked_platforms {
+        events.push(PlatformTriggerEvent {
+            trigger_type: PlatformTriggerEventType::ActivatePlatform,
+            target_index: idx,
+        });
+    }
+
+    for &idx in linked_lights {
+        events.push(PlatformTriggerEvent {
+            trigger_type: PlatformTriggerEventType::ToggleLight,
+            target_index: idx,
+        });
+    }
+
+    events
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -148,5 +261,68 @@ mod tests {
 
         tick_platform(&mut p); // 0.0 -> AtRest
         assert_eq!(p.state, PlatformState::AtRest);
+    }
+
+    #[test]
+    fn platform_activates_on_player_entry() {
+        let mut p = make_platform();
+        p.activation_flags = PLATFORM_ACTIVATE_ON_PLAYER_ENTRY;
+        assert!(should_activate(&p, PlatformTrigger::PlayerEntry));
+        assert!(!should_activate(&p, PlatformTrigger::ActionKey));
+    }
+
+    #[test]
+    fn platform_no_activate_when_moving() {
+        let mut p = make_platform();
+        p.activation_flags = PLATFORM_ACTIVATE_ON_PLAYER_ENTRY;
+        p.state = PlatformState::Extending;
+        assert!(!should_activate(&p, PlatformTrigger::PlayerEntry));
+    }
+
+    #[test]
+    fn platform_crush_damages() {
+        let mut p = make_platform();
+        p.current_floor = 2.5;
+        p.current_ceiling = 3.0;
+        p.crushes = true;
+        let result = check_platform_crush(&p, 2.5, 0.8);
+        assert_eq!(result, PlatformCrushResult::Crush { damage: 10 });
+    }
+
+    #[test]
+    fn platform_crush_reverses() {
+        let mut p = make_platform();
+        p.current_floor = 2.5;
+        p.current_ceiling = 3.0;
+        p.crushes = false;
+        let result = check_platform_crush(&p, 2.5, 0.8);
+        assert_eq!(result, PlatformCrushResult::Reverse);
+    }
+
+    #[test]
+    fn platform_no_crush_with_clearance() {
+        let p = make_platform();
+        let result = check_platform_crush(&p, 0.0, 0.8);
+        assert_eq!(result, PlatformCrushResult::None);
+    }
+
+    #[test]
+    fn platform_triggers_linked() {
+        let mut p = make_platform();
+        p.state = PlatformState::AtExtended;
+        let events = check_platform_triggers(&p, &[1, 2], &[3]);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].trigger_type, PlatformTriggerEventType::ActivatePlatform);
+        assert_eq!(events[0].target_index, 1);
+        assert_eq!(events[2].trigger_type, PlatformTriggerEventType::ToggleLight);
+        assert_eq!(events[2].target_index, 3);
+    }
+
+    #[test]
+    fn platform_no_triggers_while_moving() {
+        let mut p = make_platform();
+        p.state = PlatformState::Extending;
+        let events = check_platform_triggers(&p, &[1], &[2]);
+        assert!(events.is_empty());
     }
 }
