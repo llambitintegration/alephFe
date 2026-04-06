@@ -1,0 +1,16 @@
+[package]
+name = "marathon-audio"
+version = "0.1.0"
+edition = "2021"
+description = "Spatial audio engine for Marathon (Aleph One): 3D positioned sound, ambient loops, obstruction, and music playback"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/llambit/alephone-rust"
+
+[dependencies]
+marathon-formats = { path = "../marathon-formats" }
+kira = "0.12"
+thiserror = "2"
+rand = "0.8"
+
+[dev-dependencies]
+pretty_assertions = "1"
