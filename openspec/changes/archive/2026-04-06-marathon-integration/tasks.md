@@ -21,7 +21,7 @@
 - [x] 3.2 Implement the main loop: winit event handling, fixed-tick simulation advancement at 30 Hz, and frame rendering with interpolation
 - [x] 3.3 Implement level loading: parse WadFile entry via marathon-formats, initialize marathon-sim, marathon-viewer, and marathon-audio
 - [x] 3.4 Implement level transition detection: inter-level teleporter signals and terminal teleport triggers
-- [ ] 3.5 Implement intermission screen: display level completion stats, advance to next level on input
+- [x] 3.5 Implement intermission screen: display level completion stats, advance to next level on input
 - [x] 3.6 Write tests for state machine transitions and fixed-tick timing logic
 
 ## 4. Save/Load System
@@ -41,7 +41,7 @@
 
 ## 6. HUD Rendering
 
-- [ ] 6.1 Create HUD wgpu render pipeline: 2D sprite/quad rendering pass that composites on top of the 3D framebuffer
+- [x] 6.1 Create HUD wgpu render pipeline: 2D sprite/quad rendering pass that composites on top of the 3D framebuffer
 - [x] 6.2 Implement health and shield bar rendering with tier-based coloring
 - [x] 6.3 Implement oxygen meter rendering with visibility toggle and low-oxygen warning
 - [x] 6.4 Implement weapon and ammunition display with sprite frames from ShapesFile interface collection
@@ -56,10 +56,10 @@
 - [x] 7.1 Implement menu screen stack: push/pop navigation with screen types (MainMenu, NewGame, LoadGame, Preferences, PauseMenu)
 - [x] 7.2 Implement main menu screen: New Game, Load Game, Preferences, Quit options
 - [x] 7.3 Implement new game screen: difficulty selection (Kindergarten through Total Carnage)
-- [ ] 7.4 Implement load game screen: display save slots with level/date info, load selected slot
-- [ ] 7.5 Implement preferences screen: controls (key rebinding), audio (volume sliders), video (resolution) settings
+- [x] 7.4 Implement load game screen: display save slots with level/date info, load selected slot
+- [x] 7.5 Implement preferences screen: controls (key rebinding), audio (volume sliders), video (resolution) settings
 - [x] 7.6 Implement pause menu: Resume, Save Game, Preferences, Quit to Menu options
-- [ ] 7.7 Implement menu rendering via wgpu: text rendering with glyphon, cursor highlighting, screen transitions
+- [x] 7.7 Implement menu rendering via wgpu: text rendering with glyphon, cursor highlighting, screen transitions
 - [x] 7.8 Wire menu actions to game state transitions (start game, load game, resume, quit)
 
 ## 8. Terminal Interface
@@ -67,8 +67,8 @@
 - [x] 8.1 Implement terminal activation detection: read terminal data from marathon-formats for activated terminal polygon
 - [x] 8.2 Implement terminal text group evaluation: conditional groups based on mission state (success/failure)
 - [x] 8.3 Implement terminal page layout: split text groups into pages that fit the display area
-- [ ] 8.4 Implement terminal text rendering via glyphon: styled text (information, logon, logoff, chapter headers) with Marathon terminal colors
-- [ ] 8.5 Implement terminal image rendering: load PICT resources, render inline within terminal view
+- [x] 8.4 Implement terminal text rendering via glyphon: styled text (information, logon, logoff, chapter headers) with Marathon terminal colors
+- [x] 8.5 Implement terminal image rendering: load PICT resources, render inline within terminal view
 - [x] 8.6 Implement terminal navigation: scroll within page, page forward/backward, page indicator display
 - [x] 8.7 Implement terminal exit: return to Playing state, handle teleport-on-exit if specified
 - [x] 8.8 Implement terminal read status tracking: mark terminals as read, include in save data
@@ -94,6 +94,6 @@
 
 ## 11. Integration Testing
 
-- [ ] 11.1 Create integration test that loads a real Marathon level via marathon-formats, initializes the game shell, and verifies state transitions
-- [ ] 11.2 Create integration test for full save/load/film round-trip with a simulated play session
-- [ ] 11.3 Verify HUD rendering pipeline produces valid wgpu output with test fixture data
+- [x] 11.1 Create integration test that loads a real Marathon level via marathon-formats, initializes the game shell, and verifies state transitions
+- [x] 11.2 Create integration test for full save/load/film round-trip with a simulated play session
+- [x] 11.3 Verify HUD rendering pipeline produces valid wgpu output with test fixture data

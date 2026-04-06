@@ -2,12 +2,14 @@ mod health;
 mod inventory;
 mod motion_sensor;
 mod oxygen;
+pub mod pipeline;
 mod weapon;
 
 pub use health::HealthBar;
 pub use inventory::InventoryPanel;
 pub use motion_sensor::MotionSensor;
 pub use oxygen::OxygenMeter;
+pub use pipeline::HudPipeline;
 pub use weapon::WeaponDisplay;
 
 /// State read from the simulation each frame for HUD rendering.

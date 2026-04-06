@@ -1,6 +1,10 @@
+pub mod images;
 mod pages;
+pub mod renderer;
 
+pub use images::{TerminalImageCache, TerminalImageData};
 pub use pages::{TerminalPage, TerminalPageLayout};
+pub use renderer::TerminalRenderer;
 
 /// Terminal text group style types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

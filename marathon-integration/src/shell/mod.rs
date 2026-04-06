@@ -1,4 +1,5 @@
 pub mod film;
+pub mod intermission;
 pub mod level;
 pub mod save;
 pub mod states;

@@ -1,3 +1,7 @@
+pub mod load_game;
+pub mod preferences;
+pub mod renderer;
+
 use crate::types::Difficulty;
 
 /// Menu screen types.
