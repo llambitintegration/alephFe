@@ -25,22 +25,6 @@ struct CameraUniform {
     _padding: f32,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Pod, Zeroable)]
-pub struct PolygonGpuData {
-    pub floor_height: f32,
-    pub ceiling_height: f32,
-    pub floor_light: f32,
-    pub ceiling_light: f32,
-    pub floor_transfer_mode: u32,
-    pub ceiling_transfer_mode: u32,
-    pub media_height: f32,
-    pub media_transfer_mode: u32,
-    pub floor_tex_offset_x: f32,
-    pub floor_tex_offset_y: f32,
-    pub ceiling_tex_offset_x: f32,
-    pub ceiling_tex_offset_y: f32,
-}
 
 const EYE_HEIGHT: f32 = 0.66;
 const TICKS_PER_SECOND: f64 = 30.0;
@@ -146,8 +130,6 @@ struct GameState {
     pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
-    polygon_buffer: wgpu::Buffer,
-    polygon_bind_group: wgpu::BindGroup,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
@@ -229,9 +211,8 @@ impl GameState {
             });
             rp.set_pipeline(&self.pipeline);
             rp.set_bind_group(0, &self.camera_bind_group, &[]);
-            rp.set_bind_group(1, &self.polygon_bind_group, &[]);
             let tbg = self.texture_manager.gpu_textures.values().next().map(|t| &t.bind_group).unwrap_or(&self.fallback_bind_group);
-            rp.set_bind_group(2, tbg, &[]);
+            rp.set_bind_group(1, tbg, &[]);
             rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             rp.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             rp.draw_indexed(0..self.num_indices, 0, 0..1);
@@ -267,9 +248,9 @@ pub async fn run_web(
     canvas.set_width(width);
     canvas.set_height(height);
 
-    // Init wgpu
+    // Init wgpu — use GL backend (WebGL2) for broadest browser support
     let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
+        backends: wgpu::Backends::GL,
         ..Default::default()
     });
 
@@ -316,12 +297,6 @@ pub async fn run_web(
             ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None }, count: None,
         }],
     });
-    let poly_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: None, entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0, visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Storage { read_only: true }, has_dynamic_offset: false, min_binding_size: None }, count: None,
-        }],
-    });
     let tex_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: None, entries: &[
             wgpu::BindGroupLayoutEntry { binding: 0, visibility: wgpu::ShaderStages::FRAGMENT,
@@ -338,19 +313,11 @@ pub async fn run_web(
         label: None, layout: &cam_bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: cam_buf.as_entire_binding() }],
     });
 
-    let init_poly = vec![PolygonGpuData::zeroed()];
-    let poly_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None, contents: bytemuck::cast_slice(&init_poly), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-    });
-    let poly_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None, layout: &poly_bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: poly_buf.as_entire_binding() }],
-    });
-
     // Fallback texture
     let fb = create_fallback_texture(&device, &queue, &tex_bgl);
 
     let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None, bind_group_layouts: &[&cam_bgl, &poly_bgl, &tex_bgl], push_constant_ranges: &[],
+        label: None, bind_group_layouts: &[&cam_bgl, &tex_bgl], push_constant_ranges: &[],
     });
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: None, layout: Some(&pl),
@@ -374,7 +341,6 @@ pub async fn run_web(
     let mut state = GameState {
         surface, device, queue, config, depth_view, pipeline,
         camera_buffer: cam_buf, camera_bind_group: cam_bg,
-        polygon_buffer: poly_buf, polygon_bind_group: poly_bg,
         vertex_buffer: vb, index_buffer: ib, num_indices: 0,
         texture_manager: TextureManager { collections: Default::default(), gpu_textures: Default::default() },
         fallback_bind_group: fb, texture_bgl: tex_bgl,
@@ -409,8 +375,9 @@ fn create_depth(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::
 }
 
 fn create_fallback_texture(device: &wgpu::Device, queue: &wgpu::Queue, layout: &wgpu::BindGroupLayout) -> wgpu::BindGroup {
+    let layer_count = crate::texture::pad_layer_count_for_webgl(1);
     let tex = device.create_texture(&wgpu::TextureDescriptor {
-        label: None, size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        label: None, size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: layer_count },
         mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[],
@@ -440,23 +407,15 @@ fn load_level_into(state: &mut GameState, wad: &WadFile, physics: Option<&Physic
     log::info!("Level: {}", loaded.level_name);
     let map = &loaded.map;
 
-    let lm = mesh::build_level_mesh(map);
-    let descs = level::collect_texture_descriptors(map);
-    let mut tm = TextureManager::load_collections(&state.shapes_file, &descs);
-
-    let pd: Vec<PolygonGpuData> = map.polygons.iter().map(|p| {
-        let fl = level::evaluate_light_intensity(&map.lights, p.floor_lightsource_index);
-        let cl = level::evaluate_light_intensity(&map.lights, p.ceiling_lightsource_index);
-        let mh = if p.media_index >= 0 { map.media.get(p.media_index as usize).map(|m| m.height as f32 / 1024.0).unwrap_or(0.0) } else { 0.0 };
-        PolygonGpuData {
-            floor_height: p.floor_height as f32 / 1024.0, ceiling_height: p.ceiling_height as f32 / 1024.0,
-            floor_light: fl, ceiling_light: cl, floor_transfer_mode: p.floor_transfer_mode as u32, ceiling_transfer_mode: p.ceiling_transfer_mode as u32,
-            media_height: mh,
-            media_transfer_mode: if p.media_index >= 0 { map.media.get(p.media_index as usize).map(|m| m.transfer_mode as u32).unwrap_or(0) } else { 0 },
-            floor_tex_offset_x: p.floor_origin.x as f32 / 1024.0, floor_tex_offset_y: p.floor_origin.y as f32 / 1024.0,
-            ceiling_tex_offset_x: p.ceiling_origin.x as f32 / 1024.0, ceiling_tex_offset_y: p.ceiling_origin.y as f32 / 1024.0,
+    let poly_info: Vec<mesh::PolygonInfo> = map.polygons.iter().map(|p| {
+        mesh::PolygonInfo {
+            floor_light: level::evaluate_light_intensity(&map.lights, p.floor_lightsource_index),
+            floor_transfer_mode: p.floor_transfer_mode as u32,
         }
     }).collect();
+    let lm = mesh::build_level_mesh(map, &poly_info);
+    let descs = level::collect_texture_descriptors(map);
+    let mut tm = TextureManager::load_collections(&state.shapes_file, &descs);
 
     // Init sim
     if let Some(phys) = physics {
@@ -482,15 +441,6 @@ fn load_level_into(state: &mut GameState, wad: &WadFile, physics: Option<&Physic
         label: None, contents: bytemuck::cast_slice(&lm.indices), usage: wgpu::BufferUsages::INDEX,
     });
     state.num_indices = lm.indices.len() as u32;
-
-    let pbd = if pd.is_empty() { vec![PolygonGpuData::zeroed()] } else { pd };
-    state.polygon_buffer = state.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None, contents: bytemuck::cast_slice(&pbd), usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-    });
-    state.polygon_bind_group = state.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: None, layout: &state.pipeline.get_bind_group_layout(1),
-        entries: &[wgpu::BindGroupEntry { binding: 0, resource: state.polygon_buffer.as_entire_binding() }],
-    });
 
     let sampler = state.device.create_sampler(&wgpu::SamplerDescriptor {
         mag_filter: wgpu::FilterMode::Nearest, min_filter: wgpu::FilterMode::Nearest,

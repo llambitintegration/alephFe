@@ -2,9 +2,10 @@ use wasm_bindgen::prelude::*;
 
 mod level;
 mod mesh;
+#[cfg(target_arch = "wasm32")]
 mod render;
 mod sprites;
-mod texture;
+pub mod texture;
 
 /// Entry point called from JavaScript after WASM loads.
 #[wasm_bindgen(start)]
@@ -16,6 +17,7 @@ pub fn main() {
 
 /// Start the game with pre-fetched scenario data.
 /// Called from JS after fetching the binary files.
+#[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 pub async fn start_game(
     map_data: &[u8],

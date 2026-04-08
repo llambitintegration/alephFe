@@ -1,5 +1,5 @@
 FROM rust:slim AS base
-RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libasound2-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libasound2-dev libx11-dev libxkbcommon-dev && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY . .
 

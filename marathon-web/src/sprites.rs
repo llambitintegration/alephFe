@@ -147,12 +147,13 @@ impl SpriteRenderer {
         });
 
         // Create fallback 1x1 magenta texture
+        let fallback_layer_count = crate::texture::pad_layer_count_for_webgl(1);
         let fallback_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("sprite_fallback"),
             size: wgpu::Extent3d {
                 width: 1,
                 height: 1,
-                depth_or_array_layers: 1,
+                depth_or_array_layers: fallback_layer_count,
             },
             mip_level_count: 1,
             sample_count: 1,
@@ -251,7 +252,7 @@ impl SpriteRenderer {
                 continue;
             }
 
-            let layer_count = loaded.bitmaps.len() as u32;
+            let layer_count = crate::texture::pad_layer_count_for_webgl(loaded.bitmaps.len());
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&format!("sprite_collection_{coll_idx}")),
                 size: wgpu::Extent3d {

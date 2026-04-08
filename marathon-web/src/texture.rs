@@ -1,6 +1,24 @@
 use marathon_formats::{Collection, ColorValue, ShapeDescriptor, ShapesFile};
 use std::collections::HashMap;
 
+/// Compute a safe `depth_or_array_layers` value for wgpu on WebGL2.
+///
+/// wgpu-hal uses heuristics on `depth_or_array_layers` to pick the GL texture
+/// target.  We always want `GL_TEXTURE_2D_ARRAY`, so we must avoid counts that
+/// trigger other targets:
+///   - 1 layer   → D2
+///   - 6 layers  → Cube
+///   - N*6 (N>1) → CubeArray
+///
+/// This function pads the actual bitmap count to the next safe value.
+pub fn pad_layer_count_for_webgl(actual: usize) -> u32 {
+    let mut n = actual.max(2) as u32;
+    if n == 6 || (n > 6 && n % 6 == 0) {
+        n += 1;
+    }
+    n
+}
+
 /// A loaded texture collection ready for GPU upload.
 pub struct LoadedCollection {
     pub bitmaps: Vec<Vec<u8>>,
@@ -62,7 +80,7 @@ impl TextureManager {
                 continue;
             }
 
-            let layer_count = loaded.bitmaps.len() as u32;
+            let layer_count = pad_layer_count_for_webgl(loaded.bitmaps.len());
             let texture = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some(&format!("collection_{coll_idx}")),
                 size: wgpu::Extent3d {
@@ -195,4 +213,49 @@ fn convert_bitmap(
     }
 
     rgba
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pad_layer_count_avoids_d2() {
+        // 0 or 1 actual layers must pad to at least 2 (avoid D2 heuristic)
+        assert_eq!(pad_layer_count_for_webgl(0), 2);
+        assert_eq!(pad_layer_count_for_webgl(1), 2);
+    }
+
+    #[test]
+    fn pad_layer_count_safe_values_unchanged() {
+        // Values 2-5 are safe for D2Array
+        assert_eq!(pad_layer_count_for_webgl(2), 2);
+        assert_eq!(pad_layer_count_for_webgl(3), 3);
+        assert_eq!(pad_layer_count_for_webgl(4), 4);
+        assert_eq!(pad_layer_count_for_webgl(5), 5);
+        assert_eq!(pad_layer_count_for_webgl(7), 7);
+    }
+
+    #[test]
+    fn pad_layer_count_avoids_cube() {
+        // 6 layers would trigger Cube heuristic
+        assert_eq!(pad_layer_count_for_webgl(6), 7);
+    }
+
+    #[test]
+    fn pad_layer_count_avoids_cube_array() {
+        // Multiples of 6 (>6) would trigger CubeArray heuristic
+        assert_eq!(pad_layer_count_for_webgl(12), 13);
+        assert_eq!(pad_layer_count_for_webgl(18), 19);
+        assert_eq!(pad_layer_count_for_webgl(24), 25);
+        assert_eq!(pad_layer_count_for_webgl(30), 31);
+    }
+
+    #[test]
+    fn pad_layer_count_non_multiples_of_6_unchanged() {
+        assert_eq!(pad_layer_count_for_webgl(8), 8);
+        assert_eq!(pad_layer_count_for_webgl(10), 10);
+        assert_eq!(pad_layer_count_for_webgl(13), 13);
+        assert_eq!(pad_layer_count_for_webgl(25), 25);
+    }
 }

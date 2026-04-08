@@ -9,7 +9,7 @@ crate-type = ["cdylib"]
 [dependencies]
 marathon-formats = { path = "../marathon-formats" }
 marathon-sim = { path = "../marathon-sim" }
-wgpu = "24"
+wgpu = { version = "24", features = ["webgpu", "webgl"] }
 glam = "0.29"
 bytemuck = { version = "1", features = ["derive"] }
 log = "0.4"

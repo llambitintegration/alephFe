@@ -8,39 +8,25 @@ struct CameraUniform {
     _padding: f32,
 };
 
-struct PolygonData {
-    floor_height: f32,
-    ceiling_height: f32,
-    floor_light: f32,
-    ceiling_light: f32,
-    floor_transfer_mode: u32,
-    ceiling_transfer_mode: u32,
-    media_height: f32,
-    media_transfer_mode: u32,
-    floor_tex_offset_x: f32,
-    floor_tex_offset_y: f32,
-    ceiling_tex_offset_x: f32,
-    ceiling_tex_offset_y: f32,
-};
-
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
-@group(1) @binding(0) var<storage, read> polygon_data: array<PolygonData>;
-@group(2) @binding(0) var texture_array: texture_2d_array<f32>;
-@group(2) @binding(1) var texture_sampler: sampler;
+@group(1) @binding(0) var texture_array: texture_2d_array<f32>;
+@group(1) @binding(1) var texture_sampler: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) uv: vec2<f32>,
-    @location(2) polygon_index: u32,
-    @location(3) texture_descriptor: u32,
+    @location(2) texture_descriptor: u32,
+    @location(3) light: f32,
+    @location(4) transfer_mode: u32,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
-    @location(1) @interpolate(flat) polygon_index: u32,
-    @location(2) @interpolate(flat) texture_descriptor: u32,
-    @location(3) world_position: vec3<f32>,
+    @location(1) @interpolate(flat) texture_descriptor: u32,
+    @location(2) world_position: vec3<f32>,
+    @location(3) @interpolate(flat) light: f32,
+    @location(4) @interpolate(flat) transfer_mode: u32,
 };
 
 @vertex
@@ -48,9 +34,10 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.clip_position = camera.view_proj * vec4<f32>(in.position, 1.0);
     out.uv = in.uv;
-    out.polygon_index = in.polygon_index;
     out.texture_descriptor = in.texture_descriptor;
     out.world_position = in.position;
+    out.light = in.light;
+    out.transfer_mode = in.transfer_mode;
     return out;
 }
 
@@ -100,10 +87,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Decode ShapeDescriptor: shape_index = bits[7:0]
     let shape_index = desc & 0xFFu;
 
-    // Read polygon light data
-    let poly = polygon_data[in.polygon_index];
-    let light = poly.floor_light;
-    let transfer_mode = poly.floor_transfer_mode;
+    let light = in.light;
+    let transfer_mode = in.transfer_mode;
 
     var uv = in.uv;
 

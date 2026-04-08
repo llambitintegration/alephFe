@@ -1,22 +1,30 @@
 use bytemuck::{Pod, Zeroable};
 use marathon_formats::MapData;
 
-/// GPU vertex format: position + UV + polygon index + texture descriptor.
+/// Per-polygon lighting and transfer data, precomputed for baking into vertices.
+pub struct PolygonInfo {
+    pub floor_light: f32,
+    pub floor_transfer_mode: u32,
+}
+
+/// GPU vertex format: position + UV + texture descriptor + light + transfer mode.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Vertex {
     pub position: [f32; 3],
     pub uv: [f32; 2],
-    pub polygon_index: u32,
     pub texture_descriptor: u32,
+    pub light: f32,
+    pub transfer_mode: u32,
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x2,
         2 => Uint32,
-        3 => Uint32,
+        3 => Float32,
+        4 => Uint32,
     ];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -40,7 +48,7 @@ fn world_to_f32(v: i16) -> f32 {
 }
 
 /// Build all geometry for a level: floors, ceilings, and walls.
-pub fn build_level_mesh(map: &MapData) -> LevelMesh {
+pub fn build_level_mesh(map: &MapData, poly_info: &[PolygonInfo]) -> LevelMesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
@@ -50,20 +58,22 @@ pub fn build_level_mesh(map: &MapData) -> LevelMesh {
             continue;
         }
 
-        build_floor(&mut vertices, &mut indices, map, polygon, poly_idx, vert_count);
-        build_ceiling(&mut vertices, &mut indices, map, polygon, poly_idx, vert_count);
+        let info = &poly_info[poly_idx];
+
+        build_floor(&mut vertices, &mut indices, map, polygon, info, vert_count);
+        build_ceiling(&mut vertices, &mut indices, map, polygon, info, vert_count);
 
         if polygon.media_index >= 0 {
             if let Some(media) = map.media.get(polygon.media_index as usize) {
                 build_media_surface(
-                    &mut vertices, &mut indices, map, polygon, poly_idx, vert_count, media,
+                    &mut vertices, &mut indices, map, polygon, info, vert_count, media,
                 );
             }
         }
     }
 
     for line in &map.lines {
-        build_walls_for_line(&mut vertices, &mut indices, map, line);
+        build_walls_for_line(&mut vertices, &mut indices, map, line, poly_info);
     }
 
     LevelMesh { vertices, indices }
@@ -74,7 +84,7 @@ fn build_floor(
     indices: &mut Vec<u32>,
     map: &MapData,
     polygon: &marathon_formats::Polygon,
-    poly_idx: usize,
+    info: &PolygonInfo,
     vert_count: usize,
 ) {
     let base = vertices.len() as u32;
@@ -95,8 +105,9 @@ fn build_floor(
         vertices.push(Vertex {
             position: [wx, floor_y, wz],
             uv: [u, v],
-            polygon_index: poly_idx as u32,
             texture_descriptor: tex_desc,
+            light: info.floor_light,
+            transfer_mode: info.floor_transfer_mode,
         });
     }
 
@@ -112,7 +123,7 @@ fn build_ceiling(
     indices: &mut Vec<u32>,
     map: &MapData,
     polygon: &marathon_formats::Polygon,
-    poly_idx: usize,
+    info: &PolygonInfo,
     vert_count: usize,
 ) {
     let base = vertices.len() as u32;
@@ -133,8 +144,9 @@ fn build_ceiling(
         vertices.push(Vertex {
             position: [wx, ceil_y, wz],
             uv: [u, v],
-            polygon_index: poly_idx as u32,
             texture_descriptor: tex_desc,
+            light: info.floor_light,
+            transfer_mode: info.floor_transfer_mode,
         });
     }
 
@@ -150,7 +162,7 @@ fn build_media_surface(
     indices: &mut Vec<u32>,
     map: &MapData,
     polygon: &marathon_formats::Polygon,
-    poly_idx: usize,
+    info: &PolygonInfo,
     vert_count: usize,
     media: &marathon_formats::MediaData,
 ) {
@@ -172,8 +184,9 @@ fn build_media_surface(
         vertices.push(Vertex {
             position: [wx, media_y, wz],
             uv: [u, v],
-            polygon_index: poly_idx as u32,
             texture_descriptor: tex_desc,
+            light: info.floor_light,
+            transfer_mode: media.transfer_mode as u32,
         });
     }
 
@@ -189,6 +202,7 @@ fn build_walls_for_line(
     indices: &mut Vec<u32>,
     map: &MapData,
     line: &marathon_formats::Line,
+    poly_info: &[PolygonInfo],
 ) {
     if line.clockwise_polygon_side_index >= 0 && line.clockwise_polygon_owner >= 0 {
         let side_idx = line.clockwise_polygon_side_index as usize;
@@ -199,7 +213,7 @@ fn build_walls_for_line(
             } else {
                 None
             };
-            build_wall_side(vertices, indices, map, line, side, poly_idx, adjacent_poly_idx, false);
+            build_wall_side(vertices, indices, map, line, side, poly_idx, adjacent_poly_idx, false, poly_info);
         }
     }
 
@@ -212,7 +226,7 @@ fn build_walls_for_line(
             } else {
                 None
             };
-            build_wall_side(vertices, indices, map, line, side, poly_idx, adjacent_poly_idx, true);
+            build_wall_side(vertices, indices, map, line, side, poly_idx, adjacent_poly_idx, true, poly_info);
         }
     }
 }
@@ -226,8 +240,10 @@ fn build_wall_side(
     poly_idx: usize,
     adjacent_poly_idx: Option<usize>,
     reverse_endpoints: bool,
+    poly_info: &[PolygonInfo],
 ) {
     let polygon = &map.polygons[poly_idx];
+    let info = &poly_info[poly_idx];
 
     let (ep0_idx, ep1_idx) = if reverse_endpoints {
         (line.endpoint_indexes[1], line.endpoint_indexes[0])
@@ -252,7 +268,7 @@ fn build_wall_side(
             let tex = &side.primary_texture;
             emit_wall_quad(
                 vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                tex.texture.0 as u32, poly_idx,
+                tex.texture.0 as u32, info,
             );
         }
         1 => {
@@ -264,7 +280,7 @@ fn build_wall_side(
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                        tex.texture.0 as u32, poly_idx,
+                        tex.texture.0 as u32, info,
                     );
                 }
             }
@@ -278,7 +294,7 @@ fn build_wall_side(
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                        tex.texture.0 as u32, poly_idx,
+                        tex.texture.0 as u32, info,
                     );
                 }
             }
@@ -293,7 +309,7 @@ fn build_wall_side(
                     let tex = &side.secondary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, low_bottom, low_top, wall_len, tex,
-                        tex.texture.0 as u32, poly_idx,
+                        tex.texture.0 as u32, info,
                     );
                 }
 
@@ -303,7 +319,7 @@ fn build_wall_side(
                     let tex = &side.transparent_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, trans_bottom, trans_top, wall_len,
-                        tex, tex.texture.0 as u32, poly_idx,
+                        tex, tex.texture.0 as u32, info,
                     );
                 }
 
@@ -313,7 +329,7 @@ fn build_wall_side(
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, high_bottom, high_top, wall_len,
-                        tex, tex.texture.0 as u32, poly_idx,
+                        tex, tex.texture.0 as u32, info,
                     );
                 }
             }
@@ -334,7 +350,7 @@ fn emit_wall_quad(
     wall_len: f32,
     side_tex: &marathon_formats::SideTexture,
     tex_desc: u32,
-    poly_idx: usize,
+    info: &PolygonInfo,
 ) {
     let base = vertices.len() as u32;
     let height = top - bottom;
@@ -344,26 +360,30 @@ fn emit_wall_quad(
     vertices.push(Vertex {
         position: [x0, bottom, z0],
         uv: [u_off, v_off + height],
-        polygon_index: poly_idx as u32,
         texture_descriptor: tex_desc,
+        light: info.floor_light,
+        transfer_mode: info.floor_transfer_mode,
     });
     vertices.push(Vertex {
         position: [x0, top, z0],
         uv: [u_off, v_off],
-        polygon_index: poly_idx as u32,
         texture_descriptor: tex_desc,
+        light: info.floor_light,
+        transfer_mode: info.floor_transfer_mode,
     });
     vertices.push(Vertex {
         position: [x1, top, z1],
         uv: [u_off + wall_len, v_off],
-        polygon_index: poly_idx as u32,
         texture_descriptor: tex_desc,
+        light: info.floor_light,
+        transfer_mode: info.floor_transfer_mode,
     });
     vertices.push(Vertex {
         position: [x1, bottom, z1],
         uv: [u_off + wall_len, v_off + height],
-        polygon_index: poly_idx as u32,
         texture_descriptor: tex_desc,
+        light: info.floor_light,
+        transfer_mode: info.floor_transfer_mode,
     });
 
     indices.push(base);
@@ -372,4 +392,37 @@ fn emit_wall_quad(
     indices.push(base);
     indices.push(base + 2);
     indices.push(base + 3);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn world_to_f32_conversion() {
+        assert_eq!(world_to_f32(0), 0.0);
+        assert_eq!(world_to_f32(1024), 1.0);
+        assert_eq!(world_to_f32(-1024), -1.0);
+        assert_eq!(world_to_f32(512), 0.5);
+    }
+
+    #[test]
+    fn vertex_size_matches_gpu_layout() {
+        // 3 floats (pos) + 2 floats (uv) + 1 u32 (tex_desc) + 1 float (light) + 1 u32 (transfer) = 8 * 4 = 32 bytes
+        assert_eq!(std::mem::size_of::<Vertex>(), 32);
+    }
+
+    #[test]
+    fn vertex_is_pod() {
+        // Ensure Vertex can be safely cast to bytes for GPU upload
+        let v = Vertex {
+            position: [1.0, 2.0, 3.0],
+            uv: [0.5, 0.5],
+            texture_descriptor: 42,
+            light: 0.8,
+            transfer_mode: 0,
+        };
+        let bytes: &[u8] = bytemuck::bytes_of(&v);
+        assert_eq!(bytes.len(), 32);
+    }
 }
