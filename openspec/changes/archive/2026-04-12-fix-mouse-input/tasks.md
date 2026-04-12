@@ -24,5 +24,5 @@
 ## 4. Testing
 
 - [x] 4.1 Run full cargo test suite in Docker and verify all existing + new tests pass
-- [ ] 4.2 Deploy to marathon.llambit.io and verify smooth mouse look at various speeds
-- [ ] 4.3 Verify keyboard arrow-key turning still functions independently of mouse
+- [x] 4.2 Deploy to marathon.llambit.io and verify smooth mouse look at various speeds
+- [x] 4.3 Verify keyboard arrow-key turning still functions independently of mouse

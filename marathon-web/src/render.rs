@@ -95,8 +95,11 @@ impl InputState {
     }
 
     fn to_mouse_delta(&mut self) -> (f32, f32) {
-        let yaw = self.mouse_dx as f32;
-        let pitch = self.mouse_dy as f32;
+        // Negate yaw: positive mouse_dx (rightward) should decrease sim facing
+        // so that cam.yaw = -facing increases → camera turns right.
+        // Negate pitch: mouse up (negative dy) should produce positive pitch = look up.
+        let yaw = -(self.mouse_dx as f32);
+        let pitch = -(self.mouse_dy as f32);
         self.mouse_dx = 0.0;
         self.mouse_dy = 0.0;
         (yaw, pitch)
@@ -179,14 +182,14 @@ impl GameState {
             if let Some(ref mut sim) = self.sim {
                 sim.tick(tick_input);
                 if let Some(pos) = sim.player_position() {
-                    self.curr_camera.position = Vec3::new(pos.x, pos.z + EYE_HEIGHT, pos.y);
+                    self.curr_camera.position = Vec3::new(pos.x, pos.z + EYE_HEIGHT, -pos.y);
                 }
-                if let Some(f) = sim.player_facing() { self.curr_camera.yaw = f; }
+                if let Some(f) = sim.player_facing() { self.curr_camera.yaw = -f; }
                 if let Some(v) = sim.player_vertical_look() { self.curr_camera.pitch = v; }
                 let entities: Vec<RenderableEntity> = sim.entities().into_iter()
                     .map(|e| RenderableEntity {
-                        position: Vec3::new(e.position.x, e.position.z, e.position.y), // sim→mesh coord swap
-                        facing: e.facing, shape: e.shape, frame: e.frame,
+                        position: Vec3::new(e.position.x, e.position.z, -e.position.y), // sim→render: negate Z to fix mirror
+                        facing: -e.facing, shape: e.shape, frame: e.frame,
                     })
                     .collect();
                 self.entity_snapshots.advance(entities);
@@ -599,12 +602,12 @@ fn load_level_into(state: &mut GameState, wad: &WadFile, physics: Option<&Physic
         }
     }
 
-    // Camera — sim coords: (x=mapX, y=mapY, z=vertical), mesh coords: (X=mapX, Y=vertical, Z=mapY)
+    // Camera — sim coords: (x=mapX, y=mapY, z=vertical), render coords: (X=mapX, Y=vertical, Z=-mapY)
     if let Some(ref mut sim) = state.sim {
         if let Some(pos) = sim.player_position() {
             let c = CameraState {
-                position: Vec3::new(pos.x, pos.z + EYE_HEIGHT, pos.y),
-                yaw: sim.player_facing().unwrap_or(0.0),
+                position: Vec3::new(pos.x, pos.z + EYE_HEIGHT, -pos.y),
+                yaw: -sim.player_facing().unwrap_or(0.0),
                 pitch: sim.player_vertical_look().unwrap_or(0.0),
             };
             state.prev_camera = c; state.curr_camera = c;
@@ -640,8 +643,8 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
         match e.code().as_str() {
             "KeyW" | "ArrowUp" => st.input.forward = true,
             "KeyS" | "ArrowDown" => st.input.backward = true,
-            "KeyA" => st.input.strafe_left = true,
-            "KeyD" => st.input.strafe_right = true,
+            "KeyA" => st.input.strafe_right = true,
+            "KeyD" => st.input.strafe_left = true,
             "Space" => st.input.action = true,
             "Tab" => { st.input.toggle_map = true; e.prevent_default(); return; }
             _ => {}
@@ -657,8 +660,8 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
         match e.code().as_str() {
             "KeyW" | "ArrowUp" => st.input.forward = false,
             "KeyS" | "ArrowDown" => st.input.backward = false,
-            "KeyA" => st.input.strafe_left = false,
-            "KeyD" => st.input.strafe_right = false,
+            "KeyA" => st.input.strafe_right = false,
+            "KeyD" => st.input.strafe_left = false,
             "Space" => st.input.action = false,
             _ => {}
         }

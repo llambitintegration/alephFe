@@ -168,7 +168,7 @@ fn build_floor(
         }
         let ep = &map.endpoints[ep_idx as usize];
         let wx = world_to_f32(ep.vertex.x);
-        let wz = world_to_f32(ep.vertex.y);
+        let wz = -world_to_f32(ep.vertex.y);
         let u = (ep.vertex.x.wrapping_sub(polygon.floor_origin.x)) as f32 / 1024.0;
         let v = (ep.vertex.y.wrapping_sub(polygon.floor_origin.y)) as f32 / 1024.0;
 
@@ -211,7 +211,7 @@ fn build_ceiling(
         }
         let ep = &map.endpoints[ep_idx as usize];
         let wx = world_to_f32(ep.vertex.x);
-        let wz = world_to_f32(ep.vertex.y);
+        let wz = -world_to_f32(ep.vertex.y);
         let u = (ep.vertex.x.wrapping_sub(polygon.ceiling_origin.x)) as f32 / 1024.0;
         let v = (ep.vertex.y.wrapping_sub(polygon.ceiling_origin.y)) as f32 / 1024.0;
 
@@ -255,7 +255,7 @@ fn build_media_surface(
         }
         let ep = &map.endpoints[ep_idx as usize];
         let wx = world_to_f32(ep.vertex.x);
-        let wz = world_to_f32(ep.vertex.y);
+        let wz = -world_to_f32(ep.vertex.y);
         let u = (ep.vertex.x.wrapping_sub(media.origin.x)) as f32 / 1024.0;
         let v = (ep.vertex.y.wrapping_sub(media.origin.y)) as f32 / 1024.0;
 
@@ -336,9 +336,9 @@ fn build_wall_side(
     let ep1 = &map.endpoints[ep1_idx as usize];
 
     let x0 = world_to_f32(ep0.vertex.x);
-    let z0 = world_to_f32(ep0.vertex.y);
+    let z0 = -world_to_f32(ep0.vertex.y);
     let x1 = world_to_f32(ep1.vertex.x);
-    let z1 = world_to_f32(ep1.vertex.y);
+    let z1 = -world_to_f32(ep1.vertex.y);
 
     let wall_len = ((x1 - x0).powi(2) + (z1 - z0).powi(2)).sqrt();
 
