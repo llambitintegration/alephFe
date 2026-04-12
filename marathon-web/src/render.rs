@@ -7,7 +7,7 @@ use wasm_bindgen::JsCast;
 use wgpu::util::DeviceExt;
 
 use marathon_formats::{MapData, PhysicsData, ShapesFile, WadFile};
-use marathon_sim::tick::ActionFlags;
+use marathon_sim::tick::{ActionFlags, TickInput};
 use marathon_sim::world::{SimConfig, SimWorld};
 
 use crate::level;
@@ -28,6 +28,7 @@ struct CameraUniform {
 
 const EYE_HEIGHT: f32 = 0.66;
 const TICKS_PER_SECOND: f64 = 30.0;
+const MOUSE_SENSITIVITY: f64 = 0.003;
 const TICK_DURATION_MS: f64 = 1000.0 / TICKS_PER_SECOND;
 
 #[derive(Clone, Copy)]
@@ -69,6 +70,7 @@ struct InputState {
     forward: bool, backward: bool, strafe_left: bool, strafe_right: bool,
     fire_primary: bool, fire_secondary: bool, action: bool,
     mouse_dx: f64, mouse_dy: f64,
+    toggle_map: bool,
 }
 
 impl InputState {
@@ -76,11 +78,11 @@ impl InputState {
         InputState {
             forward: false, backward: false, strafe_left: false, strafe_right: false,
             fire_primary: false, fire_secondary: false, action: false,
-            mouse_dx: 0.0, mouse_dy: 0.0,
+            mouse_dx: 0.0, mouse_dy: 0.0, toggle_map: false,
         }
     }
 
-    fn to_action_flags(&mut self) -> ActionFlags {
+    fn to_action_flags(&self) -> ActionFlags {
         let mut bits = 0u32;
         if self.forward { bits |= ActionFlags::MOVE_FORWARD; }
         if self.backward { bits |= ActionFlags::MOVE_BACKWARD; }
@@ -89,13 +91,15 @@ impl InputState {
         if self.fire_primary { bits |= ActionFlags::FIRE_PRIMARY; }
         if self.fire_secondary { bits |= ActionFlags::FIRE_SECONDARY; }
         if self.action { bits |= ActionFlags::ACTION; }
-        if self.mouse_dx > 2.0 { bits |= ActionFlags::TURN_RIGHT; }
-        else if self.mouse_dx < -2.0 { bits |= ActionFlags::TURN_LEFT; }
-        if self.mouse_dy > 2.0 { bits |= ActionFlags::LOOK_DOWN; }
-        else if self.mouse_dy < -2.0 { bits |= ActionFlags::LOOK_UP; }
+        ActionFlags::new(bits)
+    }
+
+    fn to_mouse_delta(&mut self) -> (f32, f32) {
+        let yaw = self.mouse_dx as f32;
+        let pitch = self.mouse_dy as f32;
         self.mouse_dx = 0.0;
         self.mouse_dy = 0.0;
-        ActionFlags::new(bits)
+        (yaw, pitch)
     }
 }
 
@@ -133,6 +137,7 @@ struct GameState {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+    draw_batches: Vec<mesh::DrawBatch>,
     texture_manager: TextureManager,
     fallback_bind_group: wgpu::BindGroup,
     texture_bgl: wgpu::BindGroupLayout,
@@ -147,6 +152,9 @@ struct GameState {
     tick_accum_ms: f64,
     start_ms: f64,
     aspect: f32,
+    hud_update_counter: u32,
+    automap_visible: bool,
+    map_lines: Vec<([f32; 2], [f32; 2])>,
 }
 
 impl GameState {
@@ -162,14 +170,24 @@ impl GameState {
             self.tick_accum_ms -= TICK_DURATION_MS;
             self.prev_camera = self.curr_camera;
             let flags = self.input.to_action_flags();
+            let (mouse_yaw, mouse_pitch) = self.input.to_mouse_delta();
+            let tick_input = TickInput {
+                action_flags: flags,
+                mouse_yaw,
+                mouse_pitch,
+            };
             if let Some(ref mut sim) = self.sim {
-                sim.tick(flags);
+                sim.tick(tick_input);
                 if let Some(pos) = sim.player_position() {
-                    self.curr_camera.position = Vec3::new(pos.x, pos.y + EYE_HEIGHT, pos.z);
+                    self.curr_camera.position = Vec3::new(pos.x, pos.z + EYE_HEIGHT, pos.y);
                 }
                 if let Some(f) = sim.player_facing() { self.curr_camera.yaw = f; }
+                if let Some(v) = sim.player_vertical_look() { self.curr_camera.pitch = v; }
                 let entities: Vec<RenderableEntity> = sim.entities().into_iter()
-                    .map(|e| RenderableEntity { position: e.position, facing: e.facing, shape: e.shape, frame: e.frame })
+                    .map(|e| RenderableEntity {
+                        position: Vec3::new(e.position.x, e.position.z, e.position.y), // sim→mesh coord swap
+                        facing: e.facing, shape: e.shape, frame: e.frame,
+                    })
                     .collect();
                 self.entity_snapshots.advance(entities);
                 let _ = sim.drain_events();
@@ -177,7 +195,15 @@ impl GameState {
         }
 
         let alpha = (self.tick_accum_ms / TICK_DURATION_MS) as f32;
-        let cam = self.prev_camera.lerp(&self.curr_camera, alpha);
+        let mut cam = self.prev_camera.lerp(&self.curr_camera, alpha);
+        // Apply pending mouse delta (not yet consumed by a sim tick) directly
+        // to the rendered camera so mouse look reflects immediately. The sim
+        // remains authoritative: on the next tick `to_mouse_delta()` consumes
+        // these and updates `curr_camera.yaw/pitch` to match, so the preview
+        // transitions seamlessly.
+        cam.yaw += self.input.mouse_dx as f32;
+        let pitch_limit = std::f32::consts::FRAC_PI_6; // ~30° matches Marathon's maximum_elevation
+        cam.pitch = (cam.pitch + self.input.mouse_dy as f32).clamp(-pitch_limit, pitch_limit);
         let uniform = cam.to_uniform(self.aspect, elapsed);
 
         // Build sprite draw calls
@@ -211,16 +237,145 @@ impl GameState {
             });
             rp.set_pipeline(&self.pipeline);
             rp.set_bind_group(0, &self.camera_bind_group, &[]);
-            let tbg = self.texture_manager.gpu_textures.values().next().map(|t| &t.bind_group).unwrap_or(&self.fallback_bind_group);
-            rp.set_bind_group(1, tbg, &[]);
             rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             rp.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            rp.draw_indexed(0..self.num_indices, 0, 0..1);
+            // Draw geometry in batches, binding the correct texture collection for each
+            for batch in &self.draw_batches {
+                let bg = self.texture_manager.gpu_textures
+                    .get(&batch.collection_index)
+                    .map(|t| &t.bind_group)
+                    .unwrap_or(&self.fallback_bind_group);
+                rp.set_bind_group(1, bg, &[]);
+                rp.draw_indexed(batch.index_start..batch.index_start + batch.index_count, 0, 0..1);
+            }
             self.sprite_renderer.render(&self.device, &mut rp, &self.camera_bind_group, cam.position, cam.yaw, &sprites);
         }
         self.queue.submit(std::iter::once(enc.finish()));
         output.present();
+
+        // HUD update (throttled to ~10fps = every 3 ticks at 30fps)
+        self.hud_update_counter += 1;
+        if self.hud_update_counter % 3 == 0 {
+            if let Some(ref mut sim) = self.sim {
+                let health = sim.player_health().unwrap_or(0);
+                let shield = sim.player_shield().unwrap_or(0);
+                let oxygen = sim.player_oxygen().unwrap_or(600);
+                update_hud(health, shield, oxygen);
+            }
+        }
+
+        // Automap toggle
+        if self.input.toggle_map {
+            self.input.toggle_map = false;
+            self.automap_visible = !self.automap_visible;
+            if let Some(el) = web_sys::window().unwrap().document().unwrap().get_element_by_id("automap-canvas") {
+                let _ = el.set_attribute("style", if self.automap_visible {
+                    "display:block;position:fixed;inset:0;z-index:4;background:rgba(0,0,0,0.7);pointer-events:none"
+                } else {
+                    "display:none"
+                });
+            }
+        }
+
+        // Automap rendering
+        if self.automap_visible {
+            draw_automap(&self.map_lines, cam.position.x, cam.position.z, cam.yaw);
+        }
     }
+}
+
+fn update_hud(health: i16, shield: i16, oxygen: i16) {
+    let window = web_sys::window().unwrap();
+    let document = window.document().unwrap();
+
+    // Show HUD
+    if let Some(hud) = document.get_element_by_id("hud") {
+        let _ = hud.set_attribute("style", "display: flex");
+    }
+
+    let max_health: f32 = 150.0;
+    let max_shield: f32 = 150.0;
+    let max_oxygen: f32 = 600.0;
+
+    let health_pct = (health as f32 / max_health * 100.0).clamp(0.0, 100.0);
+    let shield_pct = (shield as f32 / max_shield * 100.0).clamp(0.0, 100.0);
+    let oxygen_pct = (oxygen as f32 / max_oxygen * 100.0).clamp(0.0, 100.0);
+
+    // Health bar color tiers
+    let health_color = if health_pct > 66.0 { "#4a4" } else if health_pct > 33.0 { "#aa4" } else { "#a44" };
+
+    if let Some(el) = document.get_element_by_id("health-fill") {
+        let _ = el.set_attribute("style", &format!("width:{health_pct:.0}%;background:{health_color}"));
+    }
+    if let Some(el) = document.get_element_by_id("health-val") {
+        el.set_text_content(Some(&format!("{health}")));
+    }
+    if let Some(el) = document.get_element_by_id("shield-fill") {
+        let _ = el.set_attribute("style", &format!("width:{shield_pct:.0}%;background:#48c"));
+    }
+    if let Some(el) = document.get_element_by_id("shield-val") {
+        el.set_text_content(Some(&format!("{shield}")));
+    }
+
+    // Oxygen: hide when full
+    if let Some(el) = document.get_element_by_id("oxygen-group") {
+        let _ = el.set_attribute("style", if oxygen >= 600 { "display:none" } else { "display:flex" });
+    }
+    if let Some(el) = document.get_element_by_id("oxygen-fill") {
+        let _ = el.set_attribute("style", &format!("width:{oxygen_pct:.0}%;background:#4ac"));
+    }
+    if let Some(el) = document.get_element_by_id("oxygen-val") {
+        el.set_text_content(Some(&format!("{oxygen}")));
+    }
+}
+
+fn draw_automap(lines: &[([f32; 2], [f32; 2])], player_x: f32, player_z: f32, player_yaw: f32) {
+    let document = web_sys::window().unwrap().document().unwrap();
+    let canvas = match document.get_element_by_id("automap-canvas") {
+        Some(el) => el.dyn_into::<web_sys::HtmlCanvasElement>().unwrap(),
+        None => return,
+    };
+    let w = canvas.client_width() as u32;
+    let h = canvas.client_height() as u32;
+    canvas.set_width(w);
+    canvas.set_height(h);
+
+    let ctx: web_sys::CanvasRenderingContext2d = canvas
+        .get_context("2d").unwrap().unwrap()
+        .dyn_into().unwrap();
+
+    ctx.clear_rect(0.0, 0.0, w as f64, h as f64);
+
+    let cx = w as f64 / 2.0;
+    let cy = h as f64 / 2.0;
+    let scale = 12.0; // pixels per world unit
+
+    // Draw lines
+    ctx.set_stroke_style_str("#4a9");
+    ctx.set_line_width(1.0);
+    ctx.begin_path();
+    for &(a, b) in lines {
+        let ax = cx + (a[0] - player_x) as f64 * scale;
+        let ay = cy + (a[1] - player_z) as f64 * scale;
+        let bx = cx + (b[0] - player_x) as f64 * scale;
+        let by = cy + (b[1] - player_z) as f64 * scale;
+        ctx.move_to(ax, ay);
+        ctx.line_to(bx, by);
+    }
+    ctx.stroke();
+
+    // Draw player marker (arrow)
+    ctx.set_fill_style_str("#ff4");
+    ctx.save();
+    ctx.translate(cx, cy).unwrap();
+    ctx.rotate(-player_yaw as f64).unwrap();
+    ctx.begin_path();
+    ctx.move_to(0.0, -8.0);
+    ctx.line_to(-5.0, 6.0);
+    ctx.line_to(5.0, 6.0);
+    ctx.close_path();
+    ctx.fill();
+    ctx.restore();
 }
 
 pub async fn run_web(
@@ -235,7 +390,7 @@ pub async fn run_web(
         .ok()
         .and_then(|wad| wad.entry(0).and_then(|e| PhysicsData::from_entry(e).ok()));
 
-    log::info!("Parsed: {} levels", map_wad.entry_count());
+    log::info!("Parsed: {} levels, physics={}", map_wad.entry_count(), physics_data.is_some());
 
     // Get canvas
     let window = web_sys::window().unwrap();
@@ -265,10 +420,12 @@ pub async fn run_web(
 
     log::info!("GPU: {}", adapter.get_info().name);
 
+    let mut limits = wgpu::Limits::downlevel_webgl2_defaults();
+    limits.max_color_attachments = 1;
     let (device, queue) = adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("dev"),
         required_features: wgpu::Features::empty(),
-        required_limits: wgpu::Limits::downlevel_webgl2_defaults(),
+        required_limits: limits,
         memory_hints: Default::default(),
     }, None).await.map_err(|e| format!("Device error: {e}"))?;
 
@@ -325,7 +482,7 @@ pub async fn run_web(
         fragment: Some(wgpu::FragmentState { module: &shader, entry_point: Some("fs_main"),
             targets: &[Some(wgpu::ColorTargetState { format, blend: Some(wgpu::BlendState::ALPHA_BLENDING), write_mask: wgpu::ColorWrites::ALL })],
             compilation_options: Default::default() }),
-        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, front_face: wgpu::FrontFace::Ccw, cull_mode: Some(wgpu::Face::Back), ..Default::default() },
+        primitive: wgpu::PrimitiveState { topology: wgpu::PrimitiveTopology::TriangleList, front_face: wgpu::FrontFace::Ccw, cull_mode: None, ..Default::default() },
         depth_stencil: Some(wgpu::DepthStencilState { format: wgpu::TextureFormat::Depth32Float, depth_write_enabled: true, depth_compare: wgpu::CompareFunction::Less, stencil: Default::default(), bias: Default::default() }),
         multisample: Default::default(), multiview: None, cache: None,
     });
@@ -341,7 +498,7 @@ pub async fn run_web(
     let mut state = GameState {
         surface, device, queue, config, depth_view, pipeline,
         camera_buffer: cam_buf, camera_bind_group: cam_bg,
-        vertex_buffer: vb, index_buffer: ib, num_indices: 0,
+        vertex_buffer: vb, index_buffer: ib, num_indices: 0, draw_batches: Vec::new(),
         texture_manager: TextureManager { collections: Default::default(), gpu_textures: Default::default() },
         fallback_bind_group: fb, texture_bgl: tex_bgl,
         sprite_renderer, sim: None, shapes_file,
@@ -349,6 +506,9 @@ pub async fn run_web(
         input: InputState::new(), entity_snapshots: EntitySnapshots::new(),
         last_frame_ms: now, tick_accum_ms: 0.0, start_ms: now,
         aspect: width as f32 / height.max(1) as f32,
+        hud_update_counter: 0,
+        automap_visible: false,
+        map_lines: Vec::new(),
     };
 
     // Load level 0
@@ -413,22 +573,40 @@ fn load_level_into(state: &mut GameState, wad: &WadFile, physics: Option<&Physic
             floor_transfer_mode: p.floor_transfer_mode as u32,
         }
     }).collect();
+
     let lm = mesh::build_level_mesh(map, &poly_info);
     let descs = level::collect_texture_descriptors(map);
     let mut tm = TextureManager::load_collections(&state.shapes_file, &descs);
 
+    // Extract map lines for automap
+    state.map_lines = map.lines.iter().map(|line| {
+        let a = &map.endpoints[line.endpoint_indexes[0] as usize];
+        let b = &map.endpoints[line.endpoint_indexes[1] as usize];
+        ([a.vertex.x as f32 / 1024.0, a.vertex.y as f32 / 1024.0],
+         [b.vertex.x as f32 / 1024.0, b.vertex.y as f32 / 1024.0])
+    }).collect();
+
     // Init sim
     if let Some(phys) = physics {
+        if let Some(pc) = phys.physics.as_ref().and_then(|p| p.first()) {
+            log::info!("Physics: fwd_vel={:.4} accel={:.4} ang_accel={:.4} radius={:.4} height={:.4} step={:.4}",
+                pc.maximum_forward_velocity, pc.acceleration, pc.angular_acceleration,
+                pc.radius, pc.height, pc.step_delta);
+        }
         match SimWorld::new(map, phys, &SimConfig { random_seed: 42, difficulty: 2 }) {
             Ok(sim) => { state.sim = Some(sim); }
-            Err(e) => { log::error!("Sim: {e}"); }
+            Err(e) => { log::error!("Sim init failed: {e}"); }
         }
     }
 
-    // Camera
+    // Camera — sim coords: (x=mapX, y=mapY, z=vertical), mesh coords: (X=mapX, Y=vertical, Z=mapY)
     if let Some(ref mut sim) = state.sim {
         if let Some(pos) = sim.player_position() {
-            let c = CameraState { position: Vec3::new(pos.x, pos.y + EYE_HEIGHT, pos.z), yaw: sim.player_facing().unwrap_or(0.0), pitch: 0.0 };
+            let c = CameraState {
+                position: Vec3::new(pos.x, pos.z + EYE_HEIGHT, pos.y),
+                yaw: sim.player_facing().unwrap_or(0.0),
+                pitch: sim.player_vertical_look().unwrap_or(0.0),
+            };
             state.prev_camera = c; state.curr_camera = c;
         }
     }
@@ -441,6 +619,7 @@ fn load_level_into(state: &mut GameState, wad: &WadFile, physics: Option<&Physic
         label: None, contents: bytemuck::cast_slice(&lm.indices), usage: wgpu::BufferUsages::INDEX,
     });
     state.num_indices = lm.indices.len() as u32;
+    state.draw_batches = lm.batches;
 
     let sampler = state.device.create_sampler(&wgpu::SamplerDescriptor {
         mag_filter: wgpu::FilterMode::Nearest, min_filter: wgpu::FilterMode::Nearest,
@@ -459,11 +638,12 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
     let keydown = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
         let mut st = s.borrow_mut();
         match e.code().as_str() {
-            "KeyW" | "ArrowUp" => st.input.forward = true,
-            "KeyS" | "ArrowDown" => st.input.backward = true,
-            "KeyA" => st.input.strafe_left = true,
-            "KeyD" => st.input.strafe_right = true,
+            "KeyW" | "ArrowUp" => st.input.backward = true,
+            "KeyS" | "ArrowDown" => st.input.forward = true,
+            "KeyA" => st.input.strafe_right = true,
+            "KeyD" => st.input.strafe_left = true,
             "Space" => st.input.action = true,
+            "Tab" => { st.input.toggle_map = true; e.prevent_default(); return; }
             _ => {}
         }
         e.prevent_default();
@@ -475,10 +655,10 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
     let keyup = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
         let mut st = s.borrow_mut();
         match e.code().as_str() {
-            "KeyW" | "ArrowUp" => st.input.forward = false,
-            "KeyS" | "ArrowDown" => st.input.backward = false,
-            "KeyA" => st.input.strafe_left = false,
-            "KeyD" => st.input.strafe_right = false,
+            "KeyW" | "ArrowUp" => st.input.backward = false,
+            "KeyS" | "ArrowDown" => st.input.forward = false,
+            "KeyA" => st.input.strafe_right = false,
+            "KeyD" => st.input.strafe_left = false,
             "Space" => st.input.action = false,
             _ => {}
         }
@@ -490,8 +670,8 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
     let s = state.clone();
     let mousemove = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |e: web_sys::MouseEvent| {
         let mut st = s.borrow_mut();
-        st.input.mouse_dx += e.movement_x() as f64;
-        st.input.mouse_dy += e.movement_y() as f64;
+        st.input.mouse_dx += e.movement_x() as f64 * MOUSE_SENSITIVITY;
+        st.input.mouse_dy += e.movement_y() as f64 * MOUSE_SENSITIVITY;
     });
     canvas.add_event_listener_with_callback("mousemove", mousemove.as_ref().unchecked_ref()).unwrap();
     mousemove.forget();

@@ -81,6 +81,7 @@ fn build_floor(
     let floor_y = world_to_f32(polygon.floor_height);
     let tex_desc = polygon.floor_texture.0 as u32;
 
+    let mut actual_verts = 0u32;
     for i in 0..vert_count {
         let ep_idx = polygon.endpoint_indexes[i];
         if ep_idx < 0 {
@@ -98,12 +99,15 @@ fn build_floor(
             polygon_index: poly_idx as u32,
             texture_descriptor: tex_desc,
         });
+        actual_verts += 1;
     }
 
-    for i in 1..(vert_count as u32 - 1) {
-        indices.push(base);
-        indices.push(base + i);
-        indices.push(base + i + 1);
+    if actual_verts >= 3 {
+        for i in 1..actual_verts - 1 {
+            indices.push(base);
+            indices.push(base + i + 1);
+            indices.push(base + i);
+        }
     }
 }
 
@@ -119,6 +123,7 @@ fn build_ceiling(
     let ceil_y = world_to_f32(polygon.ceiling_height);
     let tex_desc = polygon.ceiling_texture.0 as u32;
 
+    let mut actual_verts = 0u32;
     for i in 0..vert_count {
         let ep_idx = polygon.endpoint_indexes[i];
         if ep_idx < 0 {
@@ -136,12 +141,15 @@ fn build_ceiling(
             polygon_index: poly_idx as u32,
             texture_descriptor: tex_desc,
         });
+        actual_verts += 1;
     }
 
-    for i in 1..(vert_count as u32 - 1) {
-        indices.push(base);
-        indices.push(base + i + 1);
-        indices.push(base + i);
+    if actual_verts >= 3 {
+        for i in 1..actual_verts - 1 {
+            indices.push(base);
+            indices.push(base + i);
+            indices.push(base + i + 1);
+        }
     }
 }
 
@@ -158,6 +166,7 @@ fn build_media_surface(
     let media_y = world_to_f32(media.height);
     let tex_desc = media.texture.0 as u32;
 
+    let mut actual_verts = 0u32;
     for i in 0..vert_count {
         let ep_idx = polygon.endpoint_indexes[i];
         if ep_idx < 0 {
@@ -175,12 +184,15 @@ fn build_media_surface(
             polygon_index: poly_idx as u32,
             texture_descriptor: tex_desc,
         });
+        actual_verts += 1;
     }
 
-    for i in 1..(vert_count as u32 - 1) {
-        indices.push(base);
-        indices.push(base + i);
-        indices.push(base + i + 1);
+    if actual_verts >= 3 {
+        for i in 1..actual_verts - 1 {
+            indices.push(base);
+            indices.push(base + i + 1);
+            indices.push(base + i);
+        }
     }
 }
 
@@ -247,20 +259,22 @@ fn build_wall_side(
 
     match side.side_type {
         0 => {
-            let bottom = world_to_f32(polygon.floor_height);
-            let top = world_to_f32(polygon.ceiling_height);
-            let tex = &side.primary_texture;
-            emit_wall_quad(
-                vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                tex.texture.0 as u32, poly_idx,
-            );
+            if !side.primary_texture.texture.is_none() {
+                let bottom = world_to_f32(polygon.floor_height);
+                let top = world_to_f32(polygon.ceiling_height);
+                let tex = &side.primary_texture;
+                emit_wall_quad(
+                    vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
+                    tex.texture.0 as u32, poly_idx,
+                );
+            }
         }
         1 => {
             if let Some(adj_idx) = adjacent_poly_idx {
                 let adj = &map.polygons[adj_idx];
                 let bottom = world_to_f32(adj.ceiling_height);
                 let top = world_to_f32(polygon.ceiling_height);
-                if top > bottom {
+                if top > bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
@@ -274,7 +288,7 @@ fn build_wall_side(
                 let adj = &map.polygons[adj_idx];
                 let bottom = world_to_f32(polygon.floor_height);
                 let top = world_to_f32(adj.floor_height);
-                if top > bottom {
+                if top > bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
@@ -283,13 +297,13 @@ fn build_wall_side(
                 }
             }
         }
-        3 => {
+        3 | 4 => {
             if let Some(adj_idx) = adjacent_poly_idx {
                 let adj = &map.polygons[adj_idx];
 
                 let low_bottom = world_to_f32(polygon.floor_height);
                 let low_top = world_to_f32(adj.floor_height);
-                if low_top > low_bottom {
+                if low_top > low_bottom && !side.secondary_texture.texture.is_none() {
                     let tex = &side.secondary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, low_bottom, low_top, wall_len, tex,
@@ -309,7 +323,7 @@ fn build_wall_side(
 
                 let high_bottom = world_to_f32(adj.ceiling_height);
                 let high_top = world_to_f32(polygon.ceiling_height);
-                if high_top > high_bottom {
+                if high_top > high_bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, high_bottom, high_top, wall_len,

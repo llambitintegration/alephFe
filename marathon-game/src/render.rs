@@ -13,7 +13,7 @@ use winit::window::{Window, WindowId};
 
 use marathon_audio::{AudioConfig, AudioEngine, AudioEvent, ListenerState};
 use marathon_formats::{PhysicsData, ShapesFile, SoundsFile, WadFile};
-use marathon_sim::tick::ActionFlags;
+use marathon_sim::tick::{ActionFlags, TickInput};
 use marathon_sim::world::{SimConfig, SimEvent, SimWorld};
 
 use crate::level;
@@ -107,6 +107,7 @@ impl EntitySnapshots {
 /// Simulation ticks per second.
 const TICKS_PER_SECOND: u64 = 30;
 const TICK_DURATION_MICROS: u64 = 1_000_000 / TICKS_PER_SECOND;
+const MOUSE_SENSITIVITY: f64 = 0.003;
 
 /// First-person camera state, driven by simulation.
 #[derive(Clone, Copy)]
@@ -183,7 +184,7 @@ impl InputState {
         }
     }
 
-    fn to_action_flags(&mut self) -> ActionFlags {
+    fn to_tick_input(&mut self) -> TickInput {
         let mut bits = 0u32;
         if self.forward {
             bits |= ActionFlags::MOVE_FORWARD;
@@ -207,24 +208,21 @@ impl InputState {
             bits |= ActionFlags::ACTION;
         }
 
-        // Convert mouse delta to turn/look flags
-        if self.mouse_dx > 2.0 {
-            bits |= ActionFlags::TURN_RIGHT;
-        } else if self.mouse_dx < -2.0 {
-            bits |= ActionFlags::TURN_LEFT;
-        }
-        if self.mouse_dy > 2.0 {
-            bits |= ActionFlags::LOOK_DOWN;
-        } else if self.mouse_dy < -2.0 {
-            bits |= ActionFlags::LOOK_UP;
-        }
+        // Pass mouse deltas as proportional yaw/pitch in radians,
+        // not as binary turn/look flags.
+        let mouse_yaw = (self.mouse_dx * MOUSE_SENSITIVITY) as f32;
+        let mouse_pitch = (-self.mouse_dy * MOUSE_SENSITIVITY) as f32;
 
         // Reset accumulated deltas
         self.mouse_dx = 0.0;
         self.mouse_dy = 0.0;
         self.escape_pressed = false;
 
-        ActionFlags::new(bits)
+        TickInput {
+            action_flags: ActionFlags::new(bits),
+            mouse_yaw,
+            mouse_pitch,
+        }
     }
 }
 
@@ -1177,12 +1175,12 @@ impl ApplicationHandler for App {
                         // Save previous camera for interpolation
                         self.prev_camera = self.curr_camera;
 
-                        // Produce action flags from input
-                        let flags = self.input.to_action_flags();
+                        // Produce tick input from accumulated input
+                        let tick_input = self.input.to_tick_input();
 
                         // Advance simulation
                         if let Some(ref mut sim) = self.sim {
-                            sim.tick(flags);
+                            sim.tick(tick_input);
 
                             // Update camera from player state
                             if let Some(pos) = sim.player_position() {
@@ -1311,7 +1309,15 @@ impl ApplicationHandler for App {
                 } else {
                     1.0
                 };
-                let render_camera = self.prev_camera.lerp(&self.curr_camera, alpha);
+                let mut render_camera = self.prev_camera.lerp(&self.curr_camera, alpha);
+                // Apply pending mouse delta (not yet consumed by next tick)
+                // directly to the rendered camera for zero-latency mouse look.
+                // The sim catches up on the next tick.
+                render_camera.yaw += (self.input.mouse_dx * MOUSE_SENSITIVITY) as f32;
+                let pitch_limit = std::f32::consts::FRAC_PI_6;
+                render_camera.pitch = (render_camera.pitch
+                    + (-self.input.mouse_dy * MOUSE_SENSITIVITY) as f32)
+                    .clamp(-pitch_limit, pitch_limit);
                 let camera_uniform = render_camera.to_uniform(self.aspect, elapsed);
 
                 // Build sprite draw calls from entity snapshots
@@ -1451,16 +1457,16 @@ mod tests {
     #[test]
     fn input_state_default_produces_empty_flags() {
         let mut input = InputState::new();
-        let flags = input.to_action_flags();
-        assert!(flags.is_empty());
+        let tick = input.to_tick_input();
+        assert!(tick.action_flags.is_empty());
     }
 
     #[test]
     fn input_state_forward_sets_flag() {
         let mut input = InputState::new();
         input.forward = true;
-        let flags = input.to_action_flags();
-        assert!(flags.contains(ActionFlags::MOVE_FORWARD));
+        let tick = input.to_tick_input();
+        assert!(tick.action_flags.contains(ActionFlags::MOVE_FORWARD));
     }
 
     #[test]
@@ -1469,32 +1475,35 @@ mod tests {
         input.forward = true;
         input.strafe_left = true;
         input.fire_primary = true;
-        let flags = input.to_action_flags();
-        assert!(flags.contains(ActionFlags::MOVE_FORWARD));
-        assert!(flags.contains(ActionFlags::STRAFE_LEFT));
-        assert!(flags.contains(ActionFlags::FIRE_PRIMARY));
-        assert!(!flags.contains(ActionFlags::MOVE_BACKWARD));
+        let tick = input.to_tick_input();
+        assert!(tick.action_flags.contains(ActionFlags::MOVE_FORWARD));
+        assert!(tick.action_flags.contains(ActionFlags::STRAFE_LEFT));
+        assert!(tick.action_flags.contains(ActionFlags::FIRE_PRIMARY));
+        assert!(!tick.action_flags.contains(ActionFlags::MOVE_BACKWARD));
     }
 
     #[test]
-    fn input_state_mouse_deltas_produce_turn_flags() {
+    fn input_state_mouse_deltas_produce_proportional_yaw() {
         let mut input = InputState::new();
         input.mouse_dx = 10.0;
-        let flags = input.to_action_flags();
-        assert!(flags.contains(ActionFlags::TURN_RIGHT));
+        let tick = input.to_tick_input();
+        // Mouse deltas should be passed as proportional yaw, not binary flags
+        assert!(tick.mouse_yaw > 0.0);
+        assert!(!tick.action_flags.contains(ActionFlags::TURN_RIGHT));
+        assert!(!tick.action_flags.contains(ActionFlags::TURN_LEFT));
 
         let mut input = InputState::new();
         input.mouse_dx = -10.0;
-        let flags = input.to_action_flags();
-        assert!(flags.contains(ActionFlags::TURN_LEFT));
+        let tick = input.to_tick_input();
+        assert!(tick.mouse_yaw < 0.0);
     }
 
     #[test]
-    fn input_state_mouse_resets_after_to_action_flags() {
+    fn input_state_mouse_resets_after_to_tick_input() {
         let mut input = InputState::new();
         input.mouse_dx = 50.0;
         input.mouse_dy = -30.0;
-        let _ = input.to_action_flags();
+        let _ = input.to_tick_input();
         assert!((input.mouse_dx).abs() < 0.001);
         assert!((input.mouse_dy).abs() < 0.001);
     }

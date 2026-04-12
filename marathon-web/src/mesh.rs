@@ -36,10 +36,20 @@ impl Vertex {
     }
 }
 
+/// A batch of triangles sharing the same texture collection.
+pub struct DrawBatch {
+    pub collection_index: u16,
+    /// Range into the index buffer (start..end).
+    pub index_start: u32,
+    pub index_count: u32,
+}
+
 /// Result of converting a level's geometry to GPU-ready mesh data.
 pub struct LevelMesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
+    /// Draw batches grouped by texture collection, sorted by collection index.
+    pub batches: Vec<DrawBatch>,
 }
 
 /// Convert Marathon world distance (i16, 1024 = 1 world unit) to f32.
@@ -76,7 +86,66 @@ pub fn build_level_mesh(map: &MapData, poly_info: &[PolygonInfo]) -> LevelMesh {
         build_walls_for_line(&mut vertices, &mut indices, map, line, poly_info);
     }
 
-    LevelMesh { vertices, indices }
+    // Group triangles by collection for batched rendering.
+    // Each triangle's collection is determined by the first vertex's texture_descriptor.
+    let batches = build_draw_batches(&vertices, &mut indices);
+
+    LevelMesh { vertices, indices, batches }
+}
+
+/// Sort triangle indices by texture collection and return draw batches.
+fn build_draw_batches(vertices: &[Vertex], indices: &mut Vec<u32>) -> Vec<DrawBatch> {
+    if indices.is_empty() {
+        return Vec::new();
+    }
+
+    // Extract collection from texture_descriptor: bits[12:8]
+    let collection_of = |idx: u32| -> u16 {
+        let desc = vertices[idx as usize].texture_descriptor;
+        ((desc >> 8) & 0x1F) as u16
+    };
+
+    // Sort triangles (groups of 3 indices) by collection
+    let mut triangles: Vec<[u32; 3]> = indices
+        .chunks_exact(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
+    triangles.sort_by_key(|tri| collection_of(tri[0]));
+
+    // Rebuild sorted index buffer and record batches
+    indices.clear();
+    let mut batches = Vec::new();
+    let mut current_coll = collection_of(triangles[0][0]);
+    let mut batch_start = 0u32;
+
+    for tri in &triangles {
+        let coll = collection_of(tri[0]);
+        if coll != current_coll {
+            let count = indices.len() as u32 - batch_start;
+            if count > 0 {
+                batches.push(DrawBatch {
+                    collection_index: current_coll,
+                    index_start: batch_start,
+                    index_count: count,
+                });
+            }
+            current_coll = coll;
+            batch_start = indices.len() as u32;
+        }
+        indices.extend_from_slice(tri);
+    }
+
+    // Final batch
+    let count = indices.len() as u32 - batch_start;
+    if count > 0 {
+        batches.push(DrawBatch {
+            collection_index: current_coll,
+            index_start: batch_start,
+            index_count: count,
+        });
+    }
+
+    batches
 }
 
 fn build_floor(
@@ -91,6 +160,7 @@ fn build_floor(
     let floor_y = world_to_f32(polygon.floor_height);
     let tex_desc = polygon.floor_texture.0 as u32;
 
+    let mut actual_verts = 0u32;
     for i in 0..vert_count {
         let ep_idx = polygon.endpoint_indexes[i];
         if ep_idx < 0 {
@@ -109,12 +179,15 @@ fn build_floor(
             light: info.floor_light,
             transfer_mode: info.floor_transfer_mode,
         });
+        actual_verts += 1;
     }
 
-    for i in 1..(vert_count as u32 - 1) {
-        indices.push(base);
-        indices.push(base + i);
-        indices.push(base + i + 1);
+    if actual_verts >= 3 {
+        for i in 1..actual_verts - 1 {
+            indices.push(base);
+            indices.push(base + i + 1);
+            indices.push(base + i);
+        }
     }
 }
 
@@ -130,6 +203,7 @@ fn build_ceiling(
     let ceil_y = world_to_f32(polygon.ceiling_height);
     let tex_desc = polygon.ceiling_texture.0 as u32;
 
+    let mut actual_verts = 0u32;
     for i in 0..vert_count {
         let ep_idx = polygon.endpoint_indexes[i];
         if ep_idx < 0 {
@@ -148,12 +222,15 @@ fn build_ceiling(
             light: info.floor_light,
             transfer_mode: info.floor_transfer_mode,
         });
+        actual_verts += 1;
     }
 
-    for i in 1..(vert_count as u32 - 1) {
-        indices.push(base);
-        indices.push(base + i + 1);
-        indices.push(base + i);
+    if actual_verts >= 3 {
+        for i in 1..actual_verts - 1 {
+            indices.push(base);
+            indices.push(base + i);
+            indices.push(base + i + 1);
+        }
     }
 }
 
@@ -170,6 +247,7 @@ fn build_media_surface(
     let media_y = world_to_f32(media.height);
     let tex_desc = media.texture.0 as u32;
 
+    let mut actual_verts = 0u32;
     for i in 0..vert_count {
         let ep_idx = polygon.endpoint_indexes[i];
         if ep_idx < 0 {
@@ -188,12 +266,15 @@ fn build_media_surface(
             light: info.floor_light,
             transfer_mode: media.transfer_mode as u32,
         });
+        actual_verts += 1;
     }
 
-    for i in 1..(vert_count as u32 - 1) {
-        indices.push(base);
-        indices.push(base + i);
-        indices.push(base + i + 1);
+    if actual_verts >= 3 {
+        for i in 1..actual_verts - 1 {
+            indices.push(base);
+            indices.push(base + i + 1);
+            indices.push(base + i);
+        }
     }
 }
 
@@ -263,20 +344,22 @@ fn build_wall_side(
 
     match side.side_type {
         0 => {
-            let bottom = world_to_f32(polygon.floor_height);
-            let top = world_to_f32(polygon.ceiling_height);
-            let tex = &side.primary_texture;
-            emit_wall_quad(
-                vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                tex.texture.0 as u32, info,
-            );
+            if !side.primary_texture.texture.is_none() {
+                let bottom = world_to_f32(polygon.floor_height);
+                let top = world_to_f32(polygon.ceiling_height);
+                let tex = &side.primary_texture;
+                emit_wall_quad(
+                    vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
+                    tex.texture.0 as u32, info,
+                );
+            }
         }
         1 => {
             if let Some(adj_idx) = adjacent_poly_idx {
                 let adj = &map.polygons[adj_idx];
                 let bottom = world_to_f32(adj.ceiling_height);
                 let top = world_to_f32(polygon.ceiling_height);
-                if top > bottom {
+                if top > bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
@@ -290,7 +373,7 @@ fn build_wall_side(
                 let adj = &map.polygons[adj_idx];
                 let bottom = world_to_f32(polygon.floor_height);
                 let top = world_to_f32(adj.floor_height);
-                if top > bottom {
+                if top > bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
@@ -299,13 +382,13 @@ fn build_wall_side(
                 }
             }
         }
-        3 => {
+        3 | 4 => {
             if let Some(adj_idx) = adjacent_poly_idx {
                 let adj = &map.polygons[adj_idx];
 
                 let low_bottom = world_to_f32(polygon.floor_height);
                 let low_top = world_to_f32(adj.floor_height);
-                if low_top > low_bottom {
+                if low_top > low_bottom && !side.secondary_texture.texture.is_none() {
                     let tex = &side.secondary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, low_bottom, low_top, wall_len, tex,
@@ -325,7 +408,7 @@ fn build_wall_side(
 
                 let high_bottom = world_to_f32(adj.ceiling_height);
                 let high_top = world_to_f32(polygon.ceiling_height);
-                if high_top > high_bottom {
+                if high_top > high_bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, high_bottom, high_top, wall_len,
@@ -397,6 +480,106 @@ fn emit_wall_quad(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use marathon_formats::{Endpoint, Line, Polygon, Side, WorldPoint2d, ShapeDescriptor, SideTexture};
+    use marathon_formats::map::LightData;
+
+    fn make_endpoint(x: i16, y: i16) -> Endpoint {
+        Endpoint {
+            flags: 0,
+            highest_adjacent_floor_height: 0,
+            lowest_adjacent_ceiling_height: 0,
+            vertex: WorldPoint2d { x, y },
+            transformed: WorldPoint2d { x, y },
+            supporting_polygon_index: -1,
+        }
+    }
+
+    fn make_polygon(vertex_count: u16, endpoint_indexes: [i16; 8]) -> Polygon {
+        Polygon {
+            polygon_type: 0,
+            flags: 0,
+            permutation: 0,
+            vertex_count,
+            endpoint_indexes,
+            line_indexes: [-1; 8],
+            floor_texture: ShapeDescriptor(0x0100),
+            ceiling_texture: ShapeDescriptor(0x0100),
+            floor_height: 0,
+            ceiling_height: 1024,
+            floor_lightsource_index: 0,
+            ceiling_lightsource_index: 0,
+            area: 0,
+            floor_transfer_mode: 0,
+            ceiling_transfer_mode: 0,
+            adjacent_polygon_indexes: [-1; 8],
+            center: WorldPoint2d { x: 0, y: 0 },
+            side_indexes: [-1; 8],
+            floor_origin: WorldPoint2d { x: 0, y: 0 },
+            ceiling_origin: WorldPoint2d { x: 0, y: 0 },
+            media_index: -1,
+            media_lightsource_index: -1,
+            sound_source_indexes: -1,
+            ambient_sound_image_index: -1,
+            random_sound_image_index: -1,
+        }
+    }
+
+    fn make_side_texture(descriptor: u16) -> SideTexture {
+        SideTexture {
+            x0: 0,
+            y0: 0,
+            texture: ShapeDescriptor(descriptor),
+        }
+    }
+
+    fn make_side(side_type: i16, primary_desc: u16) -> Side {
+        Side {
+            side_type,
+            flags: 0,
+            primary_texture: make_side_texture(primary_desc),
+            secondary_texture: make_side_texture(0xFFFF),
+            transparent_texture: make_side_texture(0xFFFF),
+            exclusion_zone: [WorldPoint2d { x: 0, y: 0 }; 4],
+            control_panel_type: 0,
+            control_panel_permutation: 0,
+            primary_transfer_mode: 0,
+            secondary_transfer_mode: 0,
+            transparent_transfer_mode: 0,
+            polygon_index: 0,
+            line_index: 0,
+            primary_lightsource_index: 0,
+            secondary_lightsource_index: 0,
+            transparent_lightsource_index: 0,
+            ambient_delta: 0,
+        }
+    }
+
+    fn make_map_data(endpoints: Vec<Endpoint>, polygons: Vec<Polygon>, lines: Vec<Line>, sides: Vec<Side>) -> MapData {
+        MapData {
+            endpoints,
+            lines,
+            sides,
+            polygons,
+            objects: vec![],
+            lights: LightData::None,
+            platforms: vec![],
+            media: vec![],
+            annotations: vec![],
+            terminals: vec![],
+            ambient_sounds: vec![],
+            random_sounds: vec![],
+            map_info: None,
+            item_placement: vec![],
+            guard_paths: None,
+        }
+    }
+
+    fn make_info() -> PolygonInfo {
+        PolygonInfo {
+            floor_light: 1.0,
+            floor_transfer_mode: 0,
+        }
+    }
 
     #[test]
     fn world_to_f32_conversion() {
@@ -424,5 +607,103 @@ mod tests {
         };
         let bytes: &[u8] = bytemuck::bytes_of(&v);
         assert_eq!(bytes.len(), 32);
+    }
+
+    #[test]
+    fn floor_triangulation_skips_negative_one_endpoints() {
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+            make_endpoint(1024, 1024),
+            make_endpoint(0, 1024),
+        ];
+        let polygon = make_polygon(5, [0, 1, -1, 2, 3, -1, -1, -1]);
+        let map = make_map_data(endpoints, vec![polygon], vec![], vec![]);
+        let info = make_info();
+
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 5);
+
+        assert_eq!(vertices.len(), 4, "should emit 4 vertices (skipping -1)");
+        assert_eq!(indices.len(), 6, "should emit 2 triangles (6 indices) from 4 verts");
+    }
+
+    #[test]
+    fn floor_triangulation_too_few_valid_verts_produces_nothing() {
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+        ];
+        let polygon = make_polygon(4, [0, -1, 1, -1, -1, -1, -1, -1]);
+        let map = make_map_data(endpoints, vec![polygon], vec![], vec![]);
+        let info = make_info();
+
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 4);
+
+        assert_eq!(vertices.len(), 2, "should emit 2 vertices");
+        assert_eq!(indices.len(), 0, "should emit 0 triangles (not enough verts)");
+    }
+
+    #[test]
+    fn wall_none_texture_produces_no_geometry() {
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+        ];
+        let polygon = make_polygon(4, [0, 1, -1, -1, -1, -1, -1, -1]);
+        let side = make_side(0, 0xFFFF);
+        let line = Line {
+            endpoint_indexes: [0, 1],
+            flags: 0,
+            length: 1024,
+            highest_adjacent_floor: 0,
+            lowest_adjacent_ceiling: 1024,
+            clockwise_polygon_side_index: 0,
+            counterclockwise_polygon_side_index: -1,
+            clockwise_polygon_owner: 0,
+            counterclockwise_polygon_owner: -1,
+        };
+        let map = make_map_data(endpoints, vec![polygon], vec![line], vec![side]);
+        let poly_info = vec![make_info()];
+
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        build_walls_for_line(&mut vertices, &mut indices, &map, &map.lines[0], &poly_info);
+
+        assert_eq!(vertices.len(), 0, "none-texture wall should produce 0 vertices");
+        assert_eq!(indices.len(), 0, "none-texture wall should produce 0 indices");
+    }
+
+    #[test]
+    fn wall_valid_texture_produces_quad() {
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+        ];
+        let polygon = make_polygon(4, [0, 1, -1, -1, -1, -1, -1, -1]);
+        let side = make_side(0, 0x0100);
+        let line = Line {
+            endpoint_indexes: [0, 1],
+            flags: 0,
+            length: 1024,
+            highest_adjacent_floor: 0,
+            lowest_adjacent_ceiling: 1024,
+            clockwise_polygon_side_index: 0,
+            counterclockwise_polygon_side_index: -1,
+            clockwise_polygon_owner: 0,
+            counterclockwise_polygon_owner: -1,
+        };
+        let map = make_map_data(endpoints, vec![polygon], vec![line], vec![side]);
+        let poly_info = vec![make_info()];
+
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        build_walls_for_line(&mut vertices, &mut indices, &map, &map.lines[0], &poly_info);
+
+        assert_eq!(vertices.len(), 4, "valid-texture wall should produce 4 vertices");
+        assert_eq!(indices.len(), 6, "valid-texture wall should produce 6 indices");
     }
 }

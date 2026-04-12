@@ -444,6 +444,50 @@ fn world_construction_from_synthetic_data() {
     assert_eq!(world.tick_count(), 0);
 }
 
+// ──────────────────── Running physics preference ────────────────────
+
+#[test]
+fn prefers_running_physics_when_two_entries_exist() {
+    // Build physics data with a crippled walking entry (near-zero speed)
+    // and a normal running entry. If the sim loads running (index 1), the
+    // player moves measurably. If it loads walking, the player barely moves.
+    let map = make_test_map();
+    let mut physics = make_test_physics();
+    if let Some(phys) = physics.physics.as_mut() {
+        // Crippled walking: essentially frozen
+        phys[0].maximum_forward_velocity = 0.0001;
+        phys[0].acceleration = 0.0001;
+        // Append running entry with normal movement values
+        let running = PhysicsConstants {
+            maximum_forward_velocity: 0.1,
+            maximum_backward_velocity: 0.05,
+            maximum_perpendicular_velocity: 0.08,
+            acceleration: 0.02,
+            deceleration: 0.01,
+            ..phys[0].clone()
+        };
+        phys.push(running);
+    }
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    let initial_pos = world.player_position().unwrap();
+    let forward = ActionFlags::new(ActionFlags::MOVE_FORWARD);
+    for _ in 0..30 {
+        world.tick(forward.into());
+    }
+    let final_pos = world.player_position().unwrap();
+    let dist = (final_pos - initial_pos).length();
+
+    // With running loaded (max_fwd=0.1, accel=0.02), the player should
+    // accelerate to max and travel ~1+ WU over 30 ticks. With walking
+    // loaded (max_fwd=0.0001), the player would travel <0.01 WU.
+    assert!(
+        dist > 0.1,
+        "expected running physics to be loaded — player moved only {dist} WU in 30 ticks"
+    );
+}
+
 // ──────────────────── Test 9.1: Player movement over ticks ────────────────────
 
 #[test]
@@ -458,7 +502,7 @@ fn player_moves_forward_over_ticks() {
     // Advance 100 ticks with forward movement
     let forward = ActionFlags::new(ActionFlags::MOVE_FORWARD);
     for _ in 0..100 {
-        world.tick(forward);
+        world.tick(forward.into());
     }
 
     let _final_pos = world.player_position().unwrap();
@@ -613,8 +657,8 @@ fn deterministic_replay_produces_identical_state() {
 
     for _ in 0..25 {
         for &input in &inputs {
-            world_a.tick(input);
-            world_b.tick(input);
+            world_a.tick(input.into());
+            world_b.tick(input.into());
         }
     }
 
@@ -639,7 +683,7 @@ fn serialization_round_trip() {
 
     // Advance some ticks
     for _ in 0..50 {
-        world.tick(ActionFlags::new(ActionFlags::MOVE_FORWARD));
+        world.tick(ActionFlags::new(ActionFlags::MOVE_FORWARD).into());
     }
 
     let tick_before = world.tick_count();
@@ -1473,7 +1517,7 @@ fn serialization_preserves_all_entity_types() {
 
     // Advance some ticks
     for _ in 0..10 {
-        world.tick(ActionFlags::default());
+        world.tick(ActionFlags::default().into());
     }
 
     let entities_before = world.entities().len();

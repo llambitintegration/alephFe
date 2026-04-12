@@ -96,6 +96,6 @@ pub fn evaluate_light_intensity(lights: &LightData, light_index: i16) -> f32 {
 }
 
 fn evaluate_static_light(light: &StaticLightData) -> f32 {
-    let intensity = light.primary_active.intensity as f32 / 65536.0;
-    intensity.clamp(0.0, 1.0)
+    // intensity is already f32 (converted from 16.16 fixed-point by marathon-formats)
+    light.primary_active.intensity.clamp(0.0, 1.0)
 }

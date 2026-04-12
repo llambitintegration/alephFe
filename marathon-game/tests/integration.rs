@@ -259,7 +259,7 @@ fn sim_tick_advances_state() {
     let empty = ActionFlags::new(0);
 
     for _ in 0..30 {
-        world.tick(empty);
+        world.tick(empty.into());
     }
 
     assert_eq!(world.tick_count(), 30);
@@ -278,9 +278,9 @@ fn sim_accepts_action_flags() {
     let strafe = ActionFlags::new(ActionFlags::STRAFE_LEFT);
     let combined = ActionFlags::new(ActionFlags::MOVE_FORWARD | ActionFlags::TURN_RIGHT);
 
-    world.tick(forward);
-    world.tick(strafe);
-    world.tick(combined);
+    world.tick(forward.into());
+    world.tick(strafe.into());
+    world.tick(combined.into());
     assert_eq!(world.tick_count(), 3);
 
     // Player should still be alive
@@ -312,7 +312,7 @@ fn snapshot_captures_state() {
     // Tick a few times
     let empty = ActionFlags::new(0);
     for _ in 0..10 {
-        world.tick(empty);
+        world.tick(empty.into());
     }
 
     let snapshot = world.snapshot();
@@ -328,7 +328,7 @@ fn drain_events_does_not_panic() {
     let mut world = SimWorld::new(&map, &physics, &config).unwrap();
 
     let empty = ActionFlags::new(0);
-    world.tick(empty);
+    world.tick(empty.into());
 
     let events = world.drain_events();
     // No level teleporters in our test map, so no teleport events expected

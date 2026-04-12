@@ -117,6 +117,19 @@ impl SimWorld {
         let geometry = build_map_geometry(map_data);
         world.insert_resource(geometry);
 
+        // Store player physics params as a resource.
+        // Marathon physics data has two entries: index 0 = walking, index 1 = running.
+        // Prefer running for default movement feel, fall back to walking if only one exists.
+        if let Some(pc) = physics_data
+            .physics
+            .as_ref()
+            .and_then(|p| p.get(1).or_else(|| p.first()))
+        {
+            world.insert_resource(
+                crate::player::movement::PlayerPhysicsParams::from_physics_constants(pc),
+            );
+        }
+
         // Spawn entities from map objects
         spawn_map_objects(&mut world, map_data, physics_data, config)?;
 
@@ -263,6 +276,7 @@ fn spawn_map_objects(
                     Velocity::default(),
                     Facing(facing),
                     VerticalLook::default(),
+                    AngularVelocity::default(),
                     CollisionRadius(physics.radius),
                     EntityHeight(physics.height),
                     Health(150),

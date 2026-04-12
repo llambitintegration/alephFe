@@ -5,7 +5,7 @@ use crate::tick::ActionFlags;
 use crate::world::MapGeometry;
 
 /// Player movement parameters extracted from PhysicsConstants.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, bevy_ecs::prelude::Resource)]
 pub struct PlayerPhysicsParams {
     pub max_forward_velocity: f32,
     pub max_backward_velocity: f32,
@@ -24,6 +24,9 @@ pub struct PlayerPhysicsParams {
     pub radius: f32,
 }
 
+/// Conversion factor from Marathon angle units (512 = full circle) to radians.
+pub const MARATHON_ANGLE_TO_RAD: f32 = std::f32::consts::TAU / 512.0;
+
 impl PlayerPhysicsParams {
     pub fn from_physics_constants(pc: &marathon_formats::PhysicsConstants) -> Self {
         Self {
@@ -35,10 +38,13 @@ impl PlayerPhysicsParams {
             airborne_deceleration: pc.airborne_deceleration,
             gravitational_acceleration: pc.gravitational_acceleration,
             terminal_velocity: pc.terminal_velocity,
-            angular_acceleration: pc.angular_acceleration,
-            angular_deceleration: pc.angular_deceleration,
-            max_angular_velocity: pc.maximum_angular_velocity,
-            maximum_elevation: pc.maximum_elevation,
+            // Angular fields in PhysicsConstants are Marathon angle units
+            // (512 = full circle). Convert to radians so the sim can use them
+            // directly with glam trig functions.
+            angular_acceleration: pc.angular_acceleration * MARATHON_ANGLE_TO_RAD,
+            angular_deceleration: pc.angular_deceleration * MARATHON_ANGLE_TO_RAD,
+            max_angular_velocity: pc.maximum_angular_velocity * MARATHON_ANGLE_TO_RAD,
+            maximum_elevation: pc.maximum_elevation * MARATHON_ANGLE_TO_RAD,
             step_delta: pc.step_delta,
             height: pc.height,
             radius: pc.radius,
@@ -46,86 +52,154 @@ impl PlayerPhysicsParams {
     }
 }
 
-/// Compute player velocity change for one tick based on action flags.
+/// Compute player velocity change for one tick using Marathon's axis-decomposed
+/// physics model.
 ///
-/// Returns the new velocity (XY movement + Z gravity).
+/// Velocity is tracked in **player-local coordinates**:
+///   - `current_velocity.x` = forward velocity (positive = forward)
+///   - `current_velocity.y` = perpendicular velocity (positive = strafing right)
+///   - `current_velocity.z` = vertical velocity (positive = up)
+///
+/// The two horizontal axes decelerate independently (stopping strafe does not
+/// affect forward speed). When input opposes current velocity on an axis,
+/// `acceleration + deceleration` are applied together for snappier reversals —
+/// matching Aleph One's `physics.cpp` behavior.
+///
+/// `facing` is unused by this function (physics operates in player-local frame)
+/// but is kept in the signature for API compatibility with collision code that
+/// may need to project into world space.
 pub fn compute_player_velocity(
     current_velocity: Vec3,
-    facing: f32,
+    _facing: f32,
     action_flags: &ActionFlags,
     params: &PlayerPhysicsParams,
     grounded: bool,
 ) -> Vec3 {
-    let forward_dir = Vec2::new(facing.cos(), facing.sin());
-    let right_dir = Vec2::new(-facing.sin(), facing.cos());
-
-    let mut accel = Vec2::ZERO;
-
-    // Forward/backward
-    if action_flags.contains(ActionFlags::MOVE_FORWARD) {
-        accel += forward_dir * params.acceleration;
-    }
-    if action_flags.contains(ActionFlags::MOVE_BACKWARD) {
-        accel -= forward_dir * params.acceleration;
-    }
-
-    // Strafe
-    if action_flags.contains(ActionFlags::STRAFE_RIGHT) {
-        accel += right_dir * params.acceleration;
-    }
-    if action_flags.contains(ActionFlags::STRAFE_LEFT) {
-        accel -= right_dir * params.acceleration;
-    }
-
-    let mut vel_xy = Vec2::new(current_velocity.x, current_velocity.y);
-
-    if accel.length_squared() > 0.0 {
-        vel_xy += accel;
+    let decel_rate = if grounded {
+        params.deceleration
     } else {
-        // Decelerate when no input
-        let decel = if grounded {
-            params.deceleration
+        params.airborne_deceleration
+    };
+
+    // ── Forward / backward axis ──────────────────────────────────────────
+    let mut forward_vel = current_velocity.x;
+    let move_fwd = action_flags.contains(ActionFlags::MOVE_FORWARD);
+    let move_back = action_flags.contains(ActionFlags::MOVE_BACKWARD);
+
+    if move_fwd && !move_back {
+        // Positive input. If currently moving backward, apply both accel and
+        // decel for a snappier reversal.
+        let delta = if forward_vel < 0.0 {
+            params.acceleration + decel_rate
         } else {
-            params.airborne_deceleration
+            params.acceleration
         };
-        let speed = vel_xy.length();
-        if speed > decel {
-            vel_xy = vel_xy.normalize() * (speed - decel);
+        forward_vel += delta;
+    } else if move_back && !move_fwd {
+        let delta = if forward_vel > 0.0 {
+            params.acceleration + decel_rate
         } else {
-            vel_xy = Vec2::ZERO;
+            params.acceleration
+        };
+        forward_vel -= delta;
+    } else {
+        // No forward/backward input: decelerate this axis independently
+        // toward zero.
+        if forward_vel > decel_rate {
+            forward_vel -= decel_rate;
+        } else if forward_vel < -decel_rate {
+            forward_vel += decel_rate;
+        } else {
+            forward_vel = 0.0;
         }
     }
 
-    // Clamp XY speed
-    let forward_component = vel_xy.dot(forward_dir);
-    let perpendicular_component = vel_xy.dot(right_dir);
+    // Clamp forward velocity to asymmetric limits.
+    if forward_vel > params.max_forward_velocity {
+        forward_vel = params.max_forward_velocity;
+    } else if forward_vel < -params.max_backward_velocity {
+        forward_vel = -params.max_backward_velocity;
+    }
 
-    let clamped_forward = if forward_component > 0.0 {
-        forward_component.min(params.max_forward_velocity)
+    // ── Perpendicular (strafe) axis ──────────────────────────────────────
+    let mut perp_vel = current_velocity.y;
+    let strafe_right = action_flags.contains(ActionFlags::STRAFE_RIGHT);
+    let strafe_left = action_flags.contains(ActionFlags::STRAFE_LEFT);
+
+    if strafe_right && !strafe_left {
+        let delta = if perp_vel < 0.0 {
+            params.acceleration + decel_rate
+        } else {
+            params.acceleration
+        };
+        perp_vel += delta;
+    } else if strafe_left && !strafe_right {
+        let delta = if perp_vel > 0.0 {
+            params.acceleration + decel_rate
+        } else {
+            params.acceleration
+        };
+        perp_vel -= delta;
     } else {
-        forward_component.max(-params.max_backward_velocity)
-    };
-    let clamped_perp =
-        perpendicular_component.clamp(-params.max_perpendicular_velocity, params.max_perpendicular_velocity);
+        // No strafe input: decelerate independently from forward axis.
+        if perp_vel > decel_rate {
+            perp_vel -= decel_rate;
+        } else if perp_vel < -decel_rate {
+            perp_vel += decel_rate;
+        } else {
+            perp_vel = 0.0;
+        }
+    }
 
-    vel_xy = forward_dir * clamped_forward + right_dir * clamped_perp;
+    // Clamp perpendicular velocity (symmetric).
+    perp_vel = perp_vel.clamp(
+        -params.max_perpendicular_velocity,
+        params.max_perpendicular_velocity,
+    );
 
-    // Gravity (Z axis)
+    // ── Vertical axis (gravity) ──────────────────────────────────────────
     let mut vel_z = current_velocity.z;
     if !grounded {
         vel_z -= params.gravitational_acceleration;
         vel_z = vel_z.max(-params.terminal_velocity);
     }
 
-    Vec3::new(vel_xy.x, vel_xy.y, vel_z)
+    Vec3::new(forward_vel, perp_vel, vel_z)
 }
 
-/// Compute facing angle change for one tick based on turn input.
+/// Project player-local velocity `(forward, perp, vert)` into world-space
+/// `(dx, dy, dz)` using the current facing angle.
+///
+/// Matches the convention used by `compute_player_velocity`'s caller:
+///   `forward_dir = (cos(facing), sin(facing))`
+///   `right_dir   = (-sin(facing), cos(facing))`
+pub fn velocity_local_to_world(local: Vec3, facing: f32) -> Vec3 {
+    let (sin_f, cos_f) = facing.sin_cos();
+    let world_x = local.x * cos_f - local.y * sin_f;
+    let world_y = local.x * sin_f + local.y * cos_f;
+    Vec3::new(world_x, world_y, local.z)
+}
+
+/// Inverse of `velocity_local_to_world`: convert a world-space velocity to
+/// player-local `(forward, perp, vert)` given the current facing.
+pub fn velocity_world_to_local(world: Vec3, facing: f32) -> Vec3 {
+    let (sin_f, cos_f) = facing.sin_cos();
+    let forward = world.x * cos_f + world.y * sin_f;
+    let perp = -world.x * sin_f + world.y * cos_f;
+    Vec3::new(forward, perp, world.z)
+}
+
+/// Compute facing angle change for one tick based on turn input and mouse yaw.
+///
+/// When `mouse_yaw` is non-zero, it is added directly to facing (1:1 feel).
+/// Keyboard turning via ActionFlags still uses the angular velocity system.
+/// Both compose additively.
 pub fn compute_facing(
     current_facing: f32,
     current_angular_velocity: f32,
     action_flags: &ActionFlags,
     params: &PlayerPhysicsParams,
+    mouse_yaw: f32,
 ) -> (f32, f32) {
     let mut angular_vel = current_angular_velocity;
 
@@ -144,16 +218,22 @@ pub fn compute_facing(
 
     angular_vel = angular_vel.clamp(-params.max_angular_velocity, params.max_angular_velocity);
 
-    let new_facing = (current_facing + angular_vel) % std::f32::consts::TAU;
+    // Apply both angular velocity from keyboard and direct mouse yaw
+    let new_facing = (current_facing + angular_vel + mouse_yaw) % std::f32::consts::TAU;
 
     (new_facing, angular_vel)
 }
 
-/// Compute vertical look angle change.
+/// Compute vertical look angle change from keyboard and mouse pitch.
+///
+/// When `mouse_pitch` is non-zero, it is added directly to the look angle.
+/// Keyboard look via ActionFlags uses a fixed rate. Both compose additively.
+/// Result is clamped to elevation limits.
 pub fn compute_vertical_look(
     current_look: f32,
     action_flags: &ActionFlags,
     params: &PlayerPhysicsParams,
+    mouse_pitch: f32,
 ) -> f32 {
     let mut look = current_look;
     let look_speed = params.angular_acceleration; // Use same rate for simplicity
@@ -164,6 +244,9 @@ pub fn compute_vertical_look(
     if action_flags.contains(ActionFlags::LOOK_DOWN) {
         look -= look_speed;
     }
+
+    // Apply direct mouse pitch
+    look += mouse_pitch;
 
     look.clamp(-params.maximum_elevation, params.maximum_elevation)
 }
@@ -211,7 +294,12 @@ pub fn apply_player_collision(
 
             // Check if movement crosses this line
             if let Some(_hit) = segment_intersection(old_2d, pos_2d, la, lb) {
-                let can_pass = if let Some(adj_idx) = adj {
+                // Solid lines block movement even with an adjacent polygon
+                let line_is_solid = geometry.line_solid.get(line_idx).copied().unwrap_or(false);
+
+                let can_pass = if line_is_solid {
+                    false
+                } else if let Some(adj_idx) = adj {
                     // Check step delta and ceiling clearance
                     let adj_floor = geometry.floor_heights[adj_idx];
                     let adj_ceiling = geometry.ceiling_heights[adj_idx];
@@ -347,14 +435,17 @@ mod tests {
     fn forward_movement_accelerates() {
         let params = test_params();
         let flags = ActionFlags::new(ActionFlags::MOVE_FORWARD);
+        // Velocity is now player-local: x = forward velocity.
         let vel = compute_player_velocity(Vec3::ZERO, 0.0, &flags, &params, true);
-        assert!(vel.x > 0.0); // facing 0 = east, so forward is +X
+        assert!(vel.x > 0.0);
+        assert_eq!(vel.y, 0.0);
     }
 
     #[test]
     fn no_input_decelerates() {
         let params = test_params();
         let flags = ActionFlags::default();
+        // Player-local frame: forward vel = 0.05
         let initial_vel = Vec3::new(0.05, 0.0, 0.0);
         let vel = compute_player_velocity(initial_vel, 0.0, &flags, &params, true);
         assert!(vel.x < initial_vel.x);
@@ -377,10 +468,85 @@ mod tests {
     }
 
     #[test]
+    fn forward_and_strafe_decelerate_independently() {
+        let params = test_params();
+        // Start with both forward and perpendicular velocity
+        let initial = Vec3::new(0.05, 0.03, 0.0);
+        // Only forward input — perpendicular should decelerate while forward stays
+        let flags = ActionFlags::new(ActionFlags::MOVE_FORWARD);
+        let vel = compute_player_velocity(initial, 0.0, &flags, &params, true);
+        // Forward should accelerate (or stay), perpendicular should decelerate
+        assert!(vel.x >= initial.x, "forward should not decelerate when forward input held");
+        assert!(vel.y.abs() < initial.y.abs(), "perp should decelerate when no strafe input");
+    }
+
+    #[test]
+    fn direction_reversal_boost_applies_accel_plus_decel() {
+        let params = test_params();
+        // Player moving backward, then presses forward
+        let initial = Vec3::new(-0.03, 0.0, 0.0);
+        let flags = ActionFlags::new(ActionFlags::MOVE_FORWARD);
+        let vel = compute_player_velocity(initial, 0.0, &flags, &params, true);
+        // Expected change: +(accel + decel) = +(0.01 + 0.005) = +0.015
+        let expected = -0.03 + params.acceleration + params.deceleration;
+        assert!((vel.x - expected).abs() < 1e-5);
+    }
+
+    #[test]
+    fn strafe_does_not_affect_forward_velocity() {
+        let params = test_params();
+        let initial = Vec3::new(0.08, 0.0, 0.0); // moving forward at 0.08
+        let flags = ActionFlags::new(ActionFlags::STRAFE_RIGHT);
+        let vel = compute_player_velocity(initial, 0.0, &flags, &params, true);
+        // Forward velocity should decelerate by decel_rate (no forward input)
+        assert!((vel.x - (0.08 - params.deceleration)).abs() < 1e-5);
+        // But perpendicular should have accelerated
+        assert!(vel.y > 0.0);
+    }
+
+    #[test]
+    fn forward_velocity_clamped_to_max() {
+        let params = test_params();
+        let initial = Vec3::new(0.5, 0.0, 0.0); // way above max
+        let flags = ActionFlags::new(ActionFlags::MOVE_FORWARD);
+        let vel = compute_player_velocity(initial, 0.0, &flags, &params, true);
+        assert!((vel.x - params.max_forward_velocity).abs() < 1e-5);
+    }
+
+    #[test]
+    fn backward_velocity_clamped_to_max_backward() {
+        let params = test_params();
+        let initial = Vec3::new(-0.5, 0.0, 0.0);
+        let flags = ActionFlags::new(ActionFlags::MOVE_BACKWARD);
+        let vel = compute_player_velocity(initial, 0.0, &flags, &params, true);
+        assert!((vel.x - (-params.max_backward_velocity)).abs() < 1e-5);
+    }
+
+    #[test]
+    fn velocity_local_to_world_round_trip() {
+        let local = Vec3::new(0.1, 0.05, 0.02);
+        let facing = 1.2_f32;
+        let world = velocity_local_to_world(local, facing);
+        let back = velocity_world_to_local(world, facing);
+        assert!((back.x - local.x).abs() < 1e-5);
+        assert!((back.y - local.y).abs() < 1e-5);
+        assert!((back.z - local.z).abs() < 1e-5);
+    }
+
+    #[test]
+    fn velocity_local_to_world_east_facing() {
+        // Facing east (0 radians): local forward = (1,0,0) should map to world (1,0,0)
+        let local = Vec3::new(1.0, 0.0, 0.0);
+        let world = velocity_local_to_world(local, 0.0);
+        assert!((world.x - 1.0).abs() < 1e-5);
+        assert!(world.y.abs() < 1e-5);
+    }
+
+    #[test]
     fn turn_changes_facing() {
         let params = test_params();
         let flags = ActionFlags::new(ActionFlags::TURN_LEFT);
-        let (new_facing, _) = compute_facing(0.0, 0.0, &flags, &params);
+        let (new_facing, _) = compute_facing(0.0, 0.0, &flags, &params, 0.0);
         assert!(new_facing > 0.0);
     }
 
@@ -390,9 +556,98 @@ mod tests {
         let flags = ActionFlags::new(ActionFlags::LOOK_UP);
         let mut look = 0.0;
         for _ in 0..100 {
-            look = compute_vertical_look(look, &flags, &params);
+            look = compute_vertical_look(look, &flags, &params, 0.0);
         }
         assert!(look <= params.maximum_elevation + f32::EPSILON);
+    }
+
+    #[test]
+    fn angular_constants_converted_to_radians() {
+        // Marathon running defaults (per Aleph One physics_models.h):
+        //   angular_acceleration = 5*FIXED_ONE/4 -> 1.25 angle units
+        //   maximum_angular_velocity = 10*FIXED_ONE -> 10.0 angle units
+        //   maximum_elevation = QUARTER_CIRCLE*FIXED_ONE/3 -> ~42.67 angle units
+        // After conversion (factor 2π/512), these become:
+        //   angular_acceleration ≈ 0.01534 rad
+        //   maximum_angular_velocity ≈ 0.1227 rad
+        //   maximum_elevation ≈ 0.5236 rad (~30°)
+        let pc = marathon_formats::PhysicsConstants {
+            maximum_forward_velocity: 0.125,
+            maximum_backward_velocity: 0.083,
+            maximum_perpendicular_velocity: 0.077,
+            acceleration: 0.01,
+            deceleration: 0.02,
+            airborne_deceleration: 0.00556,
+            gravitational_acceleration: 0.0025,
+            climbing_acceleration: 0.005,
+            terminal_velocity: 0.143,
+            external_deceleration: 0.01,
+            angular_acceleration: 1.25,
+            angular_deceleration: 2.5,
+            maximum_angular_velocity: 10.0,
+            angular_recentering_velocity: 0.5,
+            fast_angular_velocity: 20.0,
+            fast_angular_maximum: 25.0,
+            maximum_elevation: 42.667,
+            external_angular_deceleration: 1.0,
+            step_delta: 0.05,
+            step_amplitude: 0.02,
+            radius: 0.25,
+            height: 0.8,
+            dead_height: 0.3,
+            camera_height: 0.2,
+            splash_height: 0.1,
+            half_camera_separation: 0.0,
+        };
+        let params = PlayerPhysicsParams::from_physics_constants(&pc);
+        // Radian conversion: angle_units * (2π / 512)
+        let f = MARATHON_ANGLE_TO_RAD;
+        assert!((params.angular_acceleration - 1.25 * f).abs() < 1e-5);
+        assert!((params.angular_deceleration - 2.5 * f).abs() < 1e-5);
+        assert!((params.max_angular_velocity - 10.0 * f).abs() < 1e-5);
+        // ~30 degrees = π/6 ≈ 0.5236
+        assert!((params.maximum_elevation - 42.667 * f).abs() < 1e-3);
+        let thirty_deg_rad = std::f32::consts::FRAC_PI_6;
+        assert!((params.maximum_elevation - thirty_deg_rad).abs() < 0.01);
+        // Velocity fields should be unchanged (not angular)
+        assert!((params.max_forward_velocity - 0.125).abs() < 1e-5);
+    }
+
+    #[test]
+    fn mouse_yaw_changes_facing_directly() {
+        let params = test_params();
+        let flags = ActionFlags::default();
+        let (new_facing, angular_vel) = compute_facing(0.0, 0.0, &flags, &params, 0.1);
+        assert!((new_facing - 0.1).abs() < f32::EPSILON);
+        assert_eq!(angular_vel, 0.0);
+    }
+
+    #[test]
+    fn mouse_yaw_composes_with_keyboard_turn() {
+        let params = test_params();
+        let flags = ActionFlags::new(ActionFlags::TURN_RIGHT);
+        let (new_facing, angular_vel) = compute_facing(0.0, 0.0, &flags, &params, 0.1);
+        assert!((angular_vel - (-params.angular_acceleration)).abs() < f32::EPSILON);
+        let expected = angular_vel + 0.1;
+        assert!((new_facing - expected).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn mouse_pitch_changes_vertical_look() {
+        let params = test_params();
+        let flags = ActionFlags::default();
+        let new_look = compute_vertical_look(0.0, &flags, &params, -0.05);
+        assert!((new_look - (-0.05)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn mouse_pitch_clamped_to_limits() {
+        let params = test_params();
+        let flags = ActionFlags::default();
+        let new_look = compute_vertical_look(0.0, &flags, &params, 10.0);
+        assert!((new_look - params.maximum_elevation).abs() < f32::EPSILON);
+        let new_look = compute_vertical_look(0.0, &flags, &params, -10.0);
+        assert!((new_look - (-params.maximum_elevation)).abs() < f32::EPSILON);
     }
 
     fn two_polygon_geometry() -> MapGeometry {

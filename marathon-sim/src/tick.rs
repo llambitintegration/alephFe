@@ -1,4 +1,8 @@
-use crate::world::{SimWorld, TickCounter};
+use crate::player::movement::{
+    apply_player_collision, compute_facing, compute_player_velocity, compute_vertical_look,
+    velocity_local_to_world, velocity_world_to_local, PlayerPhysicsParams,
+};
+use crate::world::{MapGeometry, SimWorld, TickCounter};
 
 /// Action flags consumed by the simulation each tick.
 /// Mirrors marathon-integration's ActionFlags.
@@ -41,6 +45,20 @@ impl ActionFlags {
 #[derive(Debug, Default, bevy_ecs::prelude::Resource)]
 pub struct TickInput {
     pub action_flags: ActionFlags,
+    /// Mouse yaw delta in radians (positive = turn left / counter-clockwise).
+    pub mouse_yaw: f32,
+    /// Mouse pitch delta in radians (positive = look up).
+    pub mouse_pitch: f32,
+}
+
+impl From<ActionFlags> for TickInput {
+    fn from(action_flags: ActionFlags) -> Self {
+        TickInput {
+            action_flags,
+            mouse_yaw: 0.0,
+            mouse_pitch: 0.0,
+        }
+    }
 }
 
 impl SimWorld {
@@ -55,16 +73,80 @@ impl SimWorld {
     /// 6. Damage resolution
     /// 7. World mechanics (platforms, lights, media, items)
     /// 8. Cleanup
-    pub fn tick(&mut self, action_flags: ActionFlags) {
+    pub fn tick(&mut self, input: TickInput) {
         // Store input for this tick
-        self.world.insert_resource(TickInput { action_flags });
+        self.world.insert_resource(input);
 
-        // Run systems in order
-        // TODO: Wire up actual system functions as they're implemented.
-        // For now, just advance the tick counter.
+        // 1. Player physics
+        self.run_player_physics();
 
         // Advance tick counter
         self.world.resource_mut::<TickCounter>().0 += 1;
+    }
+
+    fn run_player_physics(&mut self) {
+        let tick_input = self.world.resource::<TickInput>();
+        let flags = tick_input.action_flags;
+        let mouse_yaw = tick_input.mouse_yaw;
+        let mouse_pitch = tick_input.mouse_pitch;
+
+        let Some(params) = self.world.get_resource::<PlayerPhysicsParams>().cloned() else {
+            return;
+        };
+        let geometry = self.world.resource::<MapGeometry>();
+        // Clone what we need from geometry to avoid borrow conflicts
+        let geo_clone = MapGeometry {
+            polygon_vertices: geometry.polygon_vertices.clone(),
+            floor_heights: geometry.floor_heights.clone(),
+            ceiling_heights: geometry.ceiling_heights.clone(),
+            polygon_adjacency: geometry.polygon_adjacency.clone(),
+            line_endpoints: geometry.line_endpoints.clone(),
+            line_solid: geometry.line_solid.clone(),
+            line_transparent: geometry.line_transparent.clone(),
+        };
+
+        let mut query = self.world.query_filtered::<(
+            &mut crate::Position,
+            &mut crate::Velocity,
+            &mut crate::Facing,
+            &mut crate::VerticalLook,
+            &mut crate::AngularVelocity,
+            &mut crate::PolygonIndex,
+            &mut crate::Grounded,
+        ), bevy_ecs::prelude::With<crate::Player>>();
+
+        for (mut pos, mut vel, mut facing, mut vlook, mut angular_vel, mut poly_idx, mut grounded) in query.iter_mut(&mut self.world) {
+            // Velocity is stored in player-local frame: x=forward, y=perp, z=vert.
+            // Compute the next tick's player-local velocity from input.
+            let new_local_vel =
+                compute_player_velocity(vel.0, facing.0, &flags, &params, grounded.0);
+
+            // Compute facing (turning) — mouse yaw applied directly, keyboard via angular velocity
+            let (new_facing, new_angular) = compute_facing(facing.0, angular_vel.0, &flags, &params, mouse_yaw);
+            facing.0 = new_facing;
+            angular_vel.0 = new_angular;
+
+            // Compute vertical look — mouse pitch applied directly
+            vlook.0 = compute_vertical_look(vlook.0, &flags, &params, mouse_pitch);
+
+            // Project player-local velocity into world-space using the NEW facing.
+            // This gives us the "velocity rotates with you when turning" behavior
+            // that matches Marathon's physics model.
+            let world_vel = velocity_local_to_world(new_local_vel, new_facing);
+
+            // Apply collision in world-space.
+            let new_pos = pos.0 + world_vel;
+            let result = apply_player_collision(
+                pos.0, new_pos, world_vel, poly_idx.0, &params, &geo_clone,
+            );
+
+            pos.0 = result.position;
+            // Convert the post-collision world-space velocity back to
+            // player-local form for storage.
+            vel.0 = velocity_world_to_local(result.velocity, new_facing);
+            poly_idx.0 = result.polygon_index;
+            grounded.0 = result.grounded;
+        }
     }
 
     /// Query the player's position.
@@ -95,6 +177,12 @@ impl SimWorld {
     pub fn player_oxygen(&mut self) -> Option<i16> {
         let mut query = self.world.query_filtered::<&crate::Oxygen, bevy_ecs::prelude::With<crate::Player>>();
         query.iter(&self.world).next().map(|o| o.0)
+    }
+
+    /// Query the player's vertical look angle.
+    pub fn player_vertical_look(&mut self) -> Option<f32> {
+        let mut query = self.world.query_filtered::<&crate::VerticalLook, bevy_ecs::prelude::With<crate::Player>>();
+        query.iter(&self.world).next().map(|v| v.0)
     }
 
     /// Query the player's current polygon index.
@@ -234,5 +322,29 @@ mod tests {
     fn action_flags_empty() {
         let flags = ActionFlags::default();
         assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn tick_input_mouse_deltas_round_trip() {
+        let input = TickInput {
+            action_flags: ActionFlags::new(ActionFlags::MOVE_FORWARD),
+            mouse_yaw: 0.1,
+            mouse_pitch: -0.05,
+        };
+        assert_eq!(input.mouse_yaw, 0.1);
+        assert_eq!(input.mouse_pitch, -0.05);
+        assert!(input.action_flags.contains(ActionFlags::MOVE_FORWARD));
+
+        // Verify it round-trips through bevy_ecs resource insertion
+        let mut world = bevy_ecs::prelude::World::new();
+        world.insert_resource(TickInput {
+            action_flags: ActionFlags::new(ActionFlags::MOVE_FORWARD),
+            mouse_yaw: 0.1,
+            mouse_pitch: -0.05,
+        });
+        let retrieved = world.resource::<TickInput>();
+        assert_eq!(retrieved.mouse_yaw, 0.1);
+        assert_eq!(retrieved.mouse_pitch, -0.05);
+        assert!(retrieved.action_flags.contains(ActionFlags::MOVE_FORWARD));
     }
 }

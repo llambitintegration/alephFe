@@ -22,6 +22,21 @@
             background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 8px;
             font-size: 0.8em; color: #888; z-index: 5; pointer-events: none;
         }
+        #hud {
+            position: fixed; bottom: 0; left: 0; right: 0; height: 48px;
+            display: flex; align-items: center; justify-content: center; gap: 24px;
+            background: rgba(0,0,0,0.6); z-index: 6; pointer-events: none;
+            font-size: 12px; display: none;
+        }
+        .hud-bar-group { display: flex; align-items: center; gap: 6px; }
+        .hud-label { color: #888; text-transform: uppercase; font-size: 10px; width: 48px; text-align: right; }
+        .hud-bar { width: 140px; height: 12px; background: #222; border-radius: 2px; overflow: hidden; }
+        .hud-bar-fill { height: 100%; transition: width 0.1s; border-radius: 2px; }
+        .hud-val { color: #ccc; width: 32px; font-size: 11px; }
+        #health-fill { background: #4a4; }
+        #shield-fill { background: #48c; }
+        #oxygen-group { display: none; }
+        #oxygen-fill { background: #4ac; }
     </style>
 </head>
 <body>
@@ -32,6 +47,24 @@
         <div class="error" id="error" style="display:none"></div>
     </div>
     <canvas id="marathon-canvas" tabindex="0"></canvas>
+    <canvas id="automap-canvas" style="display:none;position:fixed;inset:0;z-index:4;background:rgba(0,0,0,0.7);pointer-events:none"></canvas>
+    <div id="hud">
+        <div class="hud-bar-group">
+            <span class="hud-label">Health</span>
+            <div class="hud-bar"><div class="hud-bar-fill" id="health-fill" style="width:100%"></div></div>
+            <span class="hud-val" id="health-val">150</span>
+        </div>
+        <div class="hud-bar-group">
+            <span class="hud-label">Shield</span>
+            <div class="hud-bar"><div class="hud-bar-fill" id="shield-fill" style="width:100%"></div></div>
+            <span class="hud-val" id="shield-val">150</span>
+        </div>
+        <div class="hud-bar-group" id="oxygen-group">
+            <span class="hud-label">Oxygen</span>
+            <div class="hud-bar"><div class="hud-bar-fill" id="oxygen-fill" style="width:100%"></div></div>
+            <span class="hud-val" id="oxygen-val">600</span>
+        </div>
+    </div>
     <div id="controls">WASD: Move | Mouse: Look | Click: Capture mouse | Space: Action</div>
 
     <script type="module">

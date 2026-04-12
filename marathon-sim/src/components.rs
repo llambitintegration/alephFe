@@ -20,6 +20,10 @@ pub struct Facing(pub f32);
 #[derive(Component, Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct VerticalLook(pub f32);
 
+/// Angular velocity for turning (radians per tick).
+#[derive(Component, Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct AngularVelocity(pub f32);
+
 /// Collision radius for entity-vs-entity and entity-vs-wall checks.
 #[derive(Component, Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct CollisionRadius(pub f32);

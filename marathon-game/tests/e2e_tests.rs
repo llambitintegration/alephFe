@@ -273,13 +273,13 @@ fn game_sim_tick_with_real_data() {
     );
 
     for _ in 0..20 {
-        world.tick(forward);
+        world.tick(forward.into());
     }
     for _ in 0..20 {
-        world.tick(turn_and_move);
+        world.tick(turn_and_move.into());
     }
     for _ in 0..20 {
-        world.tick(empty);
+        world.tick(empty.into());
     }
 
     assert_eq!(world.tick_count(), 60);
@@ -339,7 +339,7 @@ fn game_sim_snapshot_from_real_level() {
     // Tick a few times then snapshot
     let empty = marathon_sim::tick::ActionFlags::new(0);
     for _ in 0..10 {
-        world.tick(empty);
+        world.tick(empty.into());
     }
 
     let snapshot = world.snapshot();
@@ -385,7 +385,7 @@ fn game_full_pipeline_integration() {
     // 4. Run simulation
     let forward = marathon_sim::tick::ActionFlags::new(marathon_sim::tick::ActionFlags::MOVE_FORWARD);
     for _ in 0..60 {
-        world.tick(forward);
+        world.tick(forward.into());
     }
 
     // 5. Query state
