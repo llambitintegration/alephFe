@@ -1,7 +1,7 @@
 use wasm_bindgen::prelude::*;
 
-mod level;
-mod mesh;
+pub mod level;
+pub mod mesh;
 #[cfg(target_arch = "wasm32")]
 mod render;
 mod sprites;

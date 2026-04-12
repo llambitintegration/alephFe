@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 marathon-formats = { path = "../marathon-formats" }
@@ -19,6 +19,7 @@ web-sys = { version = "0.3", features = [
     "Window",
     "Document",
     "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
     "Element",
     "Response",
     "Headers",
@@ -30,3 +31,7 @@ js-sys = "0.3"
 console_log = "1"
 console_error_panic_hook = "0.1"
 getrandom = { version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"
+marathon-formats = { path = "../marathon-formats", features = ["test-helpers"] }

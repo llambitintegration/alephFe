@@ -26,4 +26,17 @@ test.describe('Error handling for missing data files', () => {
     await expect(errorEl).toBeVisible({ timeout: 30_000 });
     await expect(errorEl).toContainText('Shapes');
   });
+
+  test('missing Physics file shows error', async ({ page }) => {
+    // Intercept the Physics request and return 404
+    await page.route('**/data/Physics.phyA', (route) =>
+      route.fulfill({ status: 404, body: 'Not Found' }),
+    );
+
+    await page.goto('/');
+
+    const errorEl = page.locator('#error');
+    await expect(errorEl).toBeVisible({ timeout: 30_000 });
+    await expect(errorEl).toContainText('Physics');
+  });
 });
