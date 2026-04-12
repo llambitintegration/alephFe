@@ -203,7 +203,7 @@ impl GameState {
         // transitions seamlessly.
         cam.yaw += self.input.mouse_dx as f32;
         let pitch_limit = std::f32::consts::FRAC_PI_6; // ~30° matches Marathon's maximum_elevation
-        cam.pitch = (cam.pitch + self.input.mouse_dy as f32).clamp(-pitch_limit, pitch_limit);
+        cam.pitch = (cam.pitch + (-self.input.mouse_dy as f32)).clamp(-pitch_limit, pitch_limit);
         let uniform = cam.to_uniform(self.aspect, elapsed);
 
         // Build sprite draw calls
@@ -638,10 +638,10 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
     let keydown = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
         let mut st = s.borrow_mut();
         match e.code().as_str() {
-            "KeyW" | "ArrowUp" => st.input.backward = true,
-            "KeyS" | "ArrowDown" => st.input.forward = true,
-            "KeyA" => st.input.strafe_right = true,
-            "KeyD" => st.input.strafe_left = true,
+            "KeyW" | "ArrowUp" => st.input.forward = true,
+            "KeyS" | "ArrowDown" => st.input.backward = true,
+            "KeyA" => st.input.strafe_left = true,
+            "KeyD" => st.input.strafe_right = true,
             "Space" => st.input.action = true,
             "Tab" => { st.input.toggle_map = true; e.prevent_default(); return; }
             _ => {}
@@ -655,10 +655,10 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
     let keyup = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |e: web_sys::KeyboardEvent| {
         let mut st = s.borrow_mut();
         match e.code().as_str() {
-            "KeyW" | "ArrowUp" => st.input.backward = false,
-            "KeyS" | "ArrowDown" => st.input.forward = false,
-            "KeyA" => st.input.strafe_right = false,
-            "KeyD" => st.input.strafe_left = false,
+            "KeyW" | "ArrowUp" => st.input.forward = false,
+            "KeyS" | "ArrowDown" => st.input.backward = false,
+            "KeyA" => st.input.strafe_left = false,
+            "KeyD" => st.input.strafe_right = false,
             "Space" => st.input.action = false,
             _ => {}
         }
