@@ -218,6 +218,8 @@ pub enum LightFunction {
 /// Liquid media state.
 #[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Media {
+    /// Index in map_data.media (for polygon lookup).
+    pub index: usize,
     /// Polygon indices this media occupies.
     pub polygon_index: usize,
     /// Media type (water=0, lava=1, goo=2, sewage=3, jjaro=4).

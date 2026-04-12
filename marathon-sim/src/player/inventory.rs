@@ -1,7 +1,8 @@
+use bevy_ecs::prelude::Resource;
 use serde::{Deserialize, Serialize};
 
 /// Player weapon inventory.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Resource, Serialize, Deserialize)]
 pub struct WeaponInventory {
     /// Weapons the player has (by definition index). None = empty slot.
     pub weapons: Vec<Option<WeaponSlot>>,

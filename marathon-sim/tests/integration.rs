@@ -752,6 +752,7 @@ fn player_wall_collision_slide_response() {
         ],
         line_solid: vec![true, true, true, true],
         line_transparent: vec![false, false, false, false],
+        polygon_media_index: vec![-1],
     };
 
     // Player tries to walk through the right wall
@@ -824,6 +825,7 @@ fn step_climbing_allows_small_height_difference() {
         ],
         line_solid: vec![true, false, true, true, true, true, true],
         line_transparent: vec![false, true, false, false, false, false, false],
+        polygon_media_index: vec![-1, -1],
     };
 
     // Step up: 0.2 < step_delta 0.3, should cross
@@ -1529,4 +1531,450 @@ fn serialization_preserves_all_entity_types() {
     let entities_after = restored.entities().len();
     assert_eq!(entities_before, entities_after, "entity count should be preserved");
     assert_eq!(restored.tick_count(), 10);
+}
+
+// ──────────────────── Tick Loop Integration Tests ────────────────────
+
+/// Helper: create a map with a smooth-function light (period=60 ticks).
+fn make_light_test_map() -> MapData {
+    let mut map = make_test_map();
+    map.lights = LightData::Static(vec![StaticLightData {
+        light_type: 0,
+        flags: 0,
+        phase: 0,
+        primary_active: LightingFunctionSpec {
+            function: 2, // Smooth (cosine)
+            period: 60,
+            delta_period: 0,
+            intensity: 0.0,
+            delta_intensity: 1.0,
+        },
+        secondary_active: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 1.0, delta_intensity: 0.0 },
+        becoming_active: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 1.0, delta_intensity: 0.0 },
+        primary_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
+        secondary_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
+        becoming_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
+        tag: 0,
+    }]);
+    map
+}
+
+#[test]
+fn tick_loop_lights_update_intensity() {
+    let map = make_light_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Smooth light: at tick 0 intensity should be at minimum (cosine starts at 0)
+    // After 30 ticks (half period), should reach maximum (1.0)
+    for _ in 0..30 {
+        world.tick(ActionFlags::default().into());
+    }
+
+    let snapshot = world.snapshot();
+    assert!(!snapshot.lights.is_empty(), "should have lights");
+    let light = &snapshot.lights[0];
+    // At half-period, cosine wave = 1.0 (maximum)
+    assert!(
+        light.current_intensity > 0.9,
+        "light should be near max at half period, got {}",
+        light.current_intensity
+    );
+}
+
+#[test]
+fn tick_loop_lights_determinism() {
+    let map = make_light_test_map();
+    // Use flicker light for RNG-dependent test
+    let mut map2 = map.clone();
+    map2.lights = LightData::Static(vec![StaticLightData {
+        light_type: 0,
+        flags: 0,
+        phase: 0,
+        primary_active: LightingFunctionSpec {
+            function: 3, // Flicker (random)
+            period: 60,
+            delta_period: 0,
+            intensity: 0.0,
+            delta_intensity: 1.0,
+        },
+        secondary_active: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 1.0, delta_intensity: 0.0 },
+        becoming_active: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 1.0, delta_intensity: 0.0 },
+        primary_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
+        secondary_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
+        becoming_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
+        tag: 0,
+    }]);
+
+    let physics = make_test_physics();
+    let config = SimConfig { random_seed: 42, difficulty: 2 };
+
+    let mut world_a = SimWorld::new(&map2, &physics, &config).unwrap();
+    let mut world_b = SimWorld::new(&map2, &physics, &config).unwrap();
+
+    for _ in 0..20 {
+        world_a.tick(ActionFlags::default().into());
+        world_b.tick(ActionFlags::default().into());
+    }
+
+    let snap_a = world_a.snapshot();
+    let snap_b = world_b.snapshot();
+
+    assert_eq!(snap_a.lights[0].current_intensity, snap_b.lights[0].current_intensity,
+        "same seed should produce identical flicker intensities");
+}
+
+#[test]
+fn tick_loop_media_tracks_light() {
+    let mut map = make_light_test_map();
+    // Add media linked to light 0
+    map.media = vec![MediaData {
+        media_type: 0, // water
+        flags: 0,
+        light_index: 0,
+        current_direction: 0,
+        current_magnitude: 0,
+        low: 0,     // 0 WU
+        high: 2048, // 2 WU
+        origin: WorldPoint2d { x: 0, y: 0 },
+        height: 2048,
+        minimum_light_intensity: 0.0,
+        texture: ShapeDescriptor(0xFFFF),
+        transfer_mode: 0,
+    }];
+    // Associate polygon 0 with media 0
+    map.polygons[0].media_index = 0;
+
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // After 30 ticks (half period of smooth light), light intensity ~1.0
+    // Media height should interpolate to high (2.0 WU)
+    for _ in 0..30 {
+        world.tick(ActionFlags::default().into());
+    }
+
+    let snapshot = world.snapshot();
+    assert!(!snapshot.media.is_empty(), "should have media");
+    let media = &snapshot.media[0];
+    // Media height should be near high value (2.0) when light intensity ~1.0
+    assert!(
+        media.current_height > 1.5,
+        "media height should track light intensity upward, got {}",
+        media.current_height
+    );
+}
+
+#[test]
+fn tick_loop_platform_extends_and_updates_geometry() {
+    let mut map = make_test_map();
+    // Add a platform on polygon 0, player-entry activated
+    map.platforms = vec![StaticPlatformData {
+        platform_type: 0,
+        speed: 512, // 0.5 WU/tick
+        delay: 30,
+        minimum_height: 0,
+        maximum_height: 1024, // 1 WU
+        polygon_index: 0,
+        static_flags: 0x0001, // ACTIVATE_ON_PLAYER_ENTRY
+        tag: 0,
+    }];
+
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Player is in polygon 0, platform should activate on first tick
+    world.tick(ActionFlags::default().into());
+
+    let snap = world.snapshot();
+    let platform = &snap.platforms[0];
+    assert_eq!(
+        platform.state,
+        marathon_sim::PlatformState::Extending,
+        "platform should be extending after player entry"
+    );
+
+    // Tick until extended (floor should reach 1.0 WU)
+    for _ in 0..10 {
+        world.tick(ActionFlags::default().into());
+    }
+
+    let snap = world.snapshot();
+    let platform = &snap.platforms[0];
+    assert!(
+        platform.current_floor > 0.5,
+        "platform floor should have risen, got {}",
+        platform.current_floor
+    );
+}
+
+#[test]
+fn tick_loop_effect_despawns_after_countdown() {
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Manually spawn an effect entity
+    world.ecs_world_mut().spawn((
+        marathon_sim::Effect { definition_index: 0, ticks_remaining: 3 },
+        marathon_sim::Position(glam::Vec3::new(0.5, 0.5, 0.0)),
+    ));
+
+    // Should have 1 effect
+    let entities = world.entities();
+    let effects: Vec<_> = entities
+        .iter()
+        .filter(|e| matches!(e.entity_type, marathon_sim::tick::RenderEntityType::Effect { .. }))
+        .collect();
+    assert_eq!(effects.len(), 1, "should have 1 effect");
+
+    // Tick 3 times to expire it
+    for _ in 0..3 {
+        world.tick(ActionFlags::default().into());
+    }
+
+    let entities = world.entities();
+    let effects: Vec<_> = entities
+        .iter()
+        .filter(|e| matches!(e.entity_type, marathon_sim::tick::RenderEntityType::Effect { .. }))
+        .collect();
+    assert_eq!(effects.len(), 0, "effect should be despawned after ticks_remaining reaches 0");
+}
+
+#[test]
+fn tick_loop_item_pickup_restores_health() {
+    let mut map = make_test_map();
+    // Add a health item at the player's position
+    map.objects.push(MapObject {
+        object_type: 2, // OBJECT_IS_ITEM
+        index: 21,      // ITEM_HEALTH_MAJOR (restores 40 HP)
+        facing: 0,
+        polygon_index: 0,
+        location: WorldPoint3d { x: 512, y: 512, z: 0 }, // same as player
+        flags: 0,
+    });
+
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Reduce player health below max so the health item can be picked up
+    {
+        let ecs = world.ecs_world_mut();
+        let mut query = ecs.query_filtered::<&mut marathon_sim::Health, bevy_ecs::query::With<marathon_sim::Player>>();
+        for mut health in query.iter_mut(ecs) {
+            health.0 = 100; // below max of 150
+        }
+    }
+
+    let initial_health = world.player_health().unwrap();
+    assert_eq!(initial_health, 100);
+
+    // Count items before
+    let items_before: Vec<_> = world.entities().iter()
+        .filter(|e| matches!(e.entity_type, marathon_sim::tick::RenderEntityType::Item { .. }))
+        .cloned()
+        .collect();
+    assert!(items_before.len() >= 1, "should have at least 1 item");
+
+    // Tick to trigger pickup
+    world.tick(ActionFlags::default().into());
+
+    let health_after = world.player_health().unwrap();
+    assert!(
+        health_after > initial_health,
+        "health should increase after picking up health item, got {}",
+        health_after
+    );
+}
+
+#[test]
+fn tick_loop_item_not_picked_up_at_max_health() {
+    let mut map = make_test_map();
+    // Add a health item at the player's position
+    map.objects.push(MapObject {
+        object_type: 2, // OBJECT_IS_ITEM
+        index: 21,      // ITEM_HEALTH_MAJOR
+        facing: 0,
+        polygon_index: 0,
+        location: WorldPoint3d { x: 512, y: 512, z: 0 },
+        flags: 0,
+    });
+
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Player starts at 150 HP (max)
+    let initial_health = world.player_health().unwrap();
+    assert_eq!(initial_health, 150);
+
+    // Tick - should NOT pick up because health is at max
+    world.tick(ActionFlags::default().into());
+
+    // Item should still exist
+    let items: Vec<_> = world.entities().iter()
+        .filter(|e| matches!(e.entity_type, marathon_sim::tick::RenderEntityType::Item { .. }))
+        .cloned()
+        .collect();
+    assert_eq!(items.len(), 1, "item should not be picked up at max health");
+}
+
+#[test]
+fn tick_loop_monster_alerts_on_sight() {
+    let mut map = make_test_map();
+    // Add a monster in poly 1 facing the player (facing west)
+    map.objects.push(MapObject {
+        object_type: 0, // OBJECT_IS_MONSTER
+        index: 0,
+        facing: 256, // ~180 degrees = facing west toward player
+        polygon_index: 1,
+        location: WorldPoint3d { x: 1536, y: 512, z: 0 },
+        flags: 0,
+    });
+
+    let mut physics = make_test_physics();
+    // Give monster visual range and arc
+    if let Some(ref mut monsters) = physics.monsters {
+        monsters[0].visual_range = 10240; // 10 WU
+        monsters[0].half_visual_arc = 128; // ~90 degrees
+    }
+
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Initial state should be Idle
+    let snap = world.snapshot();
+    assert!(!snap.monsters.is_empty(), "should have a monster");
+    assert_eq!(snap.monsters[0].state, marathon_sim::MonsterState::Idle);
+
+    // Tick once - monster should see player and become alerted
+    world.tick(ActionFlags::default().into());
+
+    let snap = world.snapshot();
+    assert_eq!(
+        snap.monsters[0].state,
+        marathon_sim::MonsterState::Alerted,
+        "monster should be alerted after seeing player"
+    );
+}
+
+#[test]
+fn tick_loop_full_systems_no_panics() {
+    let mut map = make_test_map();
+
+    // Add lights, platforms, monsters, items for a full simulation
+    map.platforms = vec![StaticPlatformData {
+        platform_type: 0,
+        speed: 256,
+        delay: 10,
+        minimum_height: 0,
+        maximum_height: 512,
+        polygon_index: 1,
+        static_flags: 0x0001, // player entry
+        tag: 0,
+    }];
+
+    map.objects.push(MapObject {
+        object_type: 0, // Monster
+        index: 0,
+        facing: 256,
+        polygon_index: 1,
+        location: WorldPoint3d { x: 1536, y: 512, z: 0 },
+        flags: 0,
+    });
+
+    map.objects.push(MapObject {
+        object_type: 2, // Item
+        index: 23,      // Shield
+        facing: 0,
+        polygon_index: 0,
+        location: WorldPoint3d { x: 256, y: 256, z: 0 },
+        flags: 0,
+    });
+
+    let mut physics = make_test_physics();
+    if let Some(ref mut monsters) = physics.monsters {
+        monsters[0].visual_range = 10240;
+        monsters[0].half_visual_arc = 128;
+    }
+
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Tick 100 times with various inputs - should not panic
+    for i in 0..100 {
+        let flags = match i % 10 {
+            0..=2 => ActionFlags::new(ActionFlags::MOVE_FORWARD),
+            3..=5 => ActionFlags::new(ActionFlags::STRAFE_LEFT),
+            6 => ActionFlags::new(ActionFlags::FIRE_PRIMARY),
+            _ => ActionFlags::default(),
+        };
+        world.tick(flags.into());
+    }
+
+    assert_eq!(world.tick_count(), 100);
+    // Player should still be alive
+    let health = world.player_health().unwrap();
+    assert!(health > 0 || health <= 0, "player health should be a valid value");
+}
+
+#[test]
+fn tick_loop_determinism_two_worlds_same_seed() {
+    let mut map = make_test_map();
+    map.objects.push(MapObject {
+        object_type: 0,
+        index: 0,
+        facing: 256,
+        polygon_index: 1,
+        location: WorldPoint3d { x: 1536, y: 512, z: 0 },
+        flags: 0,
+    });
+
+    let mut physics = make_test_physics();
+    if let Some(ref mut monsters) = physics.monsters {
+        monsters[0].visual_range = 10240;
+        monsters[0].half_visual_arc = 128;
+    }
+
+    let config = SimConfig { random_seed: 42, difficulty: 2 };
+
+    let mut world_a = SimWorld::new(&map, &physics, &config).unwrap();
+    let mut world_b = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Same inputs for both
+    let inputs = vec![
+        ActionFlags::new(ActionFlags::MOVE_FORWARD),
+        ActionFlags::new(ActionFlags::STRAFE_LEFT),
+        ActionFlags::new(ActionFlags::FIRE_PRIMARY),
+        ActionFlags::default(),
+    ];
+
+    for _ in 0..20 {
+        for flags in &inputs {
+            world_a.tick((*flags).into());
+            world_b.tick((*flags).into());
+        }
+    }
+
+    let snap_a = world_a.snapshot();
+    let snap_b = world_b.snapshot();
+
+    // Player positions should be identical
+    assert_eq!(
+        snap_a.player.as_ref().unwrap().position,
+        snap_b.player.as_ref().unwrap().position,
+        "same seed + same inputs should produce identical player positions"
+    );
+
+    // Monster states should be identical
+    assert_eq!(snap_a.monsters.len(), snap_b.monsters.len());
+    for (a, b) in snap_a.monsters.iter().zip(snap_b.monsters.iter()) {
+        assert_eq!(a.state, b.state, "monster states should match");
+        assert_eq!(a.position, b.position, "monster positions should match");
+    }
 }

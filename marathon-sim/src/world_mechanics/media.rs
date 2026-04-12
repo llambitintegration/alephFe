@@ -37,6 +37,7 @@ mod tests {
 
     fn make_media(media_type: i16) -> Media {
         Media {
+            index: 0,
             polygon_index: 0,
             media_type,
             height_low: 0.0,

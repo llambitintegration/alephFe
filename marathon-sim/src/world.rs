@@ -41,6 +41,8 @@ pub struct MapGeometry {
     pub line_solid: Vec<bool>,
     /// Whether each line is transparent (allows LOS but may block movement).
     pub line_transparent: Vec<bool>,
+    /// Per-polygon media index (-1 if none).
+    pub polygon_media_index: Vec<i16>,
 }
 
 /// Physics tables resource (monster defs, weapon defs, etc.).
@@ -142,6 +144,25 @@ impl SimWorld {
         // Initialize media
         spawn_media(&mut world, map_data);
 
+        // Initialize player weapon inventory (start with fists)
+        let mut weapon_inventory = crate::player::inventory::WeaponInventory::default();
+        {
+            let num_weapon_slots = physics_data.weapons.as_ref().map_or(0, |w| w.len());
+            weapon_inventory.weapons = vec![None; num_weapon_slots.max(1)];
+            // Player starts with fists (weapon index 0, infinite ammo)
+            weapon_inventory.weapons[0] = Some(crate::player::inventory::WeaponSlot {
+                definition_index: 0,
+                primary_magazine: u16::MAX,
+                primary_reserve: 0,
+                secondary_magazine: 0,
+                secondary_reserve: 0,
+                state: crate::player::inventory::WeaponState::Idle,
+                cooldown_ticks: 0,
+            });
+            weapon_inventory.current_weapon = 0;
+        }
+        world.insert_resource(weapon_inventory);
+
         Ok(Self { world })
     }
 
@@ -153,6 +174,11 @@ impl SimWorld {
     /// Drain pending simulation events.
     pub fn drain_events(&mut self) -> Vec<SimEvent> {
         self.world.resource_mut::<SimEvents>().drain()
+    }
+
+    /// Expose the inner ECS world for direct entity manipulation (primarily for tests).
+    pub fn ecs_world_mut(&mut self) -> &mut bevy_ecs::world::World {
+        &mut self.world
     }
 }
 
@@ -227,6 +253,12 @@ fn build_map_geometry(map_data: &MapData) -> MapGeometry {
         })
         .collect();
 
+    let polygon_media_index: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.media_index)
+        .collect();
+
     MapGeometry {
         polygon_vertices,
         floor_heights,
@@ -235,6 +267,7 @@ fn build_map_geometry(map_data: &MapData) -> MapGeometry {
         line_endpoints,
         line_solid,
         line_transparent,
+        polygon_media_index,
     }
 }
 
@@ -351,16 +384,23 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
         let min_height = world_coord(platform.minimum_height);
         let max_height = world_coord(platform.maximum_height);
 
+        // Get the polygon's ceiling height for floor-only platforms.
+        let poly_ceiling = if poly_idx < map_data.polygons.len() {
+            world_coord(map_data.polygons[poly_idx].ceiling_height)
+        } else {
+            2.0 // fallback
+        };
+
         // Marathon platforms move floors between min and max height.
-        // Ceiling behavior depends on platform type; default to static ceiling.
+        // Ceiling stays at polygon ceiling for floor-only platforms.
         world.spawn(Platform {
             polygon_index: poly_idx,
             floor_rest: min_height,
             floor_extended: max_height,
-            ceiling_rest: 0.0,
-            ceiling_extended: 0.0,
+            ceiling_rest: poly_ceiling,
+            ceiling_extended: poly_ceiling,
             current_floor: min_height,
-            current_ceiling: 0.0,
+            current_ceiling: poly_ceiling,
             speed,
             state: PlatformState::AtRest,
             return_delay: platform.delay as u16,
@@ -405,8 +445,9 @@ fn spawn_lights(world: &mut World, map_data: &MapData) {
 }
 
 fn spawn_media(world: &mut World, map_data: &MapData) {
-    for media in &map_data.media {
+    for (idx, media) in map_data.media.iter().enumerate() {
         world.spawn(Media {
+            index: idx,
             polygon_index: 0,
             media_type: media.media_type,
             height_low: world_coord(media.low),

@@ -697,6 +697,7 @@ mod tests {
             ],
             line_solid: vec![false, true, true, true, true, true, true],
             line_transparent: vec![true, false, false, false, false, false, false],
+            polygon_media_index: vec![-1, -1],
         }
     }
 
