@@ -72,12 +72,23 @@ pub struct Projectile {
     pub definition_index: usize,
     /// Distance traveled so far (for max range check).
     pub distance_traveled: f32,
+    /// Number of contrail effects spawned so far.
+    pub contrails_spawned: u16,
+    /// Ticks this projectile has been alive.
+    pub ticks_alive: u16,
+    /// Current polygon index for spatial queries.
+    pub current_polygon: usize,
 }
 
 /// Tracks which entity fired a projectile (for friendly-fire tracking).
 /// Not serialized since Entity IDs are ephemeral.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct ProjectileSource(pub bevy_ecs::entity::Entity);
+
+/// Homing target position for guided projectiles.
+/// Only present on projectiles with the GUIDED flag.
+#[derive(Component, Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct HomingTarget(pub Vec3);
 
 /// Marks an item entity.
 #[derive(Component, Debug, Clone, Copy, Serialize, Deserialize)]

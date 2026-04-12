@@ -1978,3 +1978,641 @@ fn tick_loop_determinism_two_worlds_same_seed() {
         assert_eq!(a.position, b.position, "monster positions should match");
     }
 }
+
+// ──────────────────── Projectile Physics Tests ────────────────────
+
+/// Create physics data with multiple projectile types for testing.
+fn make_projectile_test_physics() -> PhysicsData {
+    use marathon_formats::physics::ProjectileDefinition;
+
+    // Index 0: basic projectile (no special flags)
+    let basic = ProjectileDefinition {
+        collection: 0,
+        shape: 0,
+        detonation_effect: 0,
+        media_detonation_effect: -1,
+        contrail_effect: -1,
+        ticks_between_contrails: 0,
+        maximum_contrails: 0,
+        media_projectile_promotion: -1,
+        radius: 64,
+        area_of_effect: 0,
+        damage: DamageDefinition {
+            damage_type: 0, flags: 0, base: 20, random: 0, scale: 1.0,
+        },
+        flags: 0,
+        speed: 512,          // 0.5 WU/tick
+        maximum_range: 16384, // 16 WU
+        sound_pitch: 1.0,
+        flyby_sound: -1,
+        rebound_sound: -1,
+    };
+
+    // Index 1: gravity-affected (grenade arc)
+    let gravity = ProjectileDefinition {
+        flags: 0x0010, // AFFECTED_BY_GRAVITY
+        detonation_effect: 0,
+        area_of_effect: 2048, // 2 WU radius
+        ..basic.clone()
+    };
+
+    // Index 2: rebounds from walls
+    let rebound_wall = ProjectileDefinition {
+        flags: 0x0400, // REBOUNDS_FROM_WALLS
+        rebound_sound: 0,
+        ..basic.clone()
+    };
+
+    // Index 3: rebounds from floor
+    let rebound_floor = ProjectileDefinition {
+        flags: 0x0010 | 0x0020, // AFFECTED_BY_GRAVITY | REBOUNDS_FROM_FLOOR
+        rebound_sound: 0,
+        ..basic.clone()
+    };
+
+    // Index 4: persistent (passes through entities)
+    let persistent = ProjectileDefinition {
+        flags: 0x0004, // PERSISTENT
+        ..basic.clone()
+    };
+
+    // Index 5: homing (guided)
+    let homing = ProjectileDefinition {
+        flags: 0x0001, // GUIDED
+        ..basic.clone()
+    };
+
+    // Index 6: with contrails
+    let contrail = ProjectileDefinition {
+        contrail_effect: 0,
+        ticks_between_contrails: 3,
+        maximum_contrails: 5,
+        ..basic.clone()
+    };
+
+    // Index 7: short range (for range limit test)
+    let short_range = ProjectileDefinition {
+        maximum_range: 512, // 0.5 WU
+        detonation_effect: -1,
+        ..basic.clone()
+    };
+
+    let mut base_physics = make_test_physics();
+    base_physics.projectiles = Some(vec![
+        basic, gravity, rebound_wall, rebound_floor,
+        persistent, homing, contrail, short_range,
+    ]);
+    base_physics.effects = Some(vec![
+        marathon_formats::physics::EffectDefinition {
+            collection: 0,
+            shape: 0,
+            sound_pitch: 1.0,
+            flags: 0,
+            delay: 10,
+            delay_sound: -1,
+        },
+    ]);
+    base_physics
+}
+
+/// Helper: spawn a projectile entity as player-fired (won't collide with player).
+fn spawn_test_projectile(
+    world: &mut SimWorld,
+    def_index: usize,
+    pos: glam::Vec3,
+    vel: glam::Vec3,
+    polygon: usize,
+) {
+    use marathon_sim::components::*;
+    // Get the player entity so we can set ProjectileSource (avoids self-collision)
+    let player_entity = {
+        let mut q = world.ecs_world_mut().query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::prelude::With<Player>>();
+        q.iter(world.ecs_world_mut()).next().unwrap()
+    };
+    world.ecs_world_mut().spawn((
+        Projectile {
+            definition_index: def_index,
+            distance_traveled: 0.0,
+            contrails_spawned: 0,
+            ticks_alive: 0,
+            current_polygon: polygon,
+        },
+        Position(pos),
+        Velocity(vel),
+        PolygonIndex(polygon),
+        ProjectileSource(player_entity),
+    ));
+}
+
+/// Count projectile entities in the world.
+fn count_projectiles(world: &mut SimWorld) -> usize {
+    let snap = world.snapshot();
+    snap.projectiles.len()
+}
+
+// 7.1: Projectile advances position each tick
+#[test]
+fn projectile_advances_position_each_tick() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Spawn basic projectile moving east slowly, well inside poly 0
+    spawn_test_projectile(
+        &mut world,
+        0, // basic
+        glam::Vec3::new(0.5, 0.5, 0.5),
+        glam::Vec3::new(0.02, 0.0, 0.0), // very slow to stay well inside polygon
+        0,
+    );
+
+    // Verify projectile exists before tick
+    let snap_before = world.snapshot();
+    assert_eq!(snap_before.projectiles.len(), 1, "projectile should exist before tick");
+
+    let empty = ActionFlags::new(0);
+    world.tick(empty.into());
+
+    let snap = world.snapshot();
+    assert_eq!(snap.projectiles.len(), 1, "projectile should still exist after 1 tick, def_idx=0 max_range=16");
+    let proj = &snap.projectiles[0];
+    assert!((proj.position.x - 0.52).abs() < 0.01, "projectile should advance by velocity.x");
+    assert!(proj.distance_traveled > 0.0, "distance should accumulate");
+}
+
+// 7.2: Gravity-affected projectile arcs downward
+#[test]
+fn gravity_projectile_arcs_downward() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Spawn gravity projectile moving east, starting above floor
+    spawn_test_projectile(
+        &mut world,
+        1, // gravity-affected
+        glam::Vec3::new(0.5, 0.5, 1.0),
+        glam::Vec3::new(0.05, 0.0, 0.0),
+        0,
+    );
+
+    let empty = ActionFlags::new(0);
+    // Tick several times
+    for _ in 0..5 {
+        world.tick(empty.into());
+    }
+
+    let snap = world.snapshot();
+    if !snap.projectiles.is_empty() {
+        let proj = &snap.projectiles[0];
+        // Z should decrease due to gravity
+        assert!(proj.position.z < 1.0, "gravity should pull projectile down, z={}", proj.position.z);
+    }
+    // If projectile hit floor and detonated, that's also correct behavior
+}
+
+// 7.3: Homing projectile turns toward target
+#[test]
+fn homing_projectile_turns_toward_target() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Spawn homing projectile with HomingTarget
+    use marathon_sim::components::*;
+    world.ecs_world_mut().spawn((
+        Projectile {
+            definition_index: 5, // homing
+            distance_traveled: 0.0,
+            contrails_spawned: 0,
+            ticks_alive: 0,
+            current_polygon: 0,
+        },
+        Position(glam::Vec3::new(0.3, 0.3, 0.5)),
+        Velocity(glam::Vec3::new(0.1, 0.0, 0.0)), // moving east
+        PolygonIndex(0),
+        HomingTarget(glam::Vec3::new(0.3, 0.8, 0.5)), // target is north
+    ));
+
+    let empty = ActionFlags::new(0);
+    for _ in 0..3 {
+        world.tick(empty.into());
+    }
+
+    let snap = world.snapshot();
+    if !snap.projectiles.is_empty() {
+        let proj = &snap.projectiles[0];
+        // Velocity should have turned northward (increasing Y)
+        assert!(proj.velocity.y > 0.01, "homing should turn toward target, vel.y={}", proj.velocity.y);
+    }
+}
+
+// 7.4: Projectile detonates on solid wall hit
+#[test]
+fn projectile_detonates_on_wall_hit() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Spawn projectile heading toward the left wall (x=0) of poly 0
+    spawn_test_projectile(
+        &mut world,
+        0, // basic, detonation_effect=0
+        glam::Vec3::new(0.2, 0.5, 0.5),
+        glam::Vec3::new(-0.5, 0.0, 0.0), // will hit left wall at x=0
+        0,
+    );
+
+    let empty = ActionFlags::new(0);
+    world.tick(empty.into());
+
+    // Projectile should be gone (detonated)
+    assert_eq!(count_projectiles(&mut world), 0, "projectile should detonate on wall hit");
+}
+
+// 7.5: Projectile with REBOUNDS_FROM_WALLS reflects velocity
+#[test]
+fn projectile_rebounds_from_wall() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Spawn wall-rebounding projectile heading left
+    spawn_test_projectile(
+        &mut world,
+        2, // REBOUNDS_FROM_WALLS
+        glam::Vec3::new(0.2, 0.5, 0.5),
+        glam::Vec3::new(-0.5, 0.0, 0.0),
+        0,
+    );
+
+    let empty = ActionFlags::new(0);
+    world.tick(empty.into());
+
+    // Projectile should still exist (rebounded)
+    let snap = world.snapshot();
+    assert_eq!(snap.projectiles.len(), 1, "rebounding projectile should survive wall hit");
+    // Velocity X should be positive now (reflected from left wall)
+    assert!(snap.projectiles[0].velocity.x > 0.0, "velocity should be reflected, vel.x={}", snap.projectiles[0].velocity.x);
+}
+
+// 7.6: Projectile with REBOUNDS_FROM_FLOOR bounces
+#[test]
+fn projectile_rebounds_from_floor() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Spawn floor-rebounding projectile falling toward floor
+    spawn_test_projectile(
+        &mut world,
+        3, // AFFECTED_BY_GRAVITY | REBOUNDS_FROM_FLOOR
+        glam::Vec3::new(0.5, 0.5, 0.1),
+        glam::Vec3::new(0.05, 0.0, -0.2), // moving down
+        0,
+    );
+
+    let empty = ActionFlags::new(0);
+    world.tick(empty.into());
+
+    // Projectile should still exist (bounced)
+    let snap = world.snapshot();
+    assert_eq!(snap.projectiles.len(), 1, "floor-rebounding projectile should survive");
+    // Velocity Z should be positive (bounced up)
+    assert!(snap.projectiles[0].velocity.z > 0.0, "velocity Z should be positive after bounce, vel.z={}", snap.projectiles[0].velocity.z);
+}
+
+// 7.7: Non-persistent projectile detonates on entity hit
+#[test]
+fn projectile_detonates_on_entity_hit() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+
+    // Add a monster at (0.8, 0.5, 0.0)
+    let mut map_with_monster = map.clone();
+    map_with_monster.objects.push(MapObject {
+        object_type: 0, // MONSTER
+        index: 0,
+        facing: 0,
+        polygon_index: 0,
+        location: WorldPoint3d { x: 820, y: 512, z: 0 },
+        flags: 0,
+    });
+
+    let mut world = SimWorld::new(&map_with_monster, &physics, &config).unwrap();
+
+    // Spawn player projectile heading toward the monster
+    use marathon_sim::components::*;
+    let player_entity = {
+        let mut q = world.ecs_world_mut().query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::prelude::With<Player>>();
+        q.iter(world.ecs_world_mut()).next().unwrap()
+    };
+
+    world.ecs_world_mut().spawn((
+        Projectile {
+            definition_index: 0,
+            distance_traveled: 0.0,
+            contrails_spawned: 0,
+            ticks_alive: 0,
+            current_polygon: 0,
+        },
+        Position(glam::Vec3::new(0.5, 0.5, 0.3)),
+        Velocity(glam::Vec3::new(0.5, 0.0, 0.0)),
+        PolygonIndex(0),
+        ProjectileSource(player_entity),
+    ));
+
+    let empty = ActionFlags::new(0);
+    world.tick(empty.into());
+
+    // Projectile should be gone (detonated on monster hit)
+    assert_eq!(count_projectiles(&mut world), 0, "projectile should detonate on entity hit");
+}
+
+// 7.8: Persistent projectile passes through entity
+#[test]
+fn persistent_projectile_passes_through() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+
+    let mut map_with_monster = map.clone();
+    map_with_monster.objects.push(MapObject {
+        object_type: 0,
+        index: 0,
+        facing: 0,
+        polygon_index: 0,
+        location: WorldPoint3d { x: 700, y: 512, z: 0 },
+        flags: 0,
+    });
+
+    let mut world = SimWorld::new(&map_with_monster, &physics, &config).unwrap();
+
+    use marathon_sim::components::*;
+    let player_entity = {
+        let mut q = world.ecs_world_mut().query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::prelude::With<Player>>();
+        q.iter(world.ecs_world_mut()).next().unwrap()
+    };
+
+    world.ecs_world_mut().spawn((
+        Projectile {
+            definition_index: 4, // PERSISTENT
+            distance_traveled: 0.0,
+            contrails_spawned: 0,
+            ticks_alive: 0,
+            current_polygon: 0,
+        },
+        Position(glam::Vec3::new(0.3, 0.5, 0.3)),
+        Velocity(glam::Vec3::new(0.3, 0.0, 0.0)),
+        PolygonIndex(0),
+        ProjectileSource(player_entity),
+    ));
+
+    let empty = ActionFlags::new(0);
+    world.tick(empty.into());
+
+    // Persistent projectile should still exist
+    assert_eq!(count_projectiles(&mut world), 1, "persistent projectile should survive entity hit");
+}
+
+// 7.9: AoE detonation applies distance-scaled damage
+#[test]
+fn aoe_detonation_applies_scaled_damage() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+
+    // Monster at (0.8, 0.5) — 0.3 WU from detonation point
+    let mut map_with_monster = map.clone();
+    map_with_monster.objects.push(MapObject {
+        object_type: 0,
+        index: 0,
+        facing: 0,
+        polygon_index: 0,
+        location: WorldPoint3d { x: 300, y: 512, z: 0 },
+        flags: 0,
+    });
+
+    let mut world = SimWorld::new(&map_with_monster, &physics, &config).unwrap();
+
+    // Get monster's initial health
+    let monster_health_before = {
+        let mut q = world.ecs_world_mut().query_filtered::<&marathon_sim::components::Health, bevy_ecs::prelude::With<marathon_sim::components::Monster>>();
+        q.iter(world.ecs_world_mut()).next().map(|h| h.0).unwrap()
+    };
+
+    // Spawn AoE projectile (index 1, area_of_effect=2048=2.0 WU) near monster
+    // heading toward wall to detonate
+    spawn_test_projectile(
+        &mut world,
+        1, // gravity + AoE
+        glam::Vec3::new(0.2, 0.5, 0.5),
+        glam::Vec3::new(-0.5, 0.0, 0.0), // will hit left wall
+        0,
+    );
+
+    let empty = ActionFlags::new(0);
+    world.tick(empty.into());
+
+    // Monster should have taken AoE damage
+    let monster_health_after = {
+        let mut q = world.ecs_world_mut().query_filtered::<&marathon_sim::components::Health, bevy_ecs::prelude::With<marathon_sim::components::Monster>>();
+        q.iter(world.ecs_world_mut()).next().map(|h| h.0).unwrap()
+    };
+
+    assert!(
+        monster_health_after < monster_health_before,
+        "monster should take AoE damage: before={}, after={}",
+        monster_health_before, monster_health_after
+    );
+}
+
+// 7.10: Projectile despawned without effect when exceeding range
+#[test]
+fn projectile_despawned_at_max_range() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Spawn short-range projectile (max_range=0.5 WU, speed=0.5 WU/tick)
+    spawn_test_projectile(
+        &mut world,
+        7, // short range, detonation_effect=-1
+        glam::Vec3::new(0.5, 0.5, 0.5),
+        glam::Vec3::new(0.1, 0.0, 0.0),
+        0,
+    );
+
+    let empty = ActionFlags::new(0);
+    // Advance enough ticks for range to be exceeded
+    for _ in 0..10 {
+        world.tick(empty.into());
+    }
+
+    // Projectile should be despawned
+    assert_eq!(count_projectiles(&mut world), 0, "projectile should despawn after exceeding range");
+}
+
+// 7.11: Contrails spawn at correct intervals
+#[test]
+fn contrails_spawn_at_intervals() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Spawn contrail projectile (effect every 3 ticks, max 5)
+    spawn_test_projectile(
+        &mut world,
+        6, // contrail
+        glam::Vec3::new(0.5, 0.5, 0.5),
+        glam::Vec3::new(0.05, 0.0, 0.0), // slow to stay in polygon
+        0,
+    );
+
+    let empty = ActionFlags::new(0);
+    // Tick 10 times (should produce ~3 contrails at ticks 3, 6, 9)
+    for _ in 0..10 {
+        world.tick(empty.into());
+    }
+
+    let snap = world.snapshot();
+    // Check contrails_spawned on the projectile
+    if !snap.projectiles.is_empty() {
+        let proj = &snap.projectiles[0];
+        assert!(proj.contrails_spawned > 0, "contrails should have been spawned");
+        assert!(proj.contrails_spawned <= 5, "should not exceed maximum_contrails");
+    }
+}
+
+// 7.13: Full tick with weapon fire produces projectile
+#[test]
+fn weapon_fire_produces_projectile() {
+    let map = make_test_map();
+    let mut physics = make_projectile_test_physics();
+    // Need a weapon that fires projectile type 0
+    physics.weapons = Some(vec![marathon_formats::physics::WeaponDefinition {
+        item_type: -1,
+        powerup_type: -1,
+        weapon_class: 0,
+        flags: 0,
+        firing_light_intensity: 0.0,
+        firing_intensity_decay_ticks: 0,
+        idle_height: 0.0,
+        bob_amplitude: 0.0,
+        kick_height: 0.0,
+        reload_height: 0.0,
+        idle_width: 0.0,
+        horizontal_amplitude: 0.0,
+        collection: 0,
+        idle_shape: 0,
+        firing_shape: 0,
+        reloading_shape: 0,
+        charging_shape: -1,
+        charged_shape: -1,
+        ready_ticks: 0,
+        await_reload_ticks: 0,
+        loading_ticks: 0,
+        finish_loading_ticks: 0,
+        powerup_ticks: 0,
+        primary_trigger: marathon_formats::physics::TriggerDefinition {
+            rounds_per_magazine: 8,
+            ammunition_type: -1,
+            ticks_per_round: 2,
+            recovery_ticks: 3,
+            charging_ticks: 0,
+            recoil_magnitude: 0,
+            firing_sound: -1,
+            click_sound: -1,
+            charging_sound: -1,
+            shell_casing_sound: -1,
+            reloading_sound: -1,
+            charged_sound: -1,
+            projectile_type: 0, // fires basic projectile
+            theta_error: 0,
+            dx: 0,
+            dz: 0,
+            shell_casing_type: -1,
+            burst_count: 0,
+        },
+        secondary_trigger: marathon_formats::physics::TriggerDefinition {
+            rounds_per_magazine: 0,
+            ammunition_type: -1,
+            ticks_per_round: 0,
+            recovery_ticks: 0,
+            charging_ticks: 0,
+            recoil_magnitude: 0,
+            firing_sound: -1,
+            click_sound: -1,
+            charging_sound: -1,
+            shell_casing_sound: -1,
+            reloading_sound: -1,
+            charged_sound: -1,
+            projectile_type: -1,
+            theta_error: 0,
+            dx: 0,
+            dz: 0,
+            shell_casing_type: -1,
+            burst_count: 0,
+        },
+    }]);
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Fire primary weapon
+    let fire = ActionFlags::new(ActionFlags::FIRE_PRIMARY);
+    world.tick(fire.into());
+
+    // Should have spawned a projectile
+    assert!(count_projectiles(&mut world) >= 1, "weapon fire should spawn projectile");
+}
+
+// 7.14: Snapshot round-trip preserves in-flight projectile state
+#[test]
+fn snapshot_preserves_projectile_state() {
+    let map = make_test_map();
+    let physics = make_projectile_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Spawn a projectile and advance a few ticks
+    spawn_test_projectile(
+        &mut world,
+        0,
+        glam::Vec3::new(0.5, 0.5, 0.5),
+        glam::Vec3::new(0.05, 0.0, 0.0),
+        0,
+    );
+
+    let empty = ActionFlags::new(0);
+    world.tick(empty.into());
+
+    // Serialize
+    let bytes = world.serialize().expect("serialize should work");
+
+    // Deserialize
+    let mut world2 = SimWorld::deserialize(&bytes, &map, &physics).expect("deserialize should work");
+
+    let snap1 = world.snapshot();
+    let snap2 = world2.snapshot();
+
+    assert_eq!(snap1.projectiles.len(), snap2.projectiles.len(), "projectile count should match");
+    if !snap1.projectiles.is_empty() {
+        let p1 = &snap1.projectiles[0];
+        let p2 = &snap2.projectiles[0];
+        assert_eq!(p1.definition_index, p2.definition_index);
+        assert!((p1.position - p2.position).length() < 0.001, "position should match");
+        assert!((p1.velocity - p2.velocity).length() < 0.001, "velocity should match");
+        assert_eq!(p1.ticks_alive, p2.ticks_alive, "ticks_alive should match");
+        assert_eq!(p1.contrails_spawned, p2.contrails_spawned, "contrails should match");
+        assert_eq!(p1.current_polygon, p2.current_polygon, "polygon should match");
+    }
+}

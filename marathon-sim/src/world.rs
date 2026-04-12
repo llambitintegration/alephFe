@@ -508,6 +508,9 @@ pub struct ProjectileSnapshot {
     pub position: Vec3,
     pub velocity: Vec3,
     pub distance_traveled: f32,
+    pub ticks_alive: u16,
+    pub contrails_spawned: u16,
+    pub current_polygon: usize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -572,6 +575,9 @@ impl SimWorld {
                     position: pos.0,
                     velocity: vel.0,
                     distance_traveled: p.distance_traveled,
+                    ticks_alive: p.ticks_alive,
+                    contrails_spawned: p.contrails_spawned,
+                    current_polygon: p.current_polygon,
                 }
             }).collect()
         };
@@ -695,9 +701,13 @@ impl SimWorld {
                 Projectile {
                     definition_index: p.definition_index,
                     distance_traveled: p.distance_traveled,
+                    ticks_alive: p.ticks_alive,
+                    contrails_spawned: p.contrails_spawned,
+                    current_polygon: p.current_polygon,
                 },
                 Position(p.position),
                 Velocity(p.velocity),
+                PolygonIndex(p.current_polygon),
             ));
         }
 

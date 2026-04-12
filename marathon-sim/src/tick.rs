@@ -4,6 +4,22 @@ use crate::player::movement::{
 };
 use crate::world::{MapGeometry, PhysicsTables, SimRng, SimWorld, TickCounter};
 
+/// Check if a position is submerged in media at a given polygon.
+fn is_submerged_at(
+    polygon_media_index: &[i16],
+    media_data: &std::collections::HashMap<usize, (f32, i16)>,
+    polygon: usize,
+    z: f32,
+) -> bool {
+    let media_idx = polygon_media_index.get(polygon).copied().unwrap_or(-1);
+    if media_idx >= 0 {
+        if let Some(&(media_height, _)) = media_data.get(&(media_idx as usize)) {
+            return z < media_height;
+        }
+    }
+    false
+}
+
 /// Action flags consumed by the simulation each tick.
 /// Mirrors marathon-integration's ActionFlags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -493,6 +509,9 @@ impl SimWorld {
                 crate::Projectile {
                     definition_index: proj_type,
                     distance_traveled: 0.0,
+                    contrails_spawned: 0,
+                    ticks_alive: 0,
+                    current_polygon: player_poly,
                 },
                 crate::Position(spawn_pos),
                 crate::Velocity(velocity),
@@ -891,6 +910,9 @@ impl SimWorld {
                 crate::Projectile {
                     definition_index: proj_type,
                     distance_traveled: 0.0,
+                    contrails_spawned: 0,
+                    ticks_alive: 0,
+                    current_polygon: poly,
                 },
                 crate::Position(spawn_pos),
                 crate::Velocity(velocity),
@@ -900,35 +922,63 @@ impl SimWorld {
     }
 
     fn update_projectiles(&mut self) {
+        use crate::combat::projectiles::ProjectileFlags;
+        use rand::Rng;
+
         let physics_tables = match self.world.get_resource::<PhysicsTables>() {
             Some(pt) => pt.data.clone(),
             None => return,
         };
 
-        // Clone geometry for wall collision
+        // Clone geometry for collision checks
         let geometry = self.world.resource::<MapGeometry>();
         let polygon_adjacency = geometry.polygon_adjacency.clone();
         let line_endpoints = geometry.line_endpoints.clone();
         let line_solid = geometry.line_solid.clone();
+        let line_transparent = geometry.line_transparent.clone();
+        let floor_heights = geometry.floor_heights.clone();
+        let ceiling_heights = geometry.ceiling_heights.clone();
+        let polygon_media_index = geometry.polygon_media_index.clone();
+
+        // Collect media data for submersion checks
+        let media_data: std::collections::HashMap<usize, (f32, i16)> = {
+            let mut map = std::collections::HashMap::new();
+            let mut q = self.world.query::<&crate::Media>();
+            for media in q.iter(&self.world) {
+                map.insert(media.index, (media.current_height, media.media_type));
+            }
+            map
+        };
 
         // Collect monster positions for entity collision
-        let monster_data: Vec<(bevy_ecs::entity::Entity, glam::Vec2, f32, f32, f32)> = {
+        let monster_data: Vec<(bevy_ecs::entity::Entity, glam::Vec2, f32, f32, f32, glam::Vec3, u32, u32)> = {
             let mut q = self.world.query::<(
                 bevy_ecs::entity::Entity,
                 &crate::Monster,
                 &crate::Position,
                 &crate::CollisionRadius,
                 &crate::EntityHeight,
+                Option<&crate::Immunities>,
+                Option<&crate::Weaknesses>,
             )>();
             q.iter(&self.world)
-                .map(|(e, _m, pos, r, h)| {
-                    (e, glam::Vec2::new(pos.0.x, pos.0.y), r.0, pos.0.z, pos.0.z + h.0)
+                .map(|(e, _m, pos, r, h, imm, weak)| {
+                    (
+                        e,
+                        glam::Vec2::new(pos.0.x, pos.0.y),
+                        r.0,
+                        pos.0.z,
+                        pos.0.z + h.0,
+                        pos.0,
+                        imm.map(|i| i.0).unwrap_or(0),
+                        weak.map(|w| w.0).unwrap_or(0),
+                    )
                 })
                 .collect()
         };
 
-        // Get player data for monster-projectile collision
-        let player_data: Option<(bevy_ecs::entity::Entity, glam::Vec2, f32, f32, f32)> = {
+        // Get player data for collision and homing
+        let player_data: Option<(bevy_ecs::entity::Entity, glam::Vec2, f32, f32, f32, glam::Vec3)> = {
             let mut q = self.world.query_filtered::<(
                 bevy_ecs::entity::Entity,
                 &crate::Position,
@@ -938,28 +988,22 @@ impl SimWorld {
             q.iter(&self.world)
                 .next()
                 .map(|(e, pos, r, h)| {
-                    (e, glam::Vec2::new(pos.0.x, pos.0.y), r.0, pos.0.z, pos.0.z + h.0)
+                    (e, glam::Vec2::new(pos.0.x, pos.0.y), r.0, pos.0.z, pos.0.z + h.0, pos.0)
                 })
         };
 
-        // Process each projectile
-        struct ProjectileUpdate {
+        // Collect projectile data (collect-then-process pattern)
+        struct ProjData {
             entity: bevy_ecs::entity::Entity,
-            despawn: bool,
-            new_pos: glam::Vec3,
-            new_vel: glam::Vec3,
-            new_distance: f32,
-            _new_poly: usize,
-            detonation_point: Option<glam::Vec3>,
-            hit_entity: Option<bevy_ecs::entity::Entity>,
-            damage_amount: i16,
-            aoe_radius: f32,
-            effect_def: Option<usize>,
+            proj: crate::Projectile,
+            pos: glam::Vec3,
+            vel: glam::Vec3,
+            poly: usize,
+            source: Option<bevy_ecs::entity::Entity>,
+            homing_target: Option<glam::Vec3>,
         }
 
-        let mut proj_updates: Vec<ProjectileUpdate> = Vec::new();
-
-        {
+        let proj_data: Vec<ProjData> = {
             let mut query = self.world.query::<(
                 bevy_ecs::entity::Entity,
                 &crate::Projectile,
@@ -967,217 +1011,635 @@ impl SimWorld {
                 &crate::Velocity,
                 &crate::PolygonIndex,
                 Option<&crate::ProjectileSource>,
+                Option<&crate::HomingTarget>,
             )>();
-
-            for (entity, proj, pos, vel, poly_idx, source) in query.iter(&self.world) {
-                let def = physics_tables
-                    .projectiles
-                    .as_ref()
-                    .and_then(|p| p.get(proj.definition_index));
-
-                let max_range = def.map(|d| d.maximum_range as f32 / 1024.0).unwrap_or(0.0);
-                let is_gravity = def.map(|d| d.flags & 0x0010 != 0).unwrap_or(false);
-                let is_homing = def.map(|d| d.flags & 0x0020 != 0).unwrap_or(false);
-                let aoe = def.map(|d| d.area_of_effect as f32 / 1024.0).unwrap_or(0.0);
-                let damage_base = def.map(|d| d.damage.base).unwrap_or(10);
-                let damage_scale = def.map(|d| d.damage.scale).unwrap_or(1.0);
-                let detonation_effect = def.map(|d| d.detonation_effect).unwrap_or(-1);
-
-                // Apply gravity
-                let mut current_vel = vel.0;
-                if is_gravity {
-                    current_vel =
-                        crate::combat::projectiles::apply_projectile_gravity(current_vel, 0.01);
-                }
-
-                // Apply homing (toward closest monster or player)
-                if is_homing {
-                    // Find nearest target
-                    let is_player_fired = source.is_some();
-                    if is_player_fired {
-                        // Home toward nearest monster
-                        if let Some((_, nearest_pos, _, _, _)) = monster_data
-                            .iter()
-                            .min_by(|a, b| {
-                                let da = a.1.distance(glam::Vec2::new(pos.0.x, pos.0.y));
-                                let db = b.1.distance(glam::Vec2::new(pos.0.x, pos.0.y));
-                                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-                            })
-                        {
-                            let target = glam::Vec3::new(nearest_pos.x, nearest_pos.y, pos.0.z);
-                            current_vel =
-                                crate::combat::projectiles::apply_homing(current_vel, pos.0, target, 0.05);
-                        }
-                    } else if let Some((_, ppos, _, _, _)) = &player_data {
-                        let target = glam::Vec3::new(ppos.x, ppos.y, pos.0.z);
-                        current_vel =
-                            crate::combat::projectiles::apply_homing(current_vel, pos.0, target, 0.05);
+            query.iter(&self.world)
+                .map(|(entity, proj, pos, vel, poly, source, homing)| {
+                    ProjData {
+                        entity,
+                        proj: *proj,
+                        pos: pos.0,
+                        vel: vel.0,
+                        poly: poly.0,
+                        source: source.map(|s| s.0),
+                        homing_target: homing.map(|h| h.0),
                     }
-                }
+                })
+                .collect()
+        };
 
-                // Advance position
-                let (new_pos, tick_dist) =
-                    crate::combat::projectiles::advance_projectile(pos.0, current_vel);
-                let new_distance = proj.distance_traveled + tick_dist;
-
-                let mut despawn = false;
-                let mut detonation_point = None;
-                let mut hit_entity = None;
-                let mut damage_amount = (damage_base as f32 * damage_scale) as i16;
-
-                // Check range limit
-                if crate::combat::projectiles::check_range_limit(new_distance, max_range) {
-                    despawn = true;
-                    detonation_point = Some(new_pos);
-                }
-
-                // Check wall collision
-                if !despawn && poly_idx.0 < polygon_adjacency.len() {
-                    let old_2d = glam::Vec2::new(pos.0.x, pos.0.y);
-                    let new_2d = glam::Vec2::new(new_pos.x, new_pos.y);
-                    match crate::combat::projectiles::check_projectile_wall_collision(
-                        old_2d,
-                        new_2d,
-                        pos.0.z,
-                        new_pos.z,
-                        poly_idx.0,
-                        &polygon_adjacency,
-                        &line_endpoints,
-                        &line_solid,
-                    ) {
-                        crate::combat::projectiles::WallHitResult::Hit { hit_point, .. } => {
-                            despawn = true;
-                            detonation_point = Some(hit_point);
-                        }
-                        crate::combat::projectiles::WallHitResult::Clear => {}
-                    }
-                }
-
-                // Check entity collision
-                if !despawn {
-                    let is_player_fired = source.is_some();
-
-                    // Build collision targets
-                    let mut targets: Vec<(glam::Vec2, f32, f32, f32)> = Vec::new();
-                    let mut target_entities: Vec<bevy_ecs::entity::Entity> = Vec::new();
-
-                    if is_player_fired {
-                        // Player projectile: check against monsters
-                        for (e, center, radius, z_bot, z_top) in &monster_data {
-                            targets.push((*center, *radius, *z_bot, *z_top));
-                            target_entities.push(*e);
-                        }
-                    } else {
-                        // Monster projectile: check against player
-                        if let Some((e, center, radius, z_bot, z_top)) = &player_data {
-                            targets.push((*center, *radius, *z_bot, *z_top));
-                            target_entities.push(*e);
-                        }
-                    }
-
-                    if let Some(hit) = crate::combat::projectiles::check_projectile_entity_collision(
-                        pos.0,
-                        new_pos,
-                        &targets,
-                    ) {
-                        despawn = true;
-                        detonation_point = Some(hit.hit_point);
-                        hit_entity = Some(target_entities[hit.entity_index]);
-                    }
-                }
-
-                let effect_def_idx = if detonation_effect >= 0 {
-                    Some(detonation_effect as usize)
-                } else {
-                    None
-                };
-
-                // If not despawning but no damage, clear damage_amount
-                if !despawn {
-                    damage_amount = 0;
-                }
-
-                proj_updates.push(ProjectileUpdate {
-                    entity,
-                    despawn,
-                    new_pos: if despawn { pos.0 } else { new_pos },
-                    new_vel: current_vel,
-                    new_distance,
-                    _new_poly: poly_idx.0,
-                    detonation_point,
-                    hit_entity,
-                    damage_amount,
-                    aoe_radius: aoe,
-                    effect_def: effect_def_idx,
-                });
+        // Get SimRng for randomness
+        let mut rng_vals: Vec<(f32, f32, bool)> = Vec::new(); // pre-roll random values
+        {
+            let mut sim_rng = self.world.resource_mut::<SimRng>();
+            for _ in 0..proj_data.len() {
+                let h_wander: f32 = sim_rng.0.gen_range(-0.02..0.02);
+                let v_wander: f32 = sim_rng.0.gen_range(-0.02..0.02);
+                let pass_transparent: bool = sim_rng.0.gen_bool(0.5);
+                rng_vals.push((h_wander, v_wander, pass_transparent));
             }
         }
 
-        // Apply projectile updates
-        let mut to_despawn: Vec<bevy_ecs::entity::Entity> = Vec::new();
-        let mut effects_to_spawn: Vec<(glam::Vec3, usize)> = Vec::new();
+        // Process each projectile
+        #[derive(Debug)]
+        enum ProjAction {
+            /// Continue flying — update position, velocity, and projectile fields.
+            Continue {
+                entity: bevy_ecs::entity::Entity,
+                new_pos: glam::Vec3,
+                new_vel: glam::Vec3,
+                new_distance: f32,
+                new_ticks_alive: u16,
+                new_contrails_spawned: u16,
+                new_polygon: usize,
+                contrail_effect: Option<(glam::Vec3, usize)>,
+            },
+            /// Detonate — despawn projectile, apply damage, spawn effects.
+            Detonate {
+                entity: bevy_ecs::entity::Entity,
+                hit_point: glam::Vec3,
+                hit_entity: Option<bevy_ecs::entity::Entity>,
+                damage_amount: i16,
+                /// Base damage for AoE calculation (from projectile definition).
+                aoe_damage_base: i16,
+                aoe_radius: f32,
+                effect_def: Option<usize>,
+                is_submerged: bool,
+                media_effect_def: Option<usize>,
+                rebound_sound: i16,
+            },
+            /// Despawn without effect (range exceeded).
+            DespawnSilent {
+                entity: bevy_ecs::entity::Entity,
+            },
+            /// Rebound from wall — update position and velocity.
+            ReboundWall {
+                entity: bevy_ecs::entity::Entity,
+                hit_point: glam::Vec3,
+                new_vel: glam::Vec3,
+                new_distance: f32,
+                new_ticks_alive: u16,
+                new_polygon: usize,
+                rebound_sound: i16,
+            },
+            /// Rebound from floor — update position and velocity.
+            ReboundFloor {
+                entity: bevy_ecs::entity::Entity,
+                new_pos: glam::Vec3,
+                new_vel: glam::Vec3,
+                new_distance: f32,
+                new_ticks_alive: u16,
+                new_polygon: usize,
+                rebound_sound: i16,
+            },
+            /// Persistent projectile hit — damage but keep going.
+            PersistentHit {
+                entity: bevy_ecs::entity::Entity,
+                hit_entity: bevy_ecs::entity::Entity,
+                damage_amount: i16,
+                new_pos: glam::Vec3,
+                new_vel: glam::Vec3,
+                new_distance: f32,
+                new_ticks_alive: u16,
+                new_polygon: usize,
+            },
+            /// Promote to different projectile type (media interaction).
+            Promote {
+                entity: bevy_ecs::entity::Entity,
+                new_def_index: usize,
+                position: glam::Vec3,
+                velocity: glam::Vec3,
+                polygon: usize,
+                source: Option<bevy_ecs::entity::Entity>,
+            },
+        }
 
-        for update in &proj_updates {
-            if update.despawn {
-                to_despawn.push(update.entity);
+        let mut actions: Vec<ProjAction> = Vec::new();
 
-                // Apply direct hit damage
-                if let Some(hit_entity) = update.hit_entity {
-                    if update.damage_amount > 0 {
-                        self.apply_damage_to_entity(hit_entity, update.damage_amount);
+        for (idx, pd) in proj_data.iter().enumerate() {
+            let def = physics_tables
+                .projectiles
+                .as_ref()
+                .and_then(|p| p.get(pd.proj.definition_index));
+
+            let Some(def) = def else {
+                actions.push(ProjAction::DespawnSilent { entity: pd.entity });
+                continue;
+            };
+
+            let flags = def.flags;
+            let max_range = def.maximum_range as f32 / 1024.0;
+            let rebound_sound = def.rebound_sound;
+            let proj_damage_base = (def.damage.base as f32 * def.damage.scale) as i16;
+
+            // 1. Apply gravity
+            let mut current_vel = pd.vel;
+            if flags & ProjectileFlags::AFFECTED_BY_GRAVITY != 0 {
+                let gravity_mul = if flags & ProjectileFlags::DOUBLE_GRAVITY != 0 {
+                    2.0
+                } else if flags & ProjectileFlags::HALF_GRAVITY != 0 {
+                    0.5
+                } else {
+                    1.0
+                };
+                let gravity = (1.0 / 120.0) * gravity_mul;
+                current_vel = crate::combat::projectiles::apply_projectile_gravity(current_vel, gravity);
+            }
+
+            // 2. Apply homing
+            if flags & ProjectileFlags::GUIDED != 0 {
+                if let Some(target) = pd.homing_target {
+                    current_vel = crate::combat::projectiles::apply_homing(
+                        current_vel, pd.pos, target, 0.05,
+                    );
+                } else {
+                    // Fallback: home toward nearest valid target
+                    let is_player_fired = pd.source.is_some();
+                    let target_pos = if is_player_fired {
+                        monster_data.iter()
+                            .min_by(|a, b| {
+                                let da = a.1.distance(glam::Vec2::new(pd.pos.x, pd.pos.y));
+                                let db = b.1.distance(glam::Vec2::new(pd.pos.x, pd.pos.y));
+                                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                            })
+                            .map(|(_, _, _, _, _, pos3, _, _)| *pos3)
+                    } else {
+                        player_data.map(|(_, _, _, _, _, pos3)| pos3)
+                    };
+                    if let Some(target) = target_pos {
+                        current_vel = crate::combat::projectiles::apply_homing(
+                            current_vel, pd.pos, target, 0.05,
+                        );
                     }
                 }
+            }
 
-                // Spawn detonation effect
-                if let (Some(det_point), Some(effect_idx)) =
-                    (update.detonation_point, update.effect_def)
-                {
-                    effects_to_spawn.push((det_point, effect_idx));
+            // 3. Apply wander
+            let (h_wander, v_wander, pass_transparent) = rng_vals[idx];
+            if flags & ProjectileFlags::HORIZONTAL_WANDER != 0 {
+                let speed = current_vel.length();
+                if speed > 1e-6 {
+                    let angle = current_vel.y.atan2(current_vel.x) + h_wander;
+                    current_vel.x = angle.cos() * speed;
+                    current_vel.y = angle.sin() * speed;
                 }
+            }
+            if flags & ProjectileFlags::VERTICAL_WANDER != 0 {
+                current_vel.z += v_wander * current_vel.length() * 0.1;
+            }
 
-                // AoE damage
-                if update.aoe_radius > 0.0 {
-                    if let Some(det_point) = update.detonation_point {
-                        // Damage nearby entities
-                        let det_2d = glam::Vec2::new(det_point.x, det_point.y);
+            // 4. Advance position
+            let (new_pos, tick_dist) =
+                crate::combat::projectiles::advance_projectile(pd.pos, current_vel);
+            let new_distance = pd.proj.distance_traveled + tick_dist;
+            let new_ticks = pd.proj.ticks_alive.saturating_add(1);
+            let mut current_polygon = pd.poly;
 
-                        // Damage monsters
-                        for (entity, center, _, _, _) in &monster_data {
+            // 5. Check range limit (despawn silently)
+            if crate::combat::projectiles::check_range_limit(new_distance, max_range) {
+                actions.push(ProjAction::DespawnSilent { entity: pd.entity });
+                continue;
+            }
+
+            // 6. Check animation-based detonation
+            if flags & ProjectileFlags::STOP_WHEN_ANIMATION_LOOPS != 0 && new_ticks >= 15 {
+                let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, new_pos.z);
+                actions.push(ProjAction::Detonate {
+                    entity: pd.entity,
+                    hit_point: new_pos,
+                    hit_entity: None,
+                    damage_amount: 0,
+                    aoe_damage_base: proj_damage_base,
+                    aoe_radius: def.area_of_effect as f32 / 1024.0,
+                    effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                    is_submerged: is_sub,
+                    media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                    rebound_sound,
+                });
+                continue;
+            }
+
+            // 7. Check wall collision
+            let mut wall_handled = false;
+            if current_polygon < polygon_adjacency.len() {
+                let old_2d = glam::Vec2::new(pd.pos.x, pd.pos.y);
+                let new_2d = glam::Vec2::new(new_pos.x, new_pos.y);
+
+                // Check all polygon edges for crossing
+                for &(line_idx, adj) in &polygon_adjacency[current_polygon] {
+                    let (la, lb) = line_endpoints[line_idx];
+                    if let Some(hit) = crate::collision::segment_intersection(old_2d, new_2d, la, lb) {
+                        let is_passable = adj.is_some() && !line_solid[line_idx];
+                        let is_transparent = line_transparent.get(line_idx).copied().unwrap_or(false);
+
+                        if is_passable {
+                            // Cross into adjacent polygon
+                            if let Some(adj_poly) = adj {
+                                current_polygon = adj_poly;
+                            }
+                        } else if is_transparent {
+                            // Transparent wall: check pass-through flags
+                            let passes = if flags & ProjectileFlags::USUALLY_PASS_TRANSPARENT_SIDE != 0 {
+                                true
+                            } else if flags & ProjectileFlags::SOMETIMES_PASS_TRANSPARENT_SIDE != 0 {
+                                pass_transparent
+                            } else {
+                                false
+                            };
+                            if passes {
+                                if let Some(adj_poly) = adj {
+                                    current_polygon = adj_poly;
+                                }
+                            } else {
+                                // Detonate at transparent wall
+                                let hit_z = pd.pos.z + (new_pos.z - pd.pos.z) * hit.t;
+                                let hit_point = glam::Vec3::new(hit.point.x, hit.point.y, hit_z);
+                                let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, hit_point.z);
+                                actions.push(ProjAction::Detonate {
+                                    entity: pd.entity,
+                                    hit_point,
+                                    hit_entity: None,
+                                    damage_amount: 0,
+                                    aoe_damage_base: proj_damage_base,
+                                    aoe_radius: def.area_of_effect as f32 / 1024.0,
+                                    effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                                    is_submerged: is_sub,
+                                    media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                                    rebound_sound,
+                                });
+                                wall_handled = true;
+                                break;
+                            }
+                        } else {
+                            // Solid wall hit
+                            let hit_z = pd.pos.z + (new_pos.z - pd.pos.z) * hit.t;
+                            let hit_point = glam::Vec3::new(hit.point.x, hit.point.y, hit_z);
+
+                            if flags & ProjectileFlags::REBOUNDS_FROM_WALLS != 0 {
+                                let reflected = crate::combat::projectiles::reflect_velocity_wall(
+                                    current_vel, la, lb,
+                                );
+                                actions.push(ProjAction::ReboundWall {
+                                    entity: pd.entity,
+                                    hit_point,
+                                    new_vel: reflected,
+                                    new_distance,
+                                    new_ticks_alive: new_ticks,
+                                    new_polygon: current_polygon,
+                                    rebound_sound,
+                                });
+                            } else {
+                                let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, hit_point.z);
+                                actions.push(ProjAction::Detonate {
+                                    entity: pd.entity,
+                                    hit_point,
+                                    hit_entity: None,
+                                    damage_amount: 0,
+                                    aoe_damage_base: proj_damage_base,
+                                    aoe_radius: def.area_of_effect as f32 / 1024.0,
+                                    effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                                    is_submerged: is_sub,
+                                    media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                                    rebound_sound,
+                                });
+                            }
+                            wall_handled = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if wall_handled {
+                continue;
+            }
+
+            // 8. Check floor/ceiling collision
+            let floor_h = floor_heights.get(current_polygon).copied().unwrap_or(0.0);
+            let ceil_h = ceiling_heights.get(current_polygon).copied().unwrap_or(100.0);
+
+            if new_pos.z <= floor_h {
+                if flags & ProjectileFlags::REBOUNDS_FROM_FLOOR != 0 {
+                    let reflected = crate::combat::projectiles::reflect_velocity_floor(current_vel, 0.2);
+                    let clamped_pos = glam::Vec3::new(new_pos.x, new_pos.y, floor_h + 0.01);
+                    actions.push(ProjAction::ReboundFloor {
+                        entity: pd.entity,
+                        new_pos: clamped_pos,
+                        new_vel: reflected,
+                        new_distance,
+                        new_ticks_alive: new_ticks,
+                        new_polygon: current_polygon,
+                        rebound_sound,
+                    });
+                    continue;
+                } else {
+                    let hit_point = glam::Vec3::new(new_pos.x, new_pos.y, floor_h);
+                    let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, hit_point.z);
+                    actions.push(ProjAction::Detonate {
+                        entity: pd.entity,
+                        hit_point,
+                        hit_entity: None,
+                        damage_amount: 0,
+                        aoe_damage_base: proj_damage_base,
+                        aoe_radius: def.area_of_effect as f32 / 1024.0,
+                        effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                        is_submerged: is_sub,
+                        media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                        rebound_sound,
+                    });
+                    continue;
+                }
+            }
+
+            if new_pos.z >= ceil_h {
+                let hit_point = glam::Vec3::new(new_pos.x, new_pos.y, ceil_h);
+                let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, hit_point.z);
+                actions.push(ProjAction::Detonate {
+                    entity: pd.entity,
+                    hit_point,
+                    hit_entity: None,
+                    damage_amount: 0,
+                    aoe_damage_base: proj_damage_base,
+                    aoe_radius: def.area_of_effect as f32 / 1024.0,
+                    effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                    is_submerged: is_sub,
+                    media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                    rebound_sound,
+                });
+                continue;
+            }
+
+            // 9. Check entity collision
+            let is_player_fired = pd.source.is_some();
+            let mut targets: Vec<(glam::Vec2, f32, f32, f32)> = Vec::new();
+            let mut target_entities: Vec<bevy_ecs::entity::Entity> = Vec::new();
+
+            if is_player_fired {
+                for (e, center, radius, z_bot, z_top, _, _, _) in &monster_data {
+                    targets.push((*center, *radius, *z_bot, *z_top));
+                    target_entities.push(*e);
+                }
+            } else {
+                if let Some((e, center, radius, z_bot, z_top, _)) = &player_data {
+                    targets.push((*center, *radius, *z_bot, *z_top));
+                    target_entities.push(*e);
+                }
+            }
+
+            if let Some(hit) = crate::combat::projectiles::check_projectile_entity_collision(
+                pd.pos, new_pos, &targets,
+            ) {
+                let hit_entity = target_entities[hit.entity_index];
+                let damage_base = def.damage.base;
+                let damage_scale = def.damage.scale;
+                let damage_amount = (damage_base as f32 * damage_scale) as i16;
+
+                let is_persistent = flags & ProjectileFlags::PERSISTENT != 0
+                    || flags & ProjectileFlags::PERSISTENT_AND_VIRULENT != 0;
+
+                if is_persistent {
+                    actions.push(ProjAction::PersistentHit {
+                        entity: pd.entity,
+                        hit_entity,
+                        damage_amount,
+                        new_pos,
+                        new_vel: current_vel,
+                        new_distance,
+                        new_ticks_alive: new_ticks,
+                        new_polygon: current_polygon,
+                    });
+                    continue;
+                } else {
+                    let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, hit.hit_point.z);
+                    actions.push(ProjAction::Detonate {
+                        entity: pd.entity,
+                        hit_point: hit.hit_point,
+                        hit_entity: Some(hit_entity),
+                        damage_amount,
+                        aoe_damage_base: proj_damage_base,
+                        aoe_radius: def.area_of_effect as f32 / 1024.0,
+                        effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                        is_submerged: is_sub,
+                        media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                        rebound_sound,
+                    });
+                    continue;
+                }
+            }
+
+            // 10. Check media boundary interaction
+            let media_idx = polygon_media_index.get(current_polygon).copied().unwrap_or(-1);
+            if media_idx >= 0 {
+                if let Some(&(media_height, _media_type)) = media_data.get(&(media_idx as usize)) {
+                    // Check if projectile crossed the media surface
+                    let was_above = pd.pos.z >= media_height;
+                    let now_below = new_pos.z < media_height;
+                    let was_below = pd.pos.z < media_height;
+                    let now_above = new_pos.z >= media_height;
+
+                    if (was_above && now_below) || (was_below && now_above) {
+                        if def.media_projectile_promotion >= 0 {
+                            actions.push(ProjAction::Promote {
+                                entity: pd.entity,
+                                new_def_index: def.media_projectile_promotion as usize,
+                                position: new_pos,
+                                velocity: current_vel,
+                                polygon: current_polygon,
+                                source: pd.source,
+                            });
+                            continue;
+                        } else if flags & ProjectileFlags::PASSES_MEDIA_BOUNDARY == 0 {
+                            let hit_point = glam::Vec3::new(new_pos.x, new_pos.y, media_height);
+                            actions.push(ProjAction::Detonate {
+                                entity: pd.entity,
+                                hit_point,
+                                hit_entity: None,
+                                damage_amount: 0,
+                                aoe_damage_base: proj_damage_base,
+                                aoe_radius: def.area_of_effect as f32 / 1024.0,
+                                effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                                is_submerged: true,
+                                media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                                rebound_sound,
+                            });
+                            continue;
+                        }
+                        // PASSES_MEDIA_BOUNDARY: fall through to continue
+                    }
+                }
+            }
+
+            // 11. Spawn contrails
+            let mut new_contrails = pd.proj.contrails_spawned;
+            let contrail_effect = if def.contrail_effect >= 0
+                && def.ticks_between_contrails > 0
+                && new_contrails < def.maximum_contrails as u16
+                && new_ticks > 0
+                && new_ticks % (def.ticks_between_contrails as u16) == 0
+            {
+                new_contrails += 1;
+                Some((new_pos, def.contrail_effect as usize))
+            } else {
+                None
+            };
+
+            // 12. Continue flying
+            actions.push(ProjAction::Continue {
+                entity: pd.entity,
+                new_pos,
+                new_vel: current_vel,
+                new_distance,
+                new_ticks_alive: new_ticks,
+                new_contrails_spawned: new_contrails,
+                new_polygon: current_polygon,
+                contrail_effect,
+            });
+        }
+
+        // Apply all actions
+        let mut to_despawn: Vec<bevy_ecs::entity::Entity> = Vec::new();
+        let mut effects_to_spawn: Vec<(glam::Vec3, usize)> = Vec::new();
+        let mut sound_events: Vec<(i16, glam::Vec3)> = Vec::new();
+        let mut promotions: Vec<(bevy_ecs::entity::Entity, usize, glam::Vec3, glam::Vec3, usize, Option<bevy_ecs::entity::Entity>)> = Vec::new();
+
+        for action in &actions {
+            match action {
+                ProjAction::Continue {
+                    entity, new_pos, new_vel, new_distance,
+                    new_ticks_alive, new_contrails_spawned, new_polygon,
+                    contrail_effect,
+                } => {
+                    if let Some(mut pos) = self.world.get_mut::<crate::Position>(*entity) {
+                        pos.0 = *new_pos;
+                    }
+                    if let Some(mut vel) = self.world.get_mut::<crate::Velocity>(*entity) {
+                        vel.0 = *new_vel;
+                    }
+                    if let Some(mut proj) = self.world.get_mut::<crate::Projectile>(*entity) {
+                        proj.distance_traveled = *new_distance;
+                        proj.ticks_alive = *new_ticks_alive;
+                        proj.contrails_spawned = *new_contrails_spawned;
+                        proj.current_polygon = *new_polygon;
+                    }
+                    if let Some(mut poly) = self.world.get_mut::<crate::PolygonIndex>(*entity) {
+                        poly.0 = *new_polygon;
+                    }
+                    if let Some((pos, eff_idx)) = contrail_effect {
+                        effects_to_spawn.push((*pos, *eff_idx));
+                    }
+                }
+                ProjAction::Detonate {
+                    entity, hit_point, hit_entity, damage_amount,
+                    aoe_damage_base, aoe_radius, effect_def, is_submerged, media_effect_def,
+                    ..
+                } => {
+                    to_despawn.push(*entity);
+
+                    // Direct hit damage
+                    if let Some(hit_ent) = hit_entity {
+                        if *damage_amount > 0 {
+                            self.apply_damage_to_entity(*hit_ent, *damage_amount);
+                            self.world.resource_mut::<crate::world::SimEvents>().push(
+                                crate::world::SimEvent::EntityDamaged {
+                                    entity: *hit_ent,
+                                    amount: *damage_amount,
+                                    damage_type: 0,
+                                },
+                            );
+                        }
+                    }
+
+                    // AoE damage (uses projectile definition base damage, not direct hit amount)
+                    if *aoe_radius > 0.0 {
+                        let det_2d = glam::Vec2::new(hit_point.x, hit_point.y);
+                        for (ent, center, _, _, _, _, _, _) in &monster_data {
                             let dist = det_2d.distance(*center);
                             let aoe_dmg = crate::combat::damage::calculate_aoe_damage(
-                                update.damage_amount,
-                                dist,
-                                update.aoe_radius,
+                                *aoe_damage_base, dist, *aoe_radius,
                             );
                             if aoe_dmg > 0 {
-                                self.apply_damage_to_entity(*entity, aoe_dmg);
+                                self.apply_damage_to_entity(*ent, aoe_dmg);
                             }
                         }
-
-                        // Damage player
-                        if let Some((pe, pcenter, _, _, _)) = &player_data {
+                        if let Some((pe, pcenter, _, _, _, _)) = &player_data {
                             let dist = det_2d.distance(*pcenter);
                             let aoe_dmg = crate::combat::damage::calculate_aoe_damage(
-                                update.damage_amount,
-                                dist,
-                                update.aoe_radius,
+                                *aoe_damage_base, dist, *aoe_radius,
                             );
                             if aoe_dmg > 0 {
                                 self.apply_damage_to_entity(*pe, aoe_dmg);
                             }
                         }
                     }
+
+                    // Detonation effect
+                    let eff = if *is_submerged {
+                        media_effect_def.or(*effect_def)
+                    } else {
+                        *effect_def
+                    };
+                    if let Some(eff_idx) = eff {
+                        effects_to_spawn.push((*hit_point, eff_idx));
+                    }
                 }
-            } else {
-                // Update position/velocity
-                if let Some(mut pos) = self.world.get_mut::<crate::Position>(update.entity) {
-                    pos.0 = update.new_pos;
+                ProjAction::DespawnSilent { entity } => {
+                    to_despawn.push(*entity);
                 }
-                if let Some(mut vel) = self.world.get_mut::<crate::Velocity>(update.entity) {
-                    vel.0 = update.new_vel;
+                ProjAction::ReboundWall {
+                    entity, hit_point, new_vel, new_distance,
+                    new_ticks_alive, new_polygon, rebound_sound,
+                } | ProjAction::ReboundFloor {
+                    entity, new_pos: hit_point, new_vel, new_distance,
+                    new_ticks_alive, new_polygon, rebound_sound,
+                } => {
+                    if let Some(mut pos) = self.world.get_mut::<crate::Position>(*entity) {
+                        pos.0 = *hit_point;
+                    }
+                    if let Some(mut vel) = self.world.get_mut::<crate::Velocity>(*entity) {
+                        vel.0 = *new_vel;
+                    }
+                    if let Some(mut proj) = self.world.get_mut::<crate::Projectile>(*entity) {
+                        proj.distance_traveled = *new_distance;
+                        proj.ticks_alive = *new_ticks_alive;
+                        proj.current_polygon = *new_polygon;
+                    }
+                    if *rebound_sound >= 0 {
+                        sound_events.push((*rebound_sound, *hit_point));
+                    }
                 }
-                if let Some(mut proj) = self.world.get_mut::<crate::Projectile>(update.entity) {
-                    proj.distance_traveled = update.new_distance;
+                ProjAction::PersistentHit {
+                    entity, hit_entity, damage_amount,
+                    new_pos, new_vel, new_distance,
+                    new_ticks_alive, new_polygon,
+                } => {
+                    // Apply damage but keep projectile alive
+                    if *damage_amount > 0 {
+                        self.apply_damage_to_entity(*hit_entity, *damage_amount);
+                        self.world.resource_mut::<crate::world::SimEvents>().push(
+                            crate::world::SimEvent::EntityDamaged {
+                                entity: *hit_entity,
+                                amount: *damage_amount,
+                                damage_type: 0,
+                            },
+                        );
+                    }
+                    if let Some(mut pos) = self.world.get_mut::<crate::Position>(*entity) {
+                        pos.0 = *new_pos;
+                    }
+                    if let Some(mut vel) = self.world.get_mut::<crate::Velocity>(*entity) {
+                        vel.0 = *new_vel;
+                    }
+                    if let Some(mut proj) = self.world.get_mut::<crate::Projectile>(*entity) {
+                        proj.distance_traveled = *new_distance;
+                        proj.ticks_alive = *new_ticks_alive;
+                        proj.current_polygon = *new_polygon;
+                    }
+                }
+                ProjAction::Promote {
+                    entity, new_def_index, position, velocity,
+                    polygon, source,
+                } => {
+                    to_despawn.push(*entity);
+                    promotions.push((*entity, *new_def_index, *position, *velocity, *polygon, *source));
                 }
             }
         }
@@ -1185,6 +1647,32 @@ impl SimWorld {
         // Despawn projectiles
         for entity in to_despawn {
             self.world.despawn(entity);
+        }
+
+        // Spawn promoted projectiles
+        for (_old_entity, def_index, position, velocity, polygon, source) in promotions {
+            let new_speed = physics_tables
+                .projectiles
+                .as_ref()
+                .and_then(|p| p.get(def_index))
+                .map(|d| d.speed as f32 / 1024.0)
+                .unwrap_or(velocity.length());
+            let dir = velocity.normalize_or_zero();
+            let mut spawned = self.world.spawn((
+                crate::Projectile {
+                    definition_index: def_index,
+                    distance_traveled: 0.0,
+                    contrails_spawned: 0,
+                    ticks_alive: 0,
+                    current_polygon: polygon,
+                },
+                crate::Position(position),
+                crate::Velocity(dir * new_speed),
+                crate::PolygonIndex(polygon),
+            ));
+            if let Some(src) = source {
+                spawned.insert(crate::ProjectileSource(src));
+            }
         }
 
         // Spawn effects
@@ -1202,6 +1690,16 @@ impl SimWorld {
                 },
                 crate::Position(pos),
             ));
+        }
+
+        // Emit sound events
+        for (sound_idx, pos) in sound_events {
+            self.world.resource_mut::<crate::world::SimEvents>().push(
+                crate::world::SimEvent::SoundTrigger {
+                    sound_index: sound_idx as usize,
+                    position: pos,
+                },
+            );
         }
     }
 
