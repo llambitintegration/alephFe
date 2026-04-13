@@ -53,8 +53,8 @@ impl CameraState {
             self.pitch.sin(),
             self.yaw.sin() * self.pitch.cos(),
         ).normalize();
-        let view = Mat4::look_to_rh(self.position, dir, Vec3::Y);
-        let proj = Mat4::perspective_rh(90.0_f32.to_radians(), aspect, 0.1, 1000.0);
+        let view = Mat4::look_to_lh(self.position, dir, Vec3::Y);
+        let proj = Mat4::perspective_lh(90.0_f32.to_radians(), aspect, 0.1, 1000.0);
         let vp = proj * view;
         CameraUniform {
             view_proj: vp.to_cols_array(),
@@ -95,10 +95,10 @@ impl InputState {
     }
 
     fn to_mouse_delta(&mut self) -> (f32, f32) {
-        // Negate yaw: positive mouse_dx (rightward) should decrease sim facing
-        // so that cam.yaw = -facing increases → camera turns right.
-        // Negate pitch: mouse up (negative dy) should produce positive pitch = look up.
-        let yaw = -(self.mouse_dx as f32);
+        // Yaw: positive mouse_dx (rightward) increases sim facing.
+        // cam.yaw = -facing then decreases, turning camera toward render -Z = Marathon RIGHT.
+        // Pitch: negate mouse_dy so mouse-up (negative dy) produces positive pitch = look up.
+        let yaw = self.mouse_dx as f32;
         let pitch = -(self.mouse_dy as f32);
         self.mouse_dx = 0.0;
         self.mouse_dy = 0.0;
@@ -204,7 +204,7 @@ impl GameState {
         // remains authoritative: on the next tick `to_mouse_delta()` consumes
         // these and updates `curr_camera.yaw/pitch` to match, so the preview
         // transitions seamlessly.
-        cam.yaw += self.input.mouse_dx as f32;
+        cam.yaw -= self.input.mouse_dx as f32;
         let pitch_limit = std::f32::consts::FRAC_PI_6; // ~30° matches Marathon's maximum_elevation
         cam.pitch = (cam.pitch + (-self.input.mouse_dy as f32)).clamp(-pitch_limit, pitch_limit);
         let uniform = cam.to_uniform(self.aspect, elapsed);
@@ -643,8 +643,8 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
         match e.code().as_str() {
             "KeyW" | "ArrowUp" => st.input.forward = true,
             "KeyS" | "ArrowDown" => st.input.backward = true,
-            "KeyA" => st.input.strafe_right = true,
-            "KeyD" => st.input.strafe_left = true,
+            "KeyA" => st.input.strafe_left = true,
+            "KeyD" => st.input.strafe_right = true,
             "Space" => st.input.action = true,
             "Tab" => { st.input.toggle_map = true; e.prevent_default(); return; }
             _ => {}
@@ -660,8 +660,8 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
         match e.code().as_str() {
             "KeyW" | "ArrowUp" => st.input.forward = false,
             "KeyS" | "ArrowDown" => st.input.backward = false,
-            "KeyA" => st.input.strafe_right = false,
-            "KeyD" => st.input.strafe_left = false,
+            "KeyA" => st.input.strafe_left = false,
+            "KeyD" => st.input.strafe_right = false,
             "Space" => st.input.action = false,
             _ => {}
         }

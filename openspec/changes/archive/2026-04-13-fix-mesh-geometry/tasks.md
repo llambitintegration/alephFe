@@ -24,4 +24,4 @@
 ## 4. Integration Testing
 
 - [x] 4.1 Run full cargo test suite in Docker and verify all existing + new tests pass
-- [ ] 4.2 Deploy to marathon.llambit.io and verify Waterloo Waterpark renders with no visible geometry gaps
+- [x] 4.2 Deploy to marathon.llambit.io and verify Waterloo Waterpark renders with no visible geometry gaps
