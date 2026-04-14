@@ -6,6 +6,8 @@ struct CameraUniform {
     camera_pitch: f32,
     elapsed_time: f32,
     _padding: f32,
+    camera_position: vec3<f32>,
+    _padding2: f32,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
@@ -70,9 +72,11 @@ fn apply_transfer_mode(uv: vec2<f32>, mode: u32, time: f32, world_pos: vec3<f32>
             return uv + vec2<f32>(time * 0.5, 0.0);
         }
         case TRANSFER_LANDSCAPE: {
-            let u = camera.camera_yaw / 6.283185;
-            let v = 0.5 - camera.camera_pitch / 3.14159;
-            return vec2<f32>(u, v);
+            // Marathon landscape textures: V = azimuth (wraps horizon), U = elevation
+            let dir = normalize(world_pos - camera.camera_position);
+            let azimuth = atan2(dir.z, dir.x) / 6.283185 + 0.5;
+            let elevation = 0.5 - asin(clamp(dir.y, -1.0, 1.0)) / 3.14159;
+            return vec2<f32>(elevation, azimuth);
         }
         default: {
             return uv;

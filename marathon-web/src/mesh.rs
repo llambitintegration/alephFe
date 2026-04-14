@@ -5,6 +5,8 @@ use marathon_formats::MapData;
 pub struct PolygonInfo {
     pub floor_light: f32,
     pub floor_transfer_mode: u32,
+    pub ceiling_light: f32,
+    pub ceiling_transfer_mode: u32,
 }
 
 /// GPU vertex format: position + UV + texture descriptor + light + transfer mode.
@@ -219,8 +221,8 @@ fn build_ceiling(
             position: [wx, ceil_y, wz],
             uv: [u, v],
             texture_descriptor: tex_desc,
-            light: info.floor_light,
-            transfer_mode: info.floor_transfer_mode,
+            light: info.ceiling_light,
+            transfer_mode: info.ceiling_transfer_mode,
         });
         actual_verts += 1;
     }
@@ -350,7 +352,7 @@ fn build_wall_side(
                 let tex = &side.primary_texture;
                 emit_wall_quad(
                     vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                    tex.texture.0 as u32, info,
+                    tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
                 );
             }
         }
@@ -363,7 +365,7 @@ fn build_wall_side(
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                        tex.texture.0 as u32, info,
+                        tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
                     );
                 }
             }
@@ -377,7 +379,7 @@ fn build_wall_side(
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                        tex.texture.0 as u32, info,
+                        tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
                     );
                 }
             }
@@ -392,7 +394,7 @@ fn build_wall_side(
                     let tex = &side.secondary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, low_bottom, low_top, wall_len, tex,
-                        tex.texture.0 as u32, info,
+                        tex.texture.0 as u32, info.floor_light, side.secondary_transfer_mode as u32,
                     );
                 }
 
@@ -402,7 +404,7 @@ fn build_wall_side(
                     let tex = &side.transparent_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, trans_bottom, trans_top, wall_len,
-                        tex, tex.texture.0 as u32, info,
+                        tex, tex.texture.0 as u32, info.floor_light, side.transparent_transfer_mode as u32,
                     );
                 }
 
@@ -412,7 +414,7 @@ fn build_wall_side(
                     let tex = &side.primary_texture;
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, high_bottom, high_top, wall_len,
-                        tex, tex.texture.0 as u32, info,
+                        tex, tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
                     );
                 }
             }
@@ -433,7 +435,8 @@ fn emit_wall_quad(
     wall_len: f32,
     side_tex: &marathon_formats::SideTexture,
     tex_desc: u32,
-    info: &PolygonInfo,
+    light: f32,
+    transfer_mode: u32,
 ) {
     let base = vertices.len() as u32;
     let height = top - bottom;
@@ -444,29 +447,29 @@ fn emit_wall_quad(
         position: [x0, bottom, z0],
         uv: [u_off, v_off + height],
         texture_descriptor: tex_desc,
-        light: info.floor_light,
-        transfer_mode: info.floor_transfer_mode,
+        light,
+        transfer_mode,
     });
     vertices.push(Vertex {
         position: [x0, top, z0],
         uv: [u_off, v_off],
         texture_descriptor: tex_desc,
-        light: info.floor_light,
-        transfer_mode: info.floor_transfer_mode,
+        light,
+        transfer_mode,
     });
     vertices.push(Vertex {
         position: [x1, top, z1],
         uv: [u_off + wall_len, v_off],
         texture_descriptor: tex_desc,
-        light: info.floor_light,
-        transfer_mode: info.floor_transfer_mode,
+        light,
+        transfer_mode,
     });
     vertices.push(Vertex {
         position: [x1, bottom, z1],
         uv: [u_off + wall_len, v_off + height],
         texture_descriptor: tex_desc,
-        light: info.floor_light,
-        transfer_mode: info.floor_transfer_mode,
+        light,
+        transfer_mode,
     });
 
     indices.push(base);
@@ -578,6 +581,8 @@ mod tests {
         PolygonInfo {
             floor_light: 1.0,
             floor_transfer_mode: 0,
+            ceiling_light: 1.0,
+            ceiling_transfer_mode: 0,
         }
     }
 

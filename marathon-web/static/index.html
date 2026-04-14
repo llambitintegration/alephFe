@@ -16,27 +16,39 @@
         #loading .progress-bar { height: 100%; background: #4a9; border-radius: 3px; width: 0%; transition: width 0.3s; }
         #loading .status { margin-top: 1em; font-size: 0.9em; color: #888; }
         #loading .error { color: #c44; margin-top: 1em; }
-        canvas { display: block; width: 100vw; height: 100vh; }
+        #marathon-canvas { display: block; width: 100vw; height: 100vh; }
         #controls {
-            position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+            position: fixed; bottom: 140px; left: 50%; transform: translateX(-50%);
             background: rgba(0,0,0,0.7); padding: 10px 20px; border-radius: 8px;
             font-size: 0.8em; color: #888; z-index: 5; pointer-events: none;
         }
         #hud {
-            position: fixed; bottom: 0; left: 0; right: 0; height: 48px;
-            display: flex; align-items: center; justify-content: center; gap: 24px;
-            background: rgba(0,0,0,0.6); z-index: 6; pointer-events: none;
-            font-size: 12px; display: none;
+            position: fixed; bottom: 0; left: 0; right: 0; height: 128px;
+            display: none; grid-template-columns: 128px 1fr 200px;
+            background: #1a1a1a; z-index: 6; pointer-events: none;
+            font-size: 12px; border-top: 2px solid #333;
         }
+        #hud-left { display: flex; align-items: center; justify-content: center; border-right: 1px solid #333; }
+        #hud-center { display: flex; flex-direction: column; justify-content: center; padding: 8px 16px; gap: 6px; }
+        #hud-right { display: flex; flex-direction: column; justify-content: center; padding: 8px 12px; border-left: 1px solid #333; }
         .hud-bar-group { display: flex; align-items: center; gap: 6px; }
-        .hud-label { color: #888; text-transform: uppercase; font-size: 10px; width: 48px; text-align: right; }
-        .hud-bar { width: 140px; height: 12px; background: #222; border-radius: 2px; overflow: hidden; }
-        .hud-bar-fill { height: 100%; transition: width 0.1s; border-radius: 2px; }
-        .hud-val { color: #ccc; width: 32px; font-size: 11px; }
+        .hud-label { color: #666; text-transform: uppercase; font-size: 10px; width: 52px; text-align: right; letter-spacing: 1px; }
+        .hud-bar { width: 160px; height: 14px; background: #111; overflow: hidden;
+            border: 1px solid #333;
+            background-image: repeating-linear-gradient(90deg, transparent, transparent 9px, #0a0a0a 9px, #0a0a0a 10px);
+        }
+        .hud-bar-fill { height: 100%; transition: width 0.1s; }
+        .hud-val { color: #aaa; width: 36px; font-size: 11px; text-align: right; }
         #health-fill { background: #4a4; }
         #shield-fill { background: #48c; }
         #oxygen-group { display: none; }
         #oxygen-fill { background: #4ac; }
+        #sensor-canvas { width: 112px; height: 112px; }
+        #weapon-name { color: #6a6; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px; }
+        #weapon-ammo-group { display: flex; flex-direction: column; gap: 3px; }
+        .ammo-row { display: flex; align-items: center; gap: 6px; }
+        .ammo-label { color: #666; font-size: 9px; text-transform: uppercase; width: 28px; }
+        .ammo-val { color: #aaa; font-size: 14px; }
     </style>
 </head>
 <body>
@@ -49,20 +61,32 @@
     <canvas id="marathon-canvas" tabindex="0"></canvas>
     <canvas id="automap-canvas" style="display:none;position:fixed;inset:0;z-index:4;background:rgba(0,0,0,0.7);pointer-events:none"></canvas>
     <div id="hud">
-        <div class="hud-bar-group">
-            <span class="hud-label">Health</span>
-            <div class="hud-bar"><div class="hud-bar-fill" id="health-fill" style="width:100%"></div></div>
-            <span class="hud-val" id="health-val">150</span>
+        <div id="hud-left">
+            <canvas id="sensor-canvas" width="112" height="112"></canvas>
         </div>
-        <div class="hud-bar-group">
-            <span class="hud-label">Shield</span>
-            <div class="hud-bar"><div class="hud-bar-fill" id="shield-fill" style="width:100%"></div></div>
-            <span class="hud-val" id="shield-val">150</span>
+        <div id="hud-center">
+            <div class="hud-bar-group">
+                <span class="hud-label">Health</span>
+                <div class="hud-bar"><div class="hud-bar-fill" id="health-fill" style="width:100%"></div></div>
+                <span class="hud-val" id="health-val">150</span>
+            </div>
+            <div class="hud-bar-group">
+                <span class="hud-label">Shield</span>
+                <div class="hud-bar"><div class="hud-bar-fill" id="shield-fill" style="width:100%"></div></div>
+                <span class="hud-val" id="shield-val">150</span>
+            </div>
+            <div class="hud-bar-group" id="oxygen-group">
+                <span class="hud-label">Oxygen</span>
+                <div class="hud-bar"><div class="hud-bar-fill" id="oxygen-fill" style="width:100%"></div></div>
+                <span class="hud-val" id="oxygen-val">600</span>
+            </div>
         </div>
-        <div class="hud-bar-group" id="oxygen-group">
-            <span class="hud-label">Oxygen</span>
-            <div class="hud-bar"><div class="hud-bar-fill" id="oxygen-fill" style="width:100%"></div></div>
-            <span class="hud-val" id="oxygen-val">600</span>
+        <div id="hud-right">
+            <div id="weapon-name">Fists</div>
+            <div id="weapon-ammo-group">
+                <div class="ammo-row"><span class="ammo-label">Pri</span><span class="ammo-val" id="ammo-primary">--</span></div>
+                <div class="ammo-row"><span class="ammo-label">Sec</span><span class="ammo-val" id="ammo-secondary">--</span></div>
+            </div>
         </div>
     </div>
     <div id="controls">WASD: Move | Mouse: Look | Click: Capture mouse | Space: Action</div>
@@ -88,6 +112,68 @@
             if (!response.ok) throw new Error(`Failed to fetch ${label}: ${response.status}`);
             return new Uint8Array(await response.arrayBuffer());
         }
+
+        const WEAPON_NAMES = ["Fists", "Magnum", "Fusion Pistol", "Assault Rifle", "Missile Launcher", "Flamethrower", "Alien Weapon", "Shotgun", "SMG", "TOZT"];
+
+        window.updateWeaponDisplay = function(defIndex, primaryAmmo, secondaryAmmo) {
+            const nameEl = document.getElementById('weapon-name');
+            const priEl = document.getElementById('ammo-primary');
+            const secEl = document.getElementById('ammo-secondary');
+            if (nameEl) nameEl.textContent = WEAPON_NAMES[defIndex] || 'Unknown';
+            if (priEl) priEl.textContent = primaryAmmo >= 0 ? primaryAmmo : '--';
+            if (secEl) secEl.textContent = secondaryAmmo >= 0 ? secondaryAmmo : '--';
+        };
+
+        window.updateMotionSensor = function(playerYaw, entityData) {
+            const canvas = document.getElementById('sensor-canvas');
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d');
+            const cx = 56, cy = 56, r = 50;
+
+            ctx.clearRect(0, 0, 112, 112);
+
+            // Background circle
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.fillStyle = '#0a1a0a';
+            ctx.fill();
+            ctx.strokeStyle = '#2a4a2a';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // Crosshairs
+            ctx.strokeStyle = '#1a3a1a';
+            ctx.beginPath();
+            ctx.moveTo(cx - r, cy); ctx.lineTo(cx + r, cy);
+            ctx.moveTo(cx, cy - r); ctx.lineTo(cx, cy + r);
+            ctx.stroke();
+
+            // Range rings
+            ctx.beginPath();
+            ctx.arc(cx, cy, r * 0.5, 0, Math.PI * 2);
+            ctx.stroke();
+
+            // Player dot (center)
+            ctx.fillStyle = '#4a4';
+            ctx.fillRect(cx - 2, cy - 2, 4, 4);
+
+            // Entity dots
+            if (!entityData) return;
+            const sensorRange = 8.0;
+            const cosY = Math.cos(-playerYaw);
+            const sinY = Math.sin(-playerYaw);
+            for (let i = 0; i < entityData.length; i += 3) {
+                const rx = entityData[i], rz = entityData[i + 1], etype = entityData[i + 2];
+                // Rotate by player yaw
+                const sx = rx * cosY - rz * sinY;
+                const sz = rx * sinY + rz * cosY;
+                const px = cx + (sx / sensorRange) * r;
+                const py = cy - (sz / sensorRange) * r;
+                if (px < cx - r || px > cx + r || py < cy - r || py > cy + r) continue;
+                ctx.fillStyle = etype === 0 ? '#c44' : etype === 2 ? '#4ac' : '#4a4';
+                ctx.fillRect(px - 2, py - 2, 4, 4);
+            }
+        };
 
         async function main() {
             try {

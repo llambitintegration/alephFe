@@ -29,10 +29,10 @@
 
 ## 5. Weapon View Model
 
-- [ ] 5.1 Add weapon_state query to SimWorld returning current weapon collection, shape, and animation frame
-- [ ] 5.2 Create weapon sprite render pass in render.rs: render a screen-space textured quad at bottom-center using the existing SpriteRenderer pipeline
-- [ ] 5.3 Load weapon sprite textures from shapes file using the same CLUT conversion as entity sprites
-- [ ] 5.4 Update weapon sprite each frame based on sim weapon animation state
+- [x] 5.1 Add weapon_state query to SimWorld returning current weapon collection, shape, and animation frame
+- [x] 5.2 Create weapon sprite render pass in render.rs: render a screen-space textured quad at bottom-center using the existing SpriteRenderer pipeline
+- [x] 5.3 Load weapon sprite textures from shapes file using the same CLUT conversion as entity sprites
+- [x] 5.4 Update weapon sprite each frame based on sim weapon animation state
 
 ## 6. Automap
 
@@ -45,5 +45,5 @@
 
 - [x] 7.1 Run full Docker build+test suite (cargo test for all crates) and verify all tests pass
 - [x] 7.2 Run e2e test suite (docker compose e2e) and verify all 16 tests pass
-- [ ] 7.3 Add e2e test: verify no console errors after game loads and runs for 5 seconds
+- [x] 7.3 Add e2e test: verify no console errors after game loads and runs for 5 seconds
 - [x] 7.4 Deploy to marathon.llambit.io and manually verify: player can move with WASD, look with mouse, HUD displays, weapon visible, automap toggles with Tab

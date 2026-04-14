@@ -23,6 +23,8 @@ struct CameraUniform {
     camera_pitch: f32,
     elapsed_time: f32,
     _padding: f32,
+    camera_position: [f32; 3],
+    _padding2: f32,
 }
 
 
@@ -62,6 +64,8 @@ impl CameraState {
             camera_pitch: self.pitch,
             elapsed_time: elapsed,
             _padding: 0.0,
+            camera_position: self.position.to_array(),
+            _padding2: 0.0,
         }
     }
 }
@@ -145,6 +149,7 @@ struct GameState {
     fallback_bind_group: wgpu::BindGroup,
     texture_bgl: wgpu::BindGroupLayout,
     sprite_renderer: SpriteRenderer,
+    weapon_overlay: crate::sprites::WeaponOverlayRenderer,
     sim: Option<SimWorld>,
     shapes_file: ShapesFile,
     prev_camera: CameraState,
@@ -216,6 +221,15 @@ impl GameState {
             Some(SpriteDrawCall { position: e.position, width: w, height: h, collection: e.shape, bitmap_index: bi, tint: 1.0 })
         }).collect();
 
+        // Resolve weapon sprite for screen-space overlay (rendered after main pass)
+        let weapon_sprite = self.sim.as_mut().and_then(|sim| {
+            let ws = sim.player_weapon_state()?;
+            let (bi, w, h) = crate::sprites::resolve_entity_sprite(
+                &self.shapes_file, ws.collection, ws.shape, ws.frame, 0,
+            )?;
+            Some((ws.collection, bi, w, h))
+        });
+
         // Render
         self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
         let output = match self.surface.get_current_texture() {
@@ -253,6 +267,27 @@ impl GameState {
             }
             self.sprite_renderer.render(&self.device, &mut rp, &self.camera_bind_group, cam.position, cam.yaw, &sprites);
         }
+        // Weapon overlay pass (no depth test, screen-space)
+        if let Some((coll, bi, w, h)) = weapon_sprite {
+            let tex_bg = self.sprite_renderer.collections
+                .get(&coll)
+                .map(|c| &c.bind_group)
+                .unwrap_or(&self.sprite_renderer.collections.values().next().map(|c| &c.bind_group).unwrap_or(&self.fallback_bind_group));
+            let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("weapon_overlay_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view, resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None, occlusion_query_set: None,
+            });
+            self.weapon_overlay.render(
+                &self.device, &mut rp, &self.camera_bind_group, tex_bg,
+                bi, w, h, 1.0,
+                self.config.width as f32, self.config.height as f32,
+            );
+        }
         self.queue.submit(std::iter::once(enc.finish()));
         output.present();
 
@@ -263,7 +298,10 @@ impl GameState {
                 let health = sim.player_health().unwrap_or(0);
                 let shield = sim.player_shield().unwrap_or(0);
                 let oxygen = sim.player_oxygen().unwrap_or(600);
-                update_hud(health, shield, oxygen);
+                let weapon_info = sim.player_weapon_info();
+                let entities = sim.nearby_entities(8.0);
+                let player_yaw = sim.player_facing().unwrap_or(0.0);
+                update_hud(health, shield, oxygen, weapon_info, player_yaw, &entities);
             }
         }
 
@@ -287,13 +325,18 @@ impl GameState {
     }
 }
 
-fn update_hud(health: i16, shield: i16, oxygen: i16) {
+fn update_hud(
+    health: i16, shield: i16, oxygen: i16,
+    weapon_info: Option<(usize, u16, u16)>,
+    player_yaw: f32,
+    entities: &[(f32, f32, u8)],
+) {
     let window = web_sys::window().unwrap();
     let document = window.document().unwrap();
 
-    // Show HUD
+    // Show HUD (grid layout)
     if let Some(hud) = document.get_element_by_id("hud") {
-        let _ = hud.set_attribute("style", "display: flex");
+        let _ = hud.set_attribute("style", "display: grid");
     }
 
     let max_health: f32 = 150.0;
@@ -330,6 +373,26 @@ fn update_hud(health: i16, shield: i16, oxygen: i16) {
     if let Some(el) = document.get_element_by_id("oxygen-val") {
         el.set_text_content(Some(&format!("{oxygen}")));
     }
+
+    // Weapon display via JS
+    if let Some((def_idx, pri, sec)) = weapon_info {
+        let _ = js_sys::eval(&format!(
+            "window.updateWeaponDisplay({},{},{})", def_idx, pri as i32, sec as i32
+        ));
+    }
+
+    // Motion sensor via JS
+    let entity_arr: Vec<f32> = entities.iter().flat_map(|(x, z, t)| vec![*x, *z, *t as f32]).collect();
+    let js_arr = js_sys::Float32Array::new_with_length(entity_arr.len() as u32);
+    js_arr.copy_from(&entity_arr);
+    let _ = js_sys::Reflect::set(
+        &wasm_bindgen::JsValue::from(js_sys::global()),
+        &wasm_bindgen::JsValue::from_str("_sensorData"),
+        &js_arr,
+    );
+    let _ = js_sys::eval(&format!(
+        "window.updateMotionSensor({},window._sensorData)", player_yaw
+    ));
 }
 
 fn draw_automap(lines: &[([f32; 2], [f32; 2])], player_x: f32, player_z: f32, player_yaw: f32) {
@@ -467,7 +530,7 @@ pub async fn run_web(
     });
 
     let cam_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: None, contents: &[0u8; 80], usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        label: None, contents: &[0u8; std::mem::size_of::<CameraUniform>()], usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
     let cam_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None, layout: &cam_bgl, entries: &[wgpu::BindGroupEntry { binding: 0, resource: cam_buf.as_entire_binding() }],
@@ -494,6 +557,11 @@ pub async fn run_web(
     let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: None, contents: &[0u8; 4], usage: wgpu::BufferUsages::INDEX });
 
     let sprite_renderer = SpriteRenderer::new(&device, &queue, &cam_bgl, format);
+    let weapon_overlay = crate::sprites::WeaponOverlayRenderer::new(
+        &device, &cam_bgl,
+        crate::sprites::WeaponOverlayRenderer::texture_bgl(&sprite_renderer),
+        format,
+    );
 
     let cam = CameraState { position: Vec3::ZERO, yaw: 0.0, pitch: 0.0 };
     let now = js_sys::Date::now();
@@ -504,7 +572,7 @@ pub async fn run_web(
         vertex_buffer: vb, index_buffer: ib, num_indices: 0, draw_batches: Vec::new(),
         texture_manager: TextureManager { collections: Default::default(), gpu_textures: Default::default() },
         fallback_bind_group: fb, texture_bgl: tex_bgl,
-        sprite_renderer, sim: None, shapes_file,
+        sprite_renderer, weapon_overlay, sim: None, shapes_file,
         prev_camera: cam, curr_camera: cam,
         input: InputState::new(), entity_snapshots: EntitySnapshots::new(),
         last_frame_ms: now, tick_accum_ms: 0.0, start_ms: now,
@@ -552,7 +620,10 @@ fn create_fallback_texture(device: &wgpu::Device, queue: &wgpu::Queue, layout: &
         wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
     );
     let view = tex.create_view(&wgpu::TextureViewDescriptor { dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default() });
-    let sampler = device.create_sampler(&Default::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear,
+        address_mode_u: wgpu::AddressMode::Repeat, address_mode_v: wgpu::AddressMode::Repeat, ..Default::default()
+    });
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: None, layout,
         entries: &[
@@ -574,6 +645,8 @@ fn load_level_into(state: &mut GameState, wad: &WadFile, physics: Option<&Physic
         mesh::PolygonInfo {
             floor_light: level::evaluate_light_intensity(&map.lights, p.floor_lightsource_index),
             floor_transfer_mode: p.floor_transfer_mode as u32,
+            ceiling_light: level::evaluate_light_intensity(&map.lights, p.ceiling_lightsource_index),
+            ceiling_transfer_mode: p.ceiling_transfer_mode as u32,
         }
     }).collect();
 
@@ -625,7 +698,7 @@ fn load_level_into(state: &mut GameState, wad: &WadFile, physics: Option<&Physic
     state.draw_batches = lm.batches;
 
     let sampler = state.device.create_sampler(&wgpu::SamplerDescriptor {
-        mag_filter: wgpu::FilterMode::Nearest, min_filter: wgpu::FilterMode::Nearest,
+        mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear,
         address_mode_u: wgpu::AddressMode::Repeat, address_mode_v: wgpu::AddressMode::Repeat, ..Default::default()
     });
     tm.create_gpu_textures(&state.device, &state.queue, &state.texture_bgl, &sampler);

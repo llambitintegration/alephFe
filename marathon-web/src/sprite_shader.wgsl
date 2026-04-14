@@ -6,6 +6,8 @@ struct CameraUniform {
     camera_pitch: f32,
     elapsed_time: f32,
     _padding: f32,
+    camera_position: vec3<f32>,
+    _padding2: f32,
 };
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
@@ -30,6 +32,16 @@ struct SpriteVertexOutput {
 fn vs_sprite(in: SpriteVertexInput) -> SpriteVertexOutput {
     var out: SpriteVertexOutput;
     out.clip_position = camera.view_proj * vec4<f32>(in.position, 1.0);
+    out.uv = in.uv;
+    out.tex_index = in.tex_index;
+    out.tint = in.tint;
+    return out;
+}
+
+@vertex
+fn vs_overlay(in: SpriteVertexInput) -> SpriteVertexOutput {
+    var out: SpriteVertexOutput;
+    out.clip_position = vec4<f32>(in.position, 1.0);
     out.uv = in.uv;
     out.tex_index = in.tex_index;
     out.tint = in.tint;

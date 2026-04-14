@@ -227,6 +227,8 @@ fn build_level_mesh_from_single_polygon() {
     let poly_info = vec![PolygonInfo {
         floor_light: 1.0,
         floor_transfer_mode: 0,
+        ceiling_light: 1.0,
+        ceiling_transfer_mode: 0,
     }];
 
     let mesh = build_level_mesh(&map, &poly_info);

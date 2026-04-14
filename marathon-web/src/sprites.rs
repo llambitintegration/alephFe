@@ -502,6 +502,132 @@ pub fn compute_view_angle(camera_pos: Vec3, entity_pos: Vec3, entity_facing: f32
     ((normalized / std::f32::consts::TAU * 8.0 + 0.5) as u16) % 8
 }
 
+/// Screen-space weapon overlay renderer (no depth test, NDC quad).
+pub struct WeaponOverlayRenderer {
+    pipeline: wgpu::RenderPipeline,
+}
+
+impl WeaponOverlayRenderer {
+    /// Create the weapon overlay pipeline, sharing the same texture bind group
+    /// layout as SpriteRenderer.
+    pub fn new(
+        device: &wgpu::Device,
+        camera_bgl: &wgpu::BindGroupLayout,
+        texture_bgl: &wgpu::BindGroupLayout,
+        surface_format: wgpu::TextureFormat,
+    ) -> Self {
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("sprite_shader_overlay"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("sprite_shader.wgsl").into()),
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("weapon_overlay_layout"),
+            bind_group_layouts: &[camera_bgl, texture_bgl],
+            push_constant_ranges: &[],
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("weapon_overlay_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_overlay"),
+                buffers: &[SpriteVertex::layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_sprite"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: surface_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        WeaponOverlayRenderer { pipeline }
+    }
+
+    /// Render a weapon sprite as a screen-space overlay.
+    ///
+    /// Builds a quad in NDC: centered horizontally, anchored at the bottom of
+    /// the viewport, sized to ~35% viewport width with aspect ratio preserved.
+    pub fn render(
+        &self,
+        device: &wgpu::Device,
+        render_pass: &mut wgpu::RenderPass<'_>,
+        camera_bind_group: &wgpu::BindGroup,
+        texture_bind_group: &wgpu::BindGroup,
+        bitmap_index: u32,
+        sprite_width: f32,
+        sprite_height: f32,
+        tint: f32,
+        viewport_width: f32,
+        viewport_height: f32,
+    ) {
+        // Weapon takes ~50% of viewport width in NDC
+        let ndc_half_w = 0.50;
+        // Preserve sprite aspect ratio (no viewport aspect correction -
+        // NDC distortion makes the weapon fill correctly since it's screen-space)
+        let sprite_aspect = sprite_height / sprite_width.max(0.001);
+        let ndc_half_h = ndc_half_w * sprite_aspect;
+
+        // Anchor weapon above the HUD panel so it's not hidden behind the DOM overlay.
+        // NDC range is 2.0 (-1..1), so fraction = 2 * hud_px / viewport_px.
+        const HUD_HEIGHT_PX: f32 = 128.0;
+        let hud_ndc = 2.0 * HUD_HEIGHT_PX / viewport_height;
+        let cx = 0.0_f32; // centered
+        let bottom = -1.0_f32 + hud_ndc;
+        let top = bottom + ndc_half_h * 2.0;
+        let left = cx - ndc_half_w;
+        let right = cx + ndc_half_w;
+
+        let vertices = [
+            SpriteVertex { position: [left, bottom, 0.0], uv: [0.0, 1.0], tex_index: bitmap_index, tint },
+            SpriteVertex { position: [left, top, 0.0], uv: [0.0, 0.0], tex_index: bitmap_index, tint },
+            SpriteVertex { position: [right, top, 0.0], uv: [1.0, 0.0], tex_index: bitmap_index, tint },
+            SpriteVertex { position: [right, bottom, 0.0], uv: [1.0, 1.0], tex_index: bitmap_index, tint },
+        ];
+        let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
+
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("weapon_overlay_vb"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("weapon_overlay_ib"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(0, camera_bind_group, &[]);
+        render_pass.set_bind_group(1, texture_bind_group, &[]);
+        render_pass.set_vertex_buffer(0, vb.slice(..));
+        render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+        render_pass.draw_indexed(0..6, 0, 0..1);
+    }
+
+    /// Get the texture bind group layout for creating compatible bind groups.
+    pub fn texture_bgl<'a>(sprite_renderer: &'a SpriteRenderer) -> &'a wgpu::BindGroupLayout {
+        &sprite_renderer.texture_bind_group_layout
+    }
+}
+
 // ─── Internal helpers ─────────────────────────────────────────────────────
 
 struct ConvertedCollection {

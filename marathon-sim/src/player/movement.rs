@@ -1,6 +1,6 @@
 use glam::{Vec2, Vec3};
 
-use crate::collision::{find_polygon_for_point, segment_intersection, slide_along_wall, wall_normal};
+use crate::collision::{find_polygon_for_point, point_to_segment_distance, segment_intersection, slide_along_wall, wall_normal};
 use crate::tick::ActionFlags;
 use crate::world::MapGeometry;
 
@@ -285,6 +285,28 @@ pub fn apply_player_collision(
     let mut poly = current_polygon;
     let mut z = new_pos.z;
 
+    let radius = params.radius;
+
+    // Determine if the player was grounded before this movement
+    let was_grounded = old_pos.z <= geometry.floor_heights[current_polygon] + f32::EPSILON;
+
+    // Helper closure: check if a line can be passed through
+    let can_pass_line = |adj: Option<usize>, z: f32, poly: usize, params: &PlayerPhysicsParams, geometry: &MapGeometry| -> bool {
+        if let Some(adj_idx) = adj {
+            let adj_floor = geometry.floor_heights[adj_idx];
+            let adj_ceiling = geometry.ceiling_heights[adj_idx];
+            let cur_floor = geometry.floor_heights[poly];
+            let floor_diff = adj_floor - cur_floor;
+            let player_z = z.max(cur_floor);
+            let clearance = adj_ceiling - adj_floor;
+
+            floor_diff <= params.step_delta && clearance >= params.height
+                && (adj_ceiling - player_z.max(adj_floor)) >= params.height
+        } else {
+            false
+        }
+    };
+
     // Iterate up to 3 times for multi-wall slides
     for _ in 0..3 {
         let mut blocked = false;
@@ -294,51 +316,70 @@ pub fn apply_player_collision(
 
             // Check if movement crosses this line
             if let Some(_hit) = segment_intersection(old_2d, pos_2d, la, lb) {
-                // Solid lines block movement even with an adjacent polygon
-                let line_is_solid = geometry.line_solid.get(line_idx).copied().unwrap_or(false);
-
-                let can_pass = if line_is_solid {
-                    false
-                } else if let Some(adj_idx) = adj {
-                    // Check step delta and ceiling clearance
-                    let adj_floor = geometry.floor_heights[adj_idx];
-                    let adj_ceiling = geometry.ceiling_heights[adj_idx];
-                    let cur_floor = geometry.floor_heights[poly];
-                    let floor_diff = adj_floor - cur_floor;
-                    let player_z = z.max(cur_floor);
-                    let clearance = adj_ceiling - adj_floor;
-
-                    floor_diff <= params.step_delta && clearance >= params.height
-                        && (adj_ceiling - player_z.max(adj_floor)) >= params.height
-                } else {
-                    false
-                };
-
-                if can_pass {
+                if can_pass_line(adj, z, poly, params, geometry) {
                     let adj_idx = adj.unwrap();
                     let adj_floor = geometry.floor_heights[adj_idx];
-                    let cur_floor = geometry.floor_heights[poly];
 
-                    // Step up if needed
-                    if adj_floor > cur_floor {
+                    if was_grounded {
+                        // Grounded players snap to the adjacent floor (up or down)
+                        z = adj_floor;
+                    } else if adj_floor > geometry.floor_heights[poly] {
+                        // Airborne players only get pushed up by step-ups
                         z = z.max(adj_floor);
                     }
                     poly = adj_idx;
+                    continue;
                 } else {
-                    // Slide along wall
+                    // Crossed a wall we cannot pass -- slide movement along the wall,
+                    // then push the position to be at least `radius` from the segment.
                     let normal = wall_normal(la, lb);
                     let movement = pos_2d - old_2d;
                     let slid = slide_along_wall(movement, normal);
                     pos_2d = old_2d + slid;
 
-                    // Also project velocity
+                    // Project velocity along the wall
                     let vel_2d = Vec2::new(vel.x, vel.y);
                     let slid_vel = slide_along_wall(vel_2d, normal);
                     vel = Vec3::new(slid_vel.x, slid_vel.y, vel.z);
 
+                    // After sliding, ensure we maintain radius distance from the wall
+                    let (dist, closest) = point_to_segment_distance(pos_2d, la, lb);
+                    if dist < radius {
+                        let push_dir = if dist > 1e-6 {
+                            (pos_2d - closest).normalize()
+                        } else {
+                            normal
+                        };
+                        pos_2d += push_dir * (radius - dist);
+                    }
+
                     blocked = true;
                     break;
                 }
+            }
+
+            // Radius-based collision: push player out of impassable walls when the
+            // player's circular body overlaps the wall segment, even without crossing.
+            let (dist, closest) = point_to_segment_distance(pos_2d, la, lb);
+            if dist < radius && !can_pass_line(adj, z, poly, params, geometry) {
+                // Push the player center outward so it is exactly radius away
+                let push_dir = if dist > 1e-6 {
+                    (pos_2d - closest).normalize()
+                } else {
+                    // Player center is exactly on the wall; use wall normal as fallback
+                    wall_normal(la, lb)
+                };
+                let penetration = radius - dist;
+                pos_2d += push_dir * penetration;
+
+                // Project velocity along the wall
+                let normal = wall_normal(la, lb);
+                let vel_2d = Vec2::new(vel.x, vel.y);
+                let slid_vel = slide_along_wall(vel_2d, normal);
+                vel = Vec3::new(slid_vel.x, slid_vel.y, vel.z);
+
+                blocked = true;
+                break;
             }
         }
 
@@ -354,6 +395,16 @@ pub fn apply_player_collision(
         &geometry.polygon_vertices,
         &geometry.polygon_adjacency,
     );
+
+    // Ceiling collision: prevent head from going through ceiling
+    let ceiling = geometry.ceiling_heights[poly];
+    let max_z = ceiling - params.height;
+    if z > max_z {
+        z = max_z;
+        if vel.z > 0.0 {
+            vel.z = 0.0;
+        }
+    }
 
     // Ground the player
     let floor = geometry.floor_heights[poly];
@@ -721,17 +772,18 @@ mod tests {
     fn collision_slides_along_solid_wall() {
         let params = test_params();
         let geometry = two_polygon_geometry();
-        // Try to walk into the left wall (solid, line index 3)
+        // Try to walk into the left wall (solid, line index 3 at x=0)
+        // Start well inside, attempt to move past wall
         let result = apply_player_collision(
-            Vec3::new(0.2, 0.5, 0.0),
+            Vec3::new(0.5, 0.5, 0.0),
             Vec3::new(-0.2, 0.6, 0.0),
-            Vec3::new(-0.4, 0.1, 0.0),
+            Vec3::new(-0.7, 0.1, 0.0),
             0,
             &params,
             &geometry,
         );
-        // Should be blocked from going through the wall
-        assert!(result.position.x >= 0.0);
+        // Should be pushed back to at least radius distance from the wall
+        assert!(result.position.x >= params.radius - 0.01);
         assert_eq!(result.polygon_index, 0);
     }
 
@@ -810,5 +862,115 @@ mod tests {
         assert_eq!(new_vel, vel); // no drag
         assert!(oxy_change > 0);
         assert_eq!(dmg, 0);
+    }
+
+    #[test]
+    fn radius_collision_prevents_wall_overlap() {
+        let params = test_params();
+        let geometry = two_polygon_geometry();
+        // Player moves parallel to the left wall (x=0) but ends up within radius
+        let result = apply_player_collision(
+            Vec3::new(0.5, 0.5, 0.0),
+            Vec3::new(0.1, 0.5, 0.0),
+            Vec3::new(-0.4, 0.0, 0.0),
+            0,
+            &params,
+            &geometry,
+        );
+        assert!(
+            result.position.x >= params.radius - 0.01,
+            "Player at x={} should be >= radius {} from wall at x=0",
+            result.position.x,
+            params.radius,
+        );
+        assert_eq!(result.polygon_index, 0);
+    }
+
+    #[test]
+    fn radius_collision_no_effect_when_far() {
+        let params = test_params();
+        let geometry = two_polygon_geometry();
+        let result = apply_player_collision(
+            Vec3::new(0.5, 0.5, 0.0),
+            Vec3::new(0.5, 0.5, 0.0),
+            Vec3::ZERO,
+            0,
+            &params,
+            &geometry,
+        );
+        assert!((result.position.x - 0.5).abs() < 0.01);
+        assert!((result.position.y - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn grounded_player_snaps_down_to_lower_floor() {
+        let params = test_params();
+        let mut geometry = two_polygon_geometry();
+        geometry.floor_heights[0] = 0.5;
+        geometry.floor_heights[1] = 0.0;
+        let result = apply_player_collision(
+            Vec3::new(0.8, 0.5, 0.5),
+            Vec3::new(1.2, 0.5, 0.5),
+            Vec3::new(0.4, 0.0, 0.0),
+            0,
+            &params,
+            &geometry,
+        );
+        assert_eq!(result.polygon_index, 1);
+        assert!(
+            (result.position.z - 0.0).abs() < f32::EPSILON,
+            "Expected z=0.0, got z={}",
+            result.position.z
+        );
+    }
+
+    #[test]
+    fn airborne_player_does_not_snap_down() {
+        let params = test_params();
+        let mut geometry = two_polygon_geometry();
+        geometry.floor_heights[0] = 0.5;
+        geometry.floor_heights[1] = 0.0;
+        let result = apply_player_collision(
+            Vec3::new(0.8, 0.5, 1.0),
+            Vec3::new(1.2, 0.5, 1.0),
+            Vec3::new(0.4, 0.0, 0.0),
+            0,
+            &params,
+            &geometry,
+        );
+        assert_eq!(result.polygon_index, 1);
+        assert!(
+            result.position.z > 0.5,
+            "Airborne player should not snap down, got z={}",
+            result.position.z
+        );
+    }
+
+    #[test]
+    fn ceiling_collision_clamps_z() {
+        let params = test_params();
+        let mut geometry = two_polygon_geometry();
+        geometry.ceiling_heights[0] = 1.5;
+        let result = apply_player_collision(
+            Vec3::new(0.5, 0.5, 1.0),
+            Vec3::new(0.5, 0.5, 1.0),
+            Vec3::new(0.0, 0.0, 0.5),
+            0,
+            &params,
+            &geometry,
+        );
+        assert_eq!(result.polygon_index, 0);
+        let max_z = 1.5 - params.height;
+        assert!(
+            result.position.z <= max_z + f32::EPSILON,
+            "Expected z <= {}, got z={}",
+            max_z,
+            result.position.z
+        );
+        assert!(
+            result.velocity.z <= 0.0,
+            "Expected vel.z <= 0, got vel.z={}",
+            result.velocity.z
+        );
     }
 }

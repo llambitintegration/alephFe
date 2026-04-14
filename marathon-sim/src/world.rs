@@ -283,15 +283,21 @@ fn spawn_map_objects(
     _config: &SimConfig,
 ) -> Result<(), SimWorldError> {
     let mut player_spawned = false;
+    let geometry = world.resource::<MapGeometry>();
+    let floor_heights = geometry.floor_heights.clone();
 
     for obj in &map_data.objects {
+        let polygon = obj.polygon_index as usize;
+        let raw_z = world_coord(obj.location.z);
+        // Clamp spawn Z: at least floor height so entities don't spawn below the floor
+        let floor_z = floor_heights.get(polygon).copied().unwrap_or(0.0);
+        let z = raw_z.max(floor_z);
         let pos = Vec3::new(
             world_coord(obj.location.x),
             world_coord(obj.location.y),
-            world_coord(obj.location.z),
+            z,
         );
         let facing = (obj.facing as f32) * (std::f32::consts::TAU / 512.0);
-        let polygon = obj.polygon_index as usize;
 
         match obj.object_type {
             OBJECT_IS_PLAYER if !player_spawned => {

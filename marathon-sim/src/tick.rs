@@ -1917,6 +1917,109 @@ impl SimWorld {
         query.iter(&self.world).next().map(|p| p.0)
     }
 
+    /// Query the player's current weapon rendering state.
+    ///
+    /// Returns the shape collection, high-level shape index (based on weapon
+    /// operational state), and animation frame for the currently equipped weapon.
+    pub fn player_weapon_state(&mut self) -> Option<WeaponRenderState> {
+        let inv = self.world.get_resource::<crate::player::inventory::WeaponInventory>()?;
+        let slot = inv.current()?;
+        let def_idx = slot.definition_index;
+        let weapon_state = slot.state;
+
+        let tables = self.world.get_resource::<PhysicsTables>()?;
+        let weapons = tables.data.weapons.as_ref()?;
+        let def = weapons.get(def_idx)?;
+
+        if def.collection < 0 {
+            return None;
+        }
+
+        let shape = match weapon_state {
+            crate::player::inventory::WeaponState::Idle => def.idle_shape,
+            crate::player::inventory::WeaponState::Firing => {
+                if def.firing_shape >= 0 { def.firing_shape } else { def.idle_shape }
+            }
+            crate::player::inventory::WeaponState::Recovering => def.idle_shape,
+            crate::player::inventory::WeaponState::Reloading => {
+                if def.reloading_shape >= 0 { def.reloading_shape } else { def.idle_shape }
+            }
+            crate::player::inventory::WeaponState::Switching => def.idle_shape,
+        };
+
+        if shape < 0 {
+            return None;
+        }
+
+        Some(WeaponRenderState {
+            collection: def.collection as u16,
+            shape: shape as u16,
+            frame: 0,
+        })
+    }
+
+    /// Query the player's current weapon info for HUD display.
+    ///
+    /// Returns (definition_index, primary_ammo, secondary_ammo).
+    pub fn player_weapon_info(&mut self) -> Option<(usize, u16, u16)> {
+        let inv = self.world.get_resource::<crate::player::inventory::WeaponInventory>()?;
+        let slot = inv.current()?;
+        Some((slot.definition_index, slot.primary_magazine, slot.secondary_magazine))
+    }
+
+    /// Query nearby entities for the motion sensor HUD.
+    ///
+    /// Returns up to 16 entities as (relative_x, relative_z, entity_type)
+    /// where positions are relative to the player and entity_type is
+    /// 0=enemy, 1=ally, 2=item.
+    pub fn nearby_entities(&mut self, range: f32) -> Vec<(f32, f32, u8)> {
+        let player_pos = match self.player_position() {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+        let range_sq = range * range;
+        let mut results: Vec<(f32, f32, u8, f32)> = Vec::new();
+
+        // Monsters
+        {
+            let mut query = self.world.query::<(
+                &crate::Position,
+                &crate::MonsterState,
+            )>();
+            for (pos, state) in query.iter(&self.world) {
+                if *state == crate::MonsterState::Dead {
+                    continue;
+                }
+                let dx = pos.0.x - player_pos.x;
+                let dy = pos.0.y - player_pos.y;
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq < range_sq {
+                    results.push((dx, dy, 0u8, dist_sq));
+                }
+            }
+        }
+
+        // Items
+        {
+            let mut query = self.world.query_filtered::<
+                &crate::Position,
+                bevy_ecs::prelude::With<crate::Item>,
+            >();
+            for pos in query.iter(&self.world) {
+                let dx = pos.0.x - player_pos.x;
+                let dy = pos.0.y - player_pos.y;
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq < range_sq {
+                    results.push((dx, dy, 2u8, dist_sq));
+                }
+            }
+        }
+
+        results.sort_by(|a, b| a.3.partial_cmp(&b.3).unwrap_or(std::cmp::Ordering::Equal));
+        results.truncate(16);
+        results.into_iter().map(|(x, z, t, _)| (x, z, t)).collect()
+    }
+
     /// Return all active entities with their rendering state.
     ///
     /// This includes monsters (not Dead), projectiles, items, and effects.
@@ -2030,6 +2133,17 @@ pub enum RenderEntityType {
     Projectile { definition_index: usize },
     Item { item_type: i16 },
     Effect { definition_index: usize },
+}
+
+/// Rendering data for the player's current weapon.
+#[derive(Debug, Clone)]
+pub struct WeaponRenderState {
+    /// Shape collection index (references a collection in the shapes file).
+    pub collection: u16,
+    /// High-level shape index within the collection (idle, firing, etc.).
+    pub shape: u16,
+    /// Animation frame within the shape sequence.
+    pub frame: u16,
 }
 
 #[cfg(test)]

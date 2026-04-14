@@ -98,6 +98,26 @@ pub fn wall_normal(a: Vec2, b: Vec2) -> Vec2 {
     Vec2::new(-edge.y, edge.x).normalize()
 }
 
+/// Compute the shortest distance from a point to a line segment, and the closest point on the segment.
+///
+/// Returns `(distance, closest_point)`.
+pub fn point_to_segment_distance(point: Vec2, seg_a: Vec2, seg_b: Vec2) -> (f32, Vec2) {
+    let ab = seg_b - seg_a;
+    let len_sq = ab.length_squared();
+
+    // Degenerate segment (a == b)
+    if len_sq < 1e-12 {
+        let d = point.distance(seg_a);
+        return (d, seg_a);
+    }
+
+    // Project point onto the infinite line through a-b, clamped to [0, 1]
+    let t = ((point - seg_a).dot(ab) / len_sq).clamp(0.0, 1.0);
+    let closest = seg_a + ab * t;
+    let d = point.distance(closest);
+    (d, closest)
+}
+
 /// Check if two circles (entities with radii) overlap.
 pub fn circles_overlap(
     center_a: Vec2,
@@ -271,6 +291,66 @@ mod tests {
         let slid = slide_along_wall(movement, normal);
         assert!((slid.x).abs() < 0.001);
         assert!((slid.y - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn point_to_segment_distance_perpendicular() {
+        // Point directly above the midpoint of a horizontal segment
+        let (dist, closest) = point_to_segment_distance(
+            Vec2::new(0.5, 1.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+        );
+        assert!((dist - 1.0).abs() < 0.001);
+        assert!((closest.x - 0.5).abs() < 0.001);
+        assert!(closest.y.abs() < 0.001);
+    }
+
+    #[test]
+    fn point_to_segment_distance_nearest_endpoint_a() {
+        // Point is closest to endpoint A
+        let (dist, closest) = point_to_segment_distance(
+            Vec2::new(-1.0, 0.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+        );
+        assert!((dist - 1.0).abs() < 0.001);
+        assert!((closest - Vec2::new(0.0, 0.0)).length() < 0.001);
+    }
+
+    #[test]
+    fn point_to_segment_distance_nearest_endpoint_b() {
+        // Point is closest to endpoint B
+        let (dist, closest) = point_to_segment_distance(
+            Vec2::new(2.0, 0.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+        );
+        assert!((dist - 1.0).abs() < 0.001);
+        assert!((closest - Vec2::new(1.0, 0.0)).length() < 0.001);
+    }
+
+    #[test]
+    fn point_to_segment_distance_on_segment() {
+        // Point is on the segment itself
+        let (dist, _closest) = point_to_segment_distance(
+            Vec2::new(0.5, 0.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(1.0, 0.0),
+        );
+        assert!(dist < 0.001);
+    }
+
+    #[test]
+    fn point_to_segment_distance_degenerate() {
+        // Degenerate segment (both endpoints the same)
+        let (dist, closest) = point_to_segment_distance(
+            Vec2::new(3.0, 4.0),
+            Vec2::new(0.0, 0.0),
+            Vec2::new(0.0, 0.0),
+        );
+        assert!((dist - 5.0).abs() < 0.001);
+        assert!((closest - Vec2::new(0.0, 0.0)).length() < 0.001);
     }
 
     #[test]
