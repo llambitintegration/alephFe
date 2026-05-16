@@ -62,14 +62,21 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // surfaces, position.y is a surface discriminator (0/1/2) and the real
     // world height comes from the data texture. Wall vertices are still baked
     // with absolute Y (boxes 2.2 scope) and any other y value passes through.
-    let pd0 = poly_texel0(in.polygon_index);
+    let pd0 = poly_texel0(in.polygon_index); // (floor_h, ceiling_h, media_h, floor_light)
+    let pd1 = poly_texel1(in.polygon_index); // (ceiling_light, _, _, _)
     var world_y = in.position.y;
+    // Light is no longer baked for floor/ceiling/media — take it per-polygon
+    // from the data texture (box 3.2). Walls keep their baked in.light.
+    var resolved_light = in.light;
     if in.position.y == SURFACE_FLOOR {
         world_y = pd0.x; // floor_h
+        resolved_light = pd0.w; // floor_light
     } else if in.position.y == SURFACE_CEILING {
         world_y = pd0.y; // ceiling_h
+        resolved_light = pd1.x; // ceiling_light
     } else if in.position.y == SURFACE_MEDIA {
         world_y = pd0.z; // media_h
+        resolved_light = pd0.w; // media uses floor_light (matches pre-change baking)
     }
 
     let world_pos = vec3<f32>(in.position.x, world_y, in.position.z);
@@ -77,7 +84,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.uv = in.uv;
     out.texture_descriptor = in.texture_descriptor;
     out.world_position = world_pos;
-    out.light = in.light;
+    out.light = resolved_light;
     out.transfer_mode = in.transfer_mode;
     out.polygon_index = in.polygon_index;
     return out;

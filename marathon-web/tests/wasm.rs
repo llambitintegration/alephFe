@@ -162,6 +162,35 @@ fn shader_wgsl_compiles_and_validates() {
         src.contains("SURFACE_FLOOR") && src.contains("SURFACE_CEILING") && src.contains("SURFACE_MEDIA"),
         "vertex stage must select surface by the discriminator"
     );
+    // Box 3.2: per-polygon light must come from the data texture (both the
+    // floor_light channel and the ceiling_light texel must be read).
+    assert!(
+        src.contains("poly_texel1"),
+        "fragment/vertex must sample ceiling light from the data texture"
+    );
+    assert!(
+        src.contains("resolved_light"),
+        "light must be resolved from per-polygon data, not the baked attribute"
+    );
+}
+
+/// The render pipeline's WGSL must validate under naga with only the
+/// capabilities WebGL2 (the GL/downlevel backend) provides — i.e. no
+/// storage buffers / compute / float64. This is the headless proxy for
+/// "render pipeline still builds under WebGL2 limits" (box 3.2).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn shader_wgsl_validates_under_webgl2_capabilities() {
+    let src = include_str!("../src/shader.wgsl");
+    let module = naga::front::wgsl::parse_str(src).expect("shader.wgsl must parse");
+    // Empty capability set = baseline (WebGL2-class) feature level.
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::empty(),
+    );
+    validator
+        .validate(&module)
+        .expect("shader.wgsl must validate with no extra capabilities (WebGL2 baseline)");
 }
 
 // ── Mesh module tests ───────────────────────────────────────────────

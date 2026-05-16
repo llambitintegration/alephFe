@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "changeId": "fix-dynamic-geometry-rendering",
+  "boxId": "fix-dynamic-geometry-rendering#L17",
+  "testFilePath": "marathon-web/tests/wasm.rs",
+  "testStatus": "passed",
+  "filesModified": [
+    "marathon-web/src/shader.wgsl",
+    "marathon-web/tests/wasm.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "writtenPaths": [
+    "marathon-web/src/shader.wgsl",
+    "marathon-web/tests/wasm.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "tasksMdBefore": "92b3d9bcb5fa8fe9da314af84b2f73268dd533218adda24cf53042fb6aae6efd",
+  "tasksMdAfter": "80fee30946c44fa4aa492b64cc7b08ad55d35b6917d01f6d27ffe5532b7b4a97",
+  "generatedAt": "2026-05-16T20:45:13Z",
+  "notes": "Per-polygon light resolved from the data texture: floor/media use floor_light (pd0.w), ceiling uses ceiling_light (pd1.x via poly_texel1); walls keep their baked in.light. The resolved light flows through VertexOutput.light (flat), so the existing fragment `let light = in.light` now consumes data-texture light instead of the baked attribute. Added shader_wgsl_validates_under_webgl2_capabilities (naga Validator with Capabilities::empty() = WebGL2 baseline) as headless proxy for 'pipeline builds under WebGL2 limits', plus assertions that poly_texel1/resolved_light are present. 29 lib + 10 integration tests pass; wasm32 cargo check green."
+}
