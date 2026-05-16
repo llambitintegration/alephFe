@@ -201,9 +201,152 @@ pub fn write_poly_data_texture(
     );
 }
 
+/// Convert a Marathon world distance (i16, 1024 = 1 world unit) to render
+/// units. Mirrors `mesh::world_to_f32` so the data texture's heights match the
+/// scale the shader uses for X/Z.
+fn world_to_render(v: i16) -> f32 {
+    v as f32 / 1024.0
+}
+
+/// Build the initial per-polygon dynamic data at level load: floor/ceiling/
+/// media heights (render units) plus floor/ceiling light intensities from the
+/// same `evaluate_light_intensity` path the renderer used before un-baking.
+///
+/// This reproduces the values that `build_floor`/`build_ceiling`/
+/// `build_media_surface` previously baked into vertices, so a fully static
+/// scene renders identically once the shader (boxes 3.1/3.2) applies them.
+pub fn build_poly_dyn_data(map: &marathon_formats::MapData) -> Vec<PolyDynData> {
+    map.polygons
+        .iter()
+        .map(|p| {
+            let media_h = if p.media_index >= 0 {
+                map.media
+                    .get(p.media_index as usize)
+                    .map(|m| world_to_render(m.height))
+                    .unwrap_or(0.0)
+            } else {
+                0.0
+            };
+            PolyDynData {
+                floor_h: world_to_render(p.floor_height),
+                ceiling_h: world_to_render(p.ceiling_height),
+                media_h,
+                floor_light: crate::level::evaluate_light_intensity(
+                    &map.lights,
+                    p.floor_lightsource_index,
+                ),
+                ceiling_light: crate::level::evaluate_light_intensity(
+                    &map.lights,
+                    p.ceiling_lightsource_index,
+                ),
+            }
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn initial_poly_dyn_data_reproduces_prechange_baked_values() {
+        use marathon_formats::map::LightData;
+        use marathon_formats::*;
+
+        // Pre-change, build_floor baked position.y = floor_height/1024,
+        // build_ceiling = ceiling_height/1024, build_media = media.height/1024,
+        // and light = evaluate_light_intensity(lights, *_lightsource_index).
+        // With LightData::None evaluate_light_intensity returns 1.0.
+        let mut p0 = mk_poly();
+        p0.floor_height = 0;
+        p0.ceiling_height = 1024;
+        p0.media_index = -1;
+        let mut p1 = mk_poly();
+        p1.floor_height = 2048; // 2.0 render units
+        p1.ceiling_height = 3072; // 3.0
+        p1.media_index = 0;
+
+        let media = MediaData {
+            media_type: 0,
+            flags: 0,
+            light_index: 0,
+            current_direction: 0,
+            current_magnitude: 0,
+            low: 0,
+            high: 0,
+            origin: WorldPoint2d { x: 0, y: 0 },
+            height: 512, // 0.5 render units
+            minimum_light_intensity: 0.0,
+            texture: ShapeDescriptor(0x0100),
+            transfer_mode: 0,
+        };
+
+        let map = MapData {
+            endpoints: vec![],
+            lines: vec![],
+            sides: vec![],
+            polygons: vec![p0, p1],
+            objects: vec![],
+            lights: LightData::None,
+            platforms: vec![],
+            media: vec![media],
+            annotations: vec![],
+            terminals: vec![],
+            ambient_sounds: vec![],
+            random_sounds: vec![],
+            map_info: None,
+            item_placement: vec![],
+            guard_paths: None,
+        };
+
+        let data = build_poly_dyn_data(&map);
+        assert_eq!(data.len(), 2);
+
+        // Polygon 0 — matches pre-change baked floor/ceiling Y, no media.
+        assert_eq!(data[0].floor_h, 0.0);
+        assert_eq!(data[0].ceiling_h, 1.0);
+        assert_eq!(data[0].media_h, 0.0);
+        assert_eq!(data[0].floor_light, 1.0); // LightData::None -> 1.0
+        assert_eq!(data[0].ceiling_light, 1.0);
+
+        // Polygon 1 — different heights + media.
+        assert_eq!(data[1].floor_h, 2.0);
+        assert_eq!(data[1].ceiling_h, 3.0);
+        assert_eq!(data[1].media_h, 0.5);
+        assert_eq!(data[1].floor_light, 1.0);
+        assert_eq!(data[1].ceiling_light, 1.0);
+    }
+
+    fn mk_poly() -> marathon_formats::Polygon {
+        use marathon_formats::*;
+        Polygon {
+            polygon_type: 0,
+            flags: 0,
+            permutation: 0,
+            vertex_count: 4,
+            endpoint_indexes: [0, 1, 2, 3, -1, -1, -1, -1],
+            line_indexes: [-1; 8],
+            floor_texture: ShapeDescriptor(0x0100),
+            ceiling_texture: ShapeDescriptor(0x0100),
+            floor_height: 0,
+            ceiling_height: 1024,
+            floor_lightsource_index: 0,
+            ceiling_lightsource_index: 0,
+            area: 0,
+            floor_transfer_mode: 0,
+            ceiling_transfer_mode: 0,
+            adjacent_polygon_indexes: [-1; 8],
+            center: WorldPoint2d { x: 0, y: 0 },
+            side_indexes: [-1; 8],
+            floor_origin: WorldPoint2d { x: 0, y: 0 },
+            ceiling_origin: WorldPoint2d { x: 0, y: 0 },
+            media_index: -1,
+            media_lightsource_index: -1,
+            sound_source_indexes: -1,
+            ambient_sound_image_index: -1,
+            random_sound_image_index: -1,
+        }
+    }
 
     #[test]
     fn pack_two_polygons_has_expected_offsets() {

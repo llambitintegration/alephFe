@@ -751,9 +751,9 @@ fn load_level_into(state: &mut GameState, wad: &WadFile, physics: Option<&Physic
     state.poly_data_texture = pdt;
     state.poly_data_bind_group = pdbg;
     state.poly_count = poly_count;
-    // Initial upload (zero/default until box 2.3 populates real load values and
-    // box 4.2 drives per-frame updates).
-    let initial = vec![crate::poly_data::PolyDynData::default(); poly_count];
+    // Initial upload: real per-polygon heights + light from load (box 2.3).
+    // Box 4.2 will drive per-frame updates from the sim.
+    let initial = crate::poly_data::build_poly_dyn_data(map);
     crate::poly_data::write_poly_data_texture(&state.queue, &state.poly_data_texture, &initial);
 
     let sampler = state.device.create_sampler(&wgpu::SamplerDescriptor {
