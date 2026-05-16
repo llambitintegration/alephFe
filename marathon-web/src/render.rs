@@ -217,17 +217,17 @@ impl GameState {
         // Build sprite draw calls
         let sprites: Vec<SpriteDrawCall> = self.entity_snapshots.interpolated(alpha).iter().filter_map(|e| {
             let view = crate::sprites::compute_view_angle(cam.position, e.position, e.facing);
-            let (bi, w, h) = crate::sprites::resolve_entity_sprite(&self.shapes_file, e.shape, 0, e.frame, view)?;
-            Some(SpriteDrawCall { position: e.position, width: w, height: h, collection: e.shape, bitmap_index: bi, tint: 1.0 })
+            let (bi, wl, wr, wt, wb) = crate::sprites::resolve_entity_sprite(&self.shapes_file, e.shape, 0, e.frame, view)?;
+            Some(SpriteDrawCall { position: e.position, world_left: wl, world_right: wr, world_top: wt, world_bottom: wb, collection: e.shape, bitmap_index: bi, tint: 1.0 })
         }).collect();
 
         // Resolve weapon sprite for screen-space overlay (rendered after main pass)
         let weapon_sprite = self.sim.as_mut().and_then(|sim| {
             let ws = sim.player_weapon_state()?;
-            let (bi, w, h) = crate::sprites::resolve_entity_sprite(
+            let (bi, wl, wr, wt, wb) = crate::sprites::resolve_entity_sprite(
                 &self.shapes_file, ws.collection, ws.shape, ws.frame, 0,
             )?;
-            Some((ws.collection, bi, w, h))
+            Some((ws.collection, bi, wl, wr, wt, wb, ws.vertical_position, ws.horizontal_position))
         });
 
         // Render
@@ -268,7 +268,7 @@ impl GameState {
             self.sprite_renderer.render(&self.device, &mut rp, &self.camera_bind_group, cam.position, cam.yaw, &sprites);
         }
         // Weapon overlay pass (no depth test, screen-space)
-        if let Some((coll, bi, w, h)) = weapon_sprite {
+        if let Some((coll, bi, wl, wr, wt, wb, vert_pos, horiz_pos)) = weapon_sprite {
             let tex_bg = self.sprite_renderer.collections
                 .get(&coll)
                 .map(|c| &c.bind_group)
@@ -284,7 +284,7 @@ impl GameState {
             });
             self.weapon_overlay.render(
                 &self.device, &mut rp, &self.camera_bind_group, tex_bg,
-                bi, w, h, 1.0,
+                bi, wl, wr, wt, wb, vert_pos, horiz_pos, 1.0,
                 self.config.width as f32, self.config.height as f32,
             );
         }

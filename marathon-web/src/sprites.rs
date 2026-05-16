@@ -61,8 +61,10 @@ pub struct SpriteRenderer {
 /// A sprite to render this frame.
 pub struct SpriteDrawCall {
     pub position: Vec3,
-    pub width: f32,
-    pub height: f32,
+    pub world_left: f32,
+    pub world_right: f32,
+    pub world_top: f32,
+    pub world_bottom: f32,
     pub collection: u16,
     pub bitmap_index: u32,
     pub tint: f32,
@@ -377,16 +379,15 @@ impl SpriteRenderer {
 
             for call in calls {
                 let base = vertices.len() as u32;
-                let half_w = call.width * 0.5;
-                let half_h = call.height * 0.5;
 
                 let center = call.position;
 
-                // Billboard corners: position ± right * half_w ± up * half_h
-                let bl = center - cam_right * half_w;
-                let br = center + cam_right * half_w;
-                let tl = center - cam_right * half_w + cam_up * call.height;
-                let tr = center + cam_right * half_w + cam_up * call.height;
+                // Asymmetric billboard: world_left/right along camera-right,
+                // world_top/bottom along world Y (negated: top is negative = above)
+                let bl = center + cam_right * call.world_left + Vec3::Y * (-call.world_bottom);
+                let br = center + cam_right * call.world_right + Vec3::Y * (-call.world_bottom);
+                let tl = center + cam_right * call.world_left + Vec3::Y * (-call.world_top);
+                let tr = center + cam_right * call.world_right + Vec3::Y * (-call.world_top);
 
                 vertices.push(SpriteVertex {
                     position: bl.into(),
@@ -452,7 +453,7 @@ pub fn resolve_entity_sprite(
     shape_idx: u16,
     frame_idx: u16,
     view_angle: u16,
-) -> Option<(u32, f32, f32)> {
+) -> Option<(u32, f32, f32, f32, f32)> {
     let collection = shapes.collection(collection_idx as usize).ok()?;
 
     let high_level = collection.high_level_shapes.get(shape_idx as usize)?;
@@ -470,21 +471,12 @@ pub fn resolve_entity_sprite(
 
     let bitmap_index = low_level.bitmap_index as u32;
 
-    // World dimensions from LowLevelShape, scaled by pixels_to_world
-    let pixels_to_world = if high_level.pixels_to_world > 0 {
-        high_level.pixels_to_world as f32 / 1024.0
-    } else {
-        1.0 / 1024.0
-    };
+    let world_left = low_level.world_left as f32 / 1024.0;
+    let world_right = low_level.world_right as f32 / 1024.0;
+    let world_top = low_level.world_top as f32 / 1024.0;
+    let world_bottom = low_level.world_bottom as f32 / 1024.0;
 
-    let width = (low_level.world_right - low_level.world_left).abs() as f32 / 1024.0;
-    let height = (low_level.world_bottom - low_level.world_top).abs() as f32 / 1024.0;
-
-    // Use reasonable defaults if dimensions are zero
-    let width = if width < 0.01 { 0.5 } else { width };
-    let height = if height < 0.01 { 0.5 } else { height };
-
-    Some((bitmap_index, width, height))
+    Some((bitmap_index, world_left, world_right, world_top, world_bottom))
 }
 
 /// Compute the viewing angle index (0-7) for a monster based on relative angle.
@@ -561,10 +553,12 @@ impl WeaponOverlayRenderer {
         WeaponOverlayRenderer { pipeline }
     }
 
-    /// Render a weapon sprite as a screen-space overlay.
+    /// Render a weapon sprite as a screen-space overlay using position_sprite_axis
+    /// logic (_position_center mode).
     ///
-    /// Builds a quad in NDC: centered horizontally, anchored at the bottom of
-    /// the viewport, sized to ~35% viewport width with aspect ratio preserved.
+    /// The weapon's vertical/horizontal position determines the sprite origin on
+    /// screen, and the shape's world bounds determine how the sprite extends from
+    /// that origin. Portions extending below the viewport are clipped by the GPU.
     pub fn render(
         &self,
         device: &wgpu::Device,
@@ -572,34 +566,43 @@ impl WeaponOverlayRenderer {
         camera_bind_group: &wgpu::BindGroup,
         texture_bind_group: &wgpu::BindGroup,
         bitmap_index: u32,
-        sprite_width: f32,
-        sprite_height: f32,
+        world_left: f32,
+        world_right: f32,
+        world_top: f32,
+        world_bottom: f32,
+        vertical_position: f32,
+        horizontal_position: f32,
         tint: f32,
         viewport_width: f32,
         viewport_height: f32,
     ) {
-        // Weapon takes ~50% of viewport width in NDC
-        let ndc_half_w = 0.50;
-        // Preserve sprite aspect ratio (no viewport aspect correction -
-        // NDC distortion makes the weapon fill correctly since it's screen-space)
-        let sprite_aspect = sprite_height / sprite_width.max(0.001);
-        let ndc_half_h = ndc_half_w * sprite_aspect;
+        // position_sprite_axis for _position_center mode:
+        // origin = screen_dim * position
+        // edges = origin + world_bound * screen_height
+        let origin_x = viewport_width * horizontal_position;
+        let origin_y = viewport_height * vertical_position;
 
-        // Anchor weapon above the HUD panel so it's not hidden behind the DOM overlay.
-        // NDC range is 2.0 (-1..1), so fraction = 2 * hud_px / viewport_px.
-        const HUD_HEIGHT_PX: f32 = 128.0;
-        let hud_ndc = 2.0 * HUD_HEIGHT_PX / viewport_height;
-        let cx = 0.0_f32; // centered
-        let bottom = -1.0_f32 + hud_ndc;
-        let top = bottom + ndc_half_h * 2.0;
-        let left = cx - ndc_half_w;
-        let right = cx + ndc_half_w;
+        // X axis: offset from origin by world bounds scaled to screen height
+        let x0 = origin_x + world_left * viewport_height;
+        let x1 = origin_x + world_right * viewport_height;
+
+        // Y axis: offset from origin by NEGATED world bounds scaled to screen height
+        // world_top is negative (above origin), world_bottom is positive (below)
+        let y0 = origin_y + (-world_top) * viewport_height;
+        let y1 = origin_y + (-world_bottom) * viewport_height;
+
+        // Convert pixel coordinates to NDC: ndc = (px / dim) * 2.0 - 1.0
+        let ndc_left = (x0 / viewport_width) * 2.0 - 1.0;
+        let ndc_right = (x1 / viewport_width) * 2.0 - 1.0;
+        // Y: NDC +1 is top, -1 is bottom. Pixel 0 is top.
+        let ndc_top = 1.0 - (y0 / viewport_height) * 2.0;
+        let ndc_bottom = 1.0 - (y1 / viewport_height) * 2.0;
 
         let vertices = [
-            SpriteVertex { position: [left, bottom, 0.0], uv: [0.0, 1.0], tex_index: bitmap_index, tint },
-            SpriteVertex { position: [left, top, 0.0], uv: [0.0, 0.0], tex_index: bitmap_index, tint },
-            SpriteVertex { position: [right, top, 0.0], uv: [1.0, 0.0], tex_index: bitmap_index, tint },
-            SpriteVertex { position: [right, bottom, 0.0], uv: [1.0, 1.0], tex_index: bitmap_index, tint },
+            SpriteVertex { position: [ndc_left, ndc_bottom, 0.0], uv: [0.0, 1.0], tex_index: bitmap_index, tint },
+            SpriteVertex { position: [ndc_left, ndc_top, 0.0], uv: [0.0, 0.0], tex_index: bitmap_index, tint },
+            SpriteVertex { position: [ndc_right, ndc_top, 0.0], uv: [1.0, 0.0], tex_index: bitmap_index, tint },
+            SpriteVertex { position: [ndc_right, ndc_bottom, 0.0], uv: [1.0, 1.0], tex_index: bitmap_index, tint },
         ];
         let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
 
