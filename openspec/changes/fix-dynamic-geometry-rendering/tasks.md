@@ -7,7 +7,7 @@
 ## 2. Mesh / vertex changes (marathon-web)
 
 - [x] 2.1 Add `polygon_index: u32` to `mesh::Vertex` and its `layout()`; update the vertex WGSL input struct; test that `build_level_mesh` assigns each emitted vertex the polygon index of its source polygon
-- [ ] 2.2 Stop baking height into `position.y` and light into `light` in `build_floor`/`build_ceiling`/`build_media_surface`; emit geometry at the height-zero reference; test that two polygons with different `floor_height` now produce identical vertex Y and differ only by `polygon_index`
+- [x] 2.2 Stop baking height into `position.y` and light into `light` in `build_floor`/`build_ceiling`/`build_media_surface`; emit geometry at the height-zero reference; test that two polygons with different `floor_height` now produce identical vertex Y and differ only by `polygon_index`
 - [ ] 2.3 Populate the initial `PolyDynData` array at load from `evaluate_light_intensity` + polygon floor/ceiling/media heights; test that initial packed data reproduces the pre-change baked values for a sample level
 
 ## 3. Shader changes (marathon-web)

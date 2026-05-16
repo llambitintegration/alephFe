@@ -43,6 +43,19 @@ impl Vertex {
     }
 }
 
+/// Surface discriminators stored in `Vertex::position[1]` (Y) for height-zero
+/// reference geometry. The vertex shader (box 3.1) reads this to choose which
+/// per-polygon height (floor / ceiling / media) from the data texture to apply.
+/// Walls are not un-baked by this scheme (they span two polygons' heights).
+pub const SURFACE_FLOOR: f32 = 0.0;
+pub const SURFACE_CEILING: f32 = 1.0;
+pub const SURFACE_MEDIA: f32 = 2.0;
+
+/// Sentinel light value for un-baked floor/ceiling/media vertices. The fragment
+/// shader (box 3.2) replaces this with the per-polygon light from the data
+/// texture; 1.0 keeps appearance neutral until then.
+pub const UNBAKED_LIGHT: f32 = 1.0;
+
 /// A batch of triangles sharing the same texture collection.
 pub struct DrawBatch {
     pub collection_index: u16,
@@ -165,7 +178,11 @@ fn build_floor(
     poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
-    let floor_y = world_to_f32(polygon.floor_height);
+    // Height is NOT baked here — the shader adds the per-polygon floor height
+    // from the data texture (box 3.1). `position.y` instead carries a surface
+    // discriminator the vertex shader reads to pick which data-texture height
+    // to apply: 0.0 = floor, 1.0 = ceiling, 2.0 = media.
+    let floor_y = SURFACE_FLOOR;
     let tex_desc = polygon.floor_texture.0 as u32;
 
     let mut actual_verts = 0u32;
@@ -184,7 +201,10 @@ fn build_floor(
             position: [wx, floor_y, wz],
             uv: [u, v],
             texture_descriptor: tex_desc,
-            light: info.floor_light,
+            // Light is NOT baked — the fragment shader applies the per-polygon
+            // floor light from the data texture (box 3.2). Sentinel 1.0 keeps
+            // the pre-shader-change appearance neutral.
+            light: UNBAKED_LIGHT,
             transfer_mode: info.floor_transfer_mode,
             polygon_index: poly_idx as u32,
         });
@@ -210,7 +230,8 @@ fn build_ceiling(
     poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
-    let ceil_y = world_to_f32(polygon.ceiling_height);
+    // Height un-baked; Y carries the ceiling surface discriminator (see build_floor).
+    let ceil_y = SURFACE_CEILING;
     let tex_desc = polygon.ceiling_texture.0 as u32;
 
     let mut actual_verts = 0u32;
@@ -229,7 +250,7 @@ fn build_ceiling(
             position: [wx, ceil_y, wz],
             uv: [u, v],
             texture_descriptor: tex_desc,
-            light: info.ceiling_light,
+            light: UNBAKED_LIGHT,
             transfer_mode: info.ceiling_transfer_mode,
             polygon_index: poly_idx as u32,
         });
@@ -256,7 +277,8 @@ fn build_media_surface(
     poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
-    let media_y = world_to_f32(media.height);
+    // Height un-baked; Y carries the media surface discriminator (see build_floor).
+    let media_y = SURFACE_MEDIA;
     let tex_desc = media.texture.0 as u32;
 
     let mut actual_verts = 0u32;
@@ -275,7 +297,7 @@ fn build_media_surface(
             position: [wx, media_y, wz],
             uv: [u, v],
             texture_descriptor: tex_desc,
-            light: info.floor_light,
+            light: UNBAKED_LIGHT,
             transfer_mode: media.transfer_mode as u32,
             polygon_index: poly_idx as u32,
         });
@@ -648,6 +670,75 @@ mod tests {
         let pi = layout.attributes[5];
         assert_eq!(pi.shader_location, 5);
         assert_eq!(pi.format, wgpu::VertexFormat::Uint32);
+    }
+
+    #[test]
+    fn floor_height_no_longer_baked_into_vertex_y() {
+        // Two square polygons with DIFFERENT floor heights. After un-baking,
+        // their floor vertices must have identical Y (the height-zero floor
+        // discriminant) and differ only by polygon_index.
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+            make_endpoint(1024, 1024),
+            make_endpoint(0, 1024),
+        ];
+        let mut p0 = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        p0.floor_height = 0;
+        let mut p1 = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        p1.floor_height = 2048; // very different absolute height
+        let map = make_map_data(endpoints, vec![p0, p1], vec![], vec![]);
+        let poly_info = vec![make_info(), make_info()];
+
+        let mut v0 = Vec::new();
+        let mut i0 = Vec::new();
+        build_floor(&mut v0, &mut i0, &map, &map.polygons[0], &poly_info[0], 4, 0);
+        let mut v1 = Vec::new();
+        let mut i1 = Vec::new();
+        build_floor(&mut v1, &mut i1, &map, &map.polygons[1], &poly_info[1], 4, 1);
+
+        assert_eq!(v0.len(), v1.len());
+        for (a, b) in v0.iter().zip(v1.iter()) {
+            assert_eq!(a.position[1], SURFACE_FLOOR, "floor Y must be the height-zero discriminator");
+            assert_eq!(b.position[1], SURFACE_FLOOR);
+            assert_eq!(a.position[1], b.position[1], "Y identical despite different floor_height");
+            // Differ only by polygon_index.
+            assert_eq!(a.polygon_index, 0);
+            assert_eq!(b.polygon_index, 1);
+            assert_ne!(a.polygon_index, b.polygon_index);
+            // X/Z geometry unchanged.
+            assert_eq!(a.position[0], b.position[0]);
+            assert_eq!(a.position[2], b.position[2]);
+        }
+    }
+
+    #[test]
+    fn floor_ceiling_media_light_is_unbaked_sentinel() {
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+            make_endpoint(1024, 1024),
+            make_endpoint(0, 1024),
+        ];
+        let polygon = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        let map = make_map_data(endpoints, vec![polygon], vec![], vec![]);
+        // info carries non-1.0 light to prove it is NOT baked in.
+        let info = PolygonInfo { floor_light: 0.3, floor_transfer_mode: 0, ceiling_light: 0.7, ceiling_transfer_mode: 0 };
+
+        let mut vf = Vec::new();
+        let mut idx = Vec::new();
+        build_floor(&mut vf, &mut idx, &map, &map.polygons[0], &info, 4, 0);
+        for v in &vf {
+            assert_eq!(v.light, UNBAKED_LIGHT, "floor light must be the unbaked sentinel, not info.floor_light");
+        }
+
+        let mut vc = Vec::new();
+        let mut idc = Vec::new();
+        build_ceiling(&mut vc, &mut idc, &map, &map.polygons[0], &info, 4, 0);
+        for v in &vc {
+            assert_eq!(v.position[1], SURFACE_CEILING);
+            assert_eq!(v.light, UNBAKED_LIGHT);
+        }
     }
 
     #[test]
