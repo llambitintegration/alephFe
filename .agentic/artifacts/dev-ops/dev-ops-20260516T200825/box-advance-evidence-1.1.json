@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "changeId": "fix-dynamic-geometry-rendering",
+  "boxId": "fix-dynamic-geometry-rendering#L3",
+  "testFilePath": "marathon-web/src/poly_data.rs",
+  "testStatus": "passed",
+  "filesModified": [
+    "marathon-web/src/poly_data.rs",
+    "marathon-web/src/lib.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "writtenPaths": [
+    "marathon-web/src/poly_data.rs",
+    "marathon-web/src/lib.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "tasksMdBefore": "d5d1a3b616cdbe6c8205f594c5db85e4e3e44e815a617343ecd1df99364291de",
+  "tasksMdAfter": "8711a979faa8315bb60e3920f32fbe7729d19f88286663961a554ef03daef83c",
+  "generatedAt": "2026-05-16T20:15:04Z",
+  "notes": "Resolved design Open Question 1: 2 RGBA32F texels per polygon (8 float slots, 5 used, 3 reserved), data texture laid out 2-wide by N-tall. Decision documented in marathon-web/src/poly_data.rs module docs. 3 unit tests pass (pack offsets for 2-polygon input, empty, round-trip)."
+}

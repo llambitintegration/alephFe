@@ -2,6 +2,7 @@ use wasm_bindgen::prelude::*;
 
 pub mod level;
 pub mod mesh;
+pub mod poly_data;
 #[cfg(target_arch = "wasm32")]
 mod render;
 mod sprites;
