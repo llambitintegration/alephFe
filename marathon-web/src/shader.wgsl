@@ -20,6 +20,7 @@ struct VertexInput {
     @location(2) texture_descriptor: u32,
     @location(3) light: f32,
     @location(4) transfer_mode: u32,
+    @location(5) polygon_index: u32,
 };
 
 struct VertexOutput {

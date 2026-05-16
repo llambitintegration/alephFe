@@ -18,15 +18,20 @@ pub struct Vertex {
     pub texture_descriptor: u32,
     pub light: f32,
     pub transfer_mode: u32,
+    /// Index of the source polygon. The shader uses this to sample the
+    /// per-polygon data texture for the dynamic height offset and light
+    /// (see `poly_data`). For wall quads this is the owning polygon's index.
+    pub polygon_index: u32,
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x2,
         2 => Uint32,
         3 => Float32,
         4 => Uint32,
+        5 => Uint32,
     ];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -72,13 +77,13 @@ pub fn build_level_mesh(map: &MapData, poly_info: &[PolygonInfo]) -> LevelMesh {
 
         let info = &poly_info[poly_idx];
 
-        build_floor(&mut vertices, &mut indices, map, polygon, info, vert_count);
-        build_ceiling(&mut vertices, &mut indices, map, polygon, info, vert_count);
+        build_floor(&mut vertices, &mut indices, map, polygon, info, vert_count, poly_idx);
+        build_ceiling(&mut vertices, &mut indices, map, polygon, info, vert_count, poly_idx);
 
         if polygon.media_index >= 0 {
             if let Some(media) = map.media.get(polygon.media_index as usize) {
                 build_media_surface(
-                    &mut vertices, &mut indices, map, polygon, info, vert_count, media,
+                    &mut vertices, &mut indices, map, polygon, info, vert_count, media, poly_idx,
                 );
             }
         }
@@ -157,6 +162,7 @@ fn build_floor(
     polygon: &marathon_formats::Polygon,
     info: &PolygonInfo,
     vert_count: usize,
+    poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
     let floor_y = world_to_f32(polygon.floor_height);
@@ -180,6 +186,7 @@ fn build_floor(
             texture_descriptor: tex_desc,
             light: info.floor_light,
             transfer_mode: info.floor_transfer_mode,
+            polygon_index: poly_idx as u32,
         });
         actual_verts += 1;
     }
@@ -200,6 +207,7 @@ fn build_ceiling(
     polygon: &marathon_formats::Polygon,
     info: &PolygonInfo,
     vert_count: usize,
+    poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
     let ceil_y = world_to_f32(polygon.ceiling_height);
@@ -223,6 +231,7 @@ fn build_ceiling(
             texture_descriptor: tex_desc,
             light: info.ceiling_light,
             transfer_mode: info.ceiling_transfer_mode,
+            polygon_index: poly_idx as u32,
         });
         actual_verts += 1;
     }
@@ -244,6 +253,7 @@ fn build_media_surface(
     info: &PolygonInfo,
     vert_count: usize,
     media: &marathon_formats::MediaData,
+    poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
     let media_y = world_to_f32(media.height);
@@ -267,6 +277,7 @@ fn build_media_surface(
             texture_descriptor: tex_desc,
             light: info.floor_light,
             transfer_mode: media.transfer_mode as u32,
+            polygon_index: poly_idx as u32,
         });
         actual_verts += 1;
     }
@@ -353,6 +364,7 @@ fn build_wall_side(
                 emit_wall_quad(
                     vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
                     tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                    poly_idx,
                 );
             }
         }
@@ -366,6 +378,7 @@ fn build_wall_side(
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
                         tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                        poly_idx,
                     );
                 }
             }
@@ -380,6 +393,7 @@ fn build_wall_side(
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
                         tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                        poly_idx,
                     );
                 }
             }
@@ -395,6 +409,7 @@ fn build_wall_side(
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, low_bottom, low_top, wall_len, tex,
                         tex.texture.0 as u32, info.floor_light, side.secondary_transfer_mode as u32,
+                        poly_idx,
                     );
                 }
 
@@ -405,6 +420,7 @@ fn build_wall_side(
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, trans_bottom, trans_top, wall_len,
                         tex, tex.texture.0 as u32, info.floor_light, side.transparent_transfer_mode as u32,
+                        poly_idx,
                     );
                 }
 
@@ -415,6 +431,7 @@ fn build_wall_side(
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, high_bottom, high_top, wall_len,
                         tex, tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                        poly_idx,
                     );
                 }
             }
@@ -437,11 +454,13 @@ fn emit_wall_quad(
     tex_desc: u32,
     light: f32,
     transfer_mode: u32,
+    poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
     let height = top - bottom;
     let u_off = side_tex.x0 as f32 / 1024.0;
     let v_off = side_tex.y0 as f32 / 1024.0;
+    let polygon_index = poly_idx as u32;
 
     vertices.push(Vertex {
         position: [x0, bottom, z0],
@@ -449,6 +468,7 @@ fn emit_wall_quad(
         texture_descriptor: tex_desc,
         light,
         transfer_mode,
+        polygon_index,
     });
     vertices.push(Vertex {
         position: [x0, top, z0],
@@ -456,6 +476,7 @@ fn emit_wall_quad(
         texture_descriptor: tex_desc,
         light,
         transfer_mode,
+        polygon_index,
     });
     vertices.push(Vertex {
         position: [x1, top, z1],
@@ -463,6 +484,7 @@ fn emit_wall_quad(
         texture_descriptor: tex_desc,
         light,
         transfer_mode,
+        polygon_index,
     });
     vertices.push(Vertex {
         position: [x1, bottom, z1],
@@ -470,6 +492,7 @@ fn emit_wall_quad(
         texture_descriptor: tex_desc,
         light,
         transfer_mode,
+        polygon_index,
     });
 
     indices.push(base);
@@ -596,8 +619,9 @@ mod tests {
 
     #[test]
     fn vertex_size_matches_gpu_layout() {
-        // 3 floats (pos) + 2 floats (uv) + 1 u32 (tex_desc) + 1 float (light) + 1 u32 (transfer) = 8 * 4 = 32 bytes
-        assert_eq!(std::mem::size_of::<Vertex>(), 32);
+        // 3 floats (pos) + 2 floats (uv) + 1 u32 (tex_desc) + 1 float (light)
+        // + 1 u32 (transfer) + 1 u32 (polygon_index) = 9 * 4 = 36 bytes
+        assert_eq!(std::mem::size_of::<Vertex>(), 36);
     }
 
     #[test]
@@ -609,9 +633,62 @@ mod tests {
             texture_descriptor: 42,
             light: 0.8,
             transfer_mode: 0,
+            polygon_index: 7,
         };
         let bytes: &[u8] = bytemuck::bytes_of(&v);
-        assert_eq!(bytes.len(), 32);
+        assert_eq!(bytes.len(), 36);
+    }
+
+    #[test]
+    fn vertex_layout_includes_polygon_index_attribute() {
+        let layout = Vertex::layout();
+        assert_eq!(layout.array_stride, 36);
+        // 6 attributes: pos, uv, tex_desc, light, transfer, polygon_index.
+        assert_eq!(layout.attributes.len(), 6);
+        let pi = layout.attributes[5];
+        assert_eq!(pi.shader_location, 5);
+        assert_eq!(pi.format, wgpu::VertexFormat::Uint32);
+    }
+
+    #[test]
+    fn build_level_mesh_assigns_source_polygon_index_to_every_vertex() {
+        // Two stacked square polygons; every emitted floor/ceiling vertex must
+        // carry the index of its source polygon.
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+            make_endpoint(1024, 1024),
+            make_endpoint(0, 1024),
+        ];
+        let mut p0 = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        p0.floor_height = 0;
+        p0.ceiling_height = 1024;
+        let mut p1 = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        p1.floor_height = 512;
+        p1.ceiling_height = 2048;
+        let map = make_map_data(endpoints, vec![p0, p1], vec![], vec![]);
+        let poly_info = vec![make_info(), make_info()];
+
+        let mesh = build_level_mesh(&map, &poly_info);
+
+        assert!(!mesh.vertices.is_empty());
+        // Both polygon indices must appear, and no vertex may reference a
+        // polygon outside [0, 2).
+        let mut seen0 = false;
+        let mut seen1 = false;
+        for v in &mesh.vertices {
+            assert!(
+                (v.polygon_index as usize) < map.polygons.len(),
+                "polygon_index {} out of range",
+                v.polygon_index
+            );
+            match v.polygon_index {
+                0 => seen0 = true,
+                1 => seen1 = true,
+                other => panic!("unexpected polygon_index {other}"),
+            }
+        }
+        assert!(seen0 && seen1, "vertices from both polygons must be present");
     }
 
     #[test]
@@ -628,7 +705,7 @@ mod tests {
 
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 5);
+        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 5, 0);
 
         assert_eq!(vertices.len(), 4, "should emit 4 vertices (skipping -1)");
         assert_eq!(indices.len(), 6, "should emit 2 triangles (6 indices) from 4 verts");
@@ -646,7 +723,7 @@ mod tests {
 
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 4);
+        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 4, 0);
 
         assert_eq!(vertices.len(), 2, "should emit 2 vertices");
         assert_eq!(indices.len(), 0, "should emit 0 triangles (not enough verts)");
