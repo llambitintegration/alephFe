@@ -134,6 +134,65 @@ fn pad_layer_count_passes_safe_values_unchanged() {
     assert_eq!(marathon_web::texture::pad_layer_count_for_webgl(10), 10);
 }
 
+// ── Shader compile tests ────────────────────────────────────────────
+
+/// Parse and validate shader.wgsl with naga (headless, no GPU). This catches
+/// WGSL syntax/type errors in the data-texture sampling added for dynamic
+/// geometry (box 3.1) without needing a browser/WebGL2 context.
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn shader_wgsl_compiles_and_validates() {
+    let src = include_str!("../src/shader.wgsl");
+    let module = naga::front::wgsl::parse_str(src).expect("shader.wgsl must parse");
+
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    );
+    validator
+        .validate(&module)
+        .expect("shader.wgsl must pass naga validation");
+
+    // Sanity: the dynamic-geometry data texture binding must be present.
+    assert!(
+        src.contains("poly_data_tex"),
+        "shader must declare the per-polygon data texture"
+    );
+    assert!(
+        src.contains("SURFACE_FLOOR") && src.contains("SURFACE_CEILING") && src.contains("SURFACE_MEDIA"),
+        "vertex stage must select surface by the discriminator"
+    );
+    // Box 3.2: per-polygon light must come from the data texture (both the
+    // floor_light channel and the ceiling_light texel must be read).
+    assert!(
+        src.contains("poly_texel1"),
+        "fragment/vertex must sample ceiling light from the data texture"
+    );
+    assert!(
+        src.contains("resolved_light"),
+        "light must be resolved from per-polygon data, not the baked attribute"
+    );
+}
+
+/// The render pipeline's WGSL must validate under naga with only the
+/// capabilities WebGL2 (the GL/downlevel backend) provides — i.e. no
+/// storage buffers / compute / float64. This is the headless proxy for
+/// "render pipeline still builds under WebGL2 limits" (box 3.2).
+#[test]
+#[cfg(not(target_arch = "wasm32"))]
+fn shader_wgsl_validates_under_webgl2_capabilities() {
+    let src = include_str!("../src/shader.wgsl");
+    let module = naga::front::wgsl::parse_str(src).expect("shader.wgsl must parse");
+    // Empty capability set = baseline (WebGL2-class) feature level.
+    let mut validator = naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::empty(),
+    );
+    validator
+        .validate(&module)
+        .expect("shader.wgsl must validate with no extra capabilities (WebGL2 baseline)");
+}
+
 // ── Mesh module tests ───────────────────────────────────────────────
 
 #[test]

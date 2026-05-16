@@ -144,6 +144,13 @@ struct GameState {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+    /// Per-polygon dynamic data texture (Rgba32Float, 2 texels/polygon, one
+    /// row per polygon). Sized for `map.polygons.len()` at level load and
+    /// rewritten each frame; vertex/index buffers stay static.
+    poly_data_texture: wgpu::Texture,
+    poly_data_bind_group: wgpu::BindGroup,
+    poly_data_bgl: wgpu::BindGroupLayout,
+    poly_count: usize,
     draw_batches: Vec<mesh::DrawBatch>,
     texture_manager: TextureManager,
     fallback_bind_group: wgpu::BindGroup,
@@ -254,6 +261,7 @@ impl GameState {
             });
             rp.set_pipeline(&self.pipeline);
             rp.set_bind_group(0, &self.camera_bind_group, &[]);
+            rp.set_bind_group(2, &self.poly_data_bind_group, &[]);
             rp.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             rp.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             // Draw geometry in batches, binding the correct texture collection for each
@@ -529,6 +537,11 @@ pub async fn run_web(
         ],
     });
 
+    let poly_data_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("poly_data_bgl"),
+        entries: &crate::poly_data::data_texture_bgl_entries(),
+    });
+
     let cam_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: None, contents: &[0u8; std::mem::size_of::<CameraUniform>()], usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
@@ -540,7 +553,7 @@ pub async fn run_web(
     let fb = create_fallback_texture(&device, &queue, &tex_bgl);
 
     let pl = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: None, bind_group_layouts: &[&cam_bgl, &tex_bgl], push_constant_ranges: &[],
+        label: None, bind_group_layouts: &[&cam_bgl, &tex_bgl, &poly_data_bgl], push_constant_ranges: &[],
     });
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: None, layout: Some(&pl),
@@ -563,13 +576,19 @@ pub async fn run_web(
         format,
     );
 
+    // Placeholder 1-polygon data texture; resized in load_level_into.
+    let (poly_data_texture, poly_data_bind_group) =
+        create_poly_data_texture(&device, &poly_data_bgl, 1);
+
     let cam = CameraState { position: Vec3::ZERO, yaw: 0.0, pitch: 0.0 };
     let now = js_sys::Date::now();
 
     let mut state = GameState {
         surface, device, queue, config, depth_view, pipeline,
         camera_buffer: cam_buf, camera_bind_group: cam_bg,
-        vertex_buffer: vb, index_buffer: ib, num_indices: 0, draw_batches: Vec::new(),
+        vertex_buffer: vb, index_buffer: ib, num_indices: 0,
+        poly_data_texture, poly_data_bind_group, poly_data_bgl, poly_count: 1,
+        draw_batches: Vec::new(),
         texture_manager: TextureManager { collections: Default::default(), gpu_textures: Default::default() },
         fallback_bind_group: fb, texture_bgl: tex_bgl,
         sprite_renderer, weapon_overlay, sim: None, shapes_file,
@@ -593,6 +612,35 @@ pub async fn run_web(
     start_render_loop(state);
 
     Ok(())
+}
+
+/// Create the per-polygon data texture + bind group, sized for `poly_count`
+/// polygons (see `poly_data` module for the 2-texels/polygon layout).
+fn create_poly_data_texture(
+    device: &wgpu::Device,
+    bgl: &wgpu::BindGroupLayout,
+    poly_count: usize,
+) -> (wgpu::Texture, wgpu::BindGroup) {
+    let extent = crate::poly_data::data_texture_extent(poly_count)
+        .expect("polygon count exceeds WebGL2 max texture dimension");
+    let tex = device.create_texture(&crate::poly_data::data_texture_descriptor(extent));
+    let view = tex.create_view(&Default::default());
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("poly_data_sampler"),
+        mag_filter: wgpu::FilterMode::Nearest,
+        min_filter: wgpu::FilterMode::Nearest,
+        mipmap_filter: wgpu::FilterMode::Nearest,
+        ..Default::default()
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("poly_data_bind_group"),
+        layout: bgl,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+        ],
+    });
+    (tex, bind_group)
 }
 
 fn create_depth(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
@@ -696,6 +744,17 @@ fn load_level_into(state: &mut GameState, wad: &WadFile, physics: Option<&Physic
     });
     state.num_indices = lm.indices.len() as u32;
     state.draw_batches = lm.batches;
+
+    // Per-polygon data texture sized for this level's polygon count.
+    let poly_count = map.polygons.len();
+    let (pdt, pdbg) = create_poly_data_texture(&state.device, &state.poly_data_bgl, poly_count);
+    state.poly_data_texture = pdt;
+    state.poly_data_bind_group = pdbg;
+    state.poly_count = poly_count;
+    // Initial upload: real per-polygon heights + light from load (box 2.3).
+    // Box 4.2 will drive per-frame updates from the sim.
+    let initial = crate::poly_data::build_poly_dyn_data(map);
+    crate::poly_data::write_poly_data_texture(&state.queue, &state.poly_data_texture, &initial);
 
     let sampler = state.device.create_sampler(&wgpu::SamplerDescriptor {
         mag_filter: wgpu::FilterMode::Linear, min_filter: wgpu::FilterMode::Linear,

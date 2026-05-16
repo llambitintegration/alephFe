@@ -1,19 +1,19 @@
 ## 1. Per-polygon data texture infrastructure (marathon-web)
 
-- [ ] 1.1 Decide and document the texel packing layout (resolve design Open Question 1): define a `PolyDynData` struct (floor_h, ceiling_h, media_h, floor_light, ceiling_light) and a function `pack_poly_data(&[PolyDynData]) -> Vec<f32>` with a unit test asserting the packed offsets for a known 2-polygon input
-- [ ] 1.2 Add a `Rgba32Float` (or chosen format) data texture + sampler + bind group layout entry sized for `map.polygons.len()`, created in `run_web`/`load_level_into`; unit/integration test asserting texture dimensions match polygon count under `downlevel_webgl2_defaults` limits
-- [ ] 1.3 Add `write_poly_data_texture(queue, &[PolyDynData])` helper that uploads the packed buffer via `queue.write_texture`; test that a round-trip pack→(layout)→unpack yields the input values
+- [x] 1.1 Decide and document the texel packing layout (resolve design Open Question 1): define a `PolyDynData` struct (floor_h, ceiling_h, media_h, floor_light, ceiling_light) and a function `pack_poly_data(&[PolyDynData]) -> Vec<f32>` with a unit test asserting the packed offsets for a known 2-polygon input
+- [x] 1.2 Add a `Rgba32Float` (or chosen format) data texture + sampler + bind group layout entry sized for `map.polygons.len()`, created in `run_web`/`load_level_into`; unit/integration test asserting texture dimensions match polygon count under `downlevel_webgl2_defaults` limits
+- [x] 1.3 Add `write_poly_data_texture(queue, &[PolyDynData])` helper that uploads the packed buffer via `queue.write_texture`; test that a round-trip pack→(layout)→unpack yields the input values
 
 ## 2. Mesh / vertex changes (marathon-web)
 
-- [ ] 2.1 Add `polygon_index: u32` to `mesh::Vertex` and its `layout()`; update the vertex WGSL input struct; test that `build_level_mesh` assigns each emitted vertex the polygon index of its source polygon
-- [ ] 2.2 Stop baking height into `position.y` and light into `light` in `build_floor`/`build_ceiling`/`build_media_surface`; emit geometry at the height-zero reference; test that two polygons with different `floor_height` now produce identical vertex Y and differ only by `polygon_index`
-- [ ] 2.3 Populate the initial `PolyDynData` array at load from `evaluate_light_intensity` + polygon floor/ceiling/media heights; test that initial packed data reproduces the pre-change baked values for a sample level
+- [x] 2.1 Add `polygon_index: u32` to `mesh::Vertex` and its `layout()`; update the vertex WGSL input struct; test that `build_level_mesh` assigns each emitted vertex the polygon index of its source polygon
+- [x] 2.2 Stop baking height into `position.y` and light into `light` in `build_floor`/`build_ceiling`/`build_media_surface`; emit geometry at the height-zero reference; test that two polygons with different `floor_height` now produce identical vertex Y and differ only by `polygon_index`
+- [x] 2.3 Populate the initial `PolyDynData` array at load from `evaluate_light_intensity` + polygon floor/ceiling/media heights; test that initial packed data reproduces the pre-change baked values for a sample level
 
 ## 3. Shader changes (marathon-web)
 
-- [ ] 3.1 In `shader.wgsl` vertex stage, sample the data texture by `polygon_index` and add the per-polygon floor/ceiling/media height offset to vertex Y (selecting floor vs ceiling vs media by an existing surface discriminator); add a shader-compile test in the web test suite
-- [ ] 3.2 In `shader.wgsl` fragment stage, replace the baked `light` attribute usage with the per-polygon light sampled from the data texture; verify the render pipeline still builds under WebGL2 limits
+- [x] 3.1 In `shader.wgsl` vertex stage, sample the data texture by `polygon_index` and add the per-polygon floor/ceiling/media height offset to vertex Y (selecting floor vs ceiling vs media by an existing surface discriminator); add a shader-compile test in the web test suite
+- [x] 3.2 In `shader.wgsl` fragment stage, replace the baked `light` attribute usage with the per-polygon light sampled from the data texture; verify the render pipeline still builds under WebGL2 limits
 
 ## 4. Frame-loop synchronization (marathon-web)
 

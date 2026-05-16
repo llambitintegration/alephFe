@@ -35,3 +35,6 @@ getrandom = { version = "0.3", features = ["wasm_js"] }
 [dev-dependencies]
 wasm-bindgen-test = "0.3"
 marathon-formats = { path = "../marathon-formats", features = ["test-helpers"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+naga = { version = "24", features = ["wgsl-in"] }

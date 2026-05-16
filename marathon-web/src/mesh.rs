@@ -18,15 +18,20 @@ pub struct Vertex {
     pub texture_descriptor: u32,
     pub light: f32,
     pub transfer_mode: u32,
+    /// Index of the source polygon. The shader uses this to sample the
+    /// per-polygon data texture for the dynamic height offset and light
+    /// (see `poly_data`). For wall quads this is the owning polygon's index.
+    pub polygon_index: u32,
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x2,
         2 => Uint32,
         3 => Float32,
         4 => Uint32,
+        5 => Uint32,
     ];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -37,6 +42,19 @@ impl Vertex {
         }
     }
 }
+
+/// Surface discriminators stored in `Vertex::position[1]` (Y) for height-zero
+/// reference geometry. The vertex shader (box 3.1) reads this to choose which
+/// per-polygon height (floor / ceiling / media) from the data texture to apply.
+/// Walls are not un-baked by this scheme (they span two polygons' heights).
+pub const SURFACE_FLOOR: f32 = 0.0;
+pub const SURFACE_CEILING: f32 = 1.0;
+pub const SURFACE_MEDIA: f32 = 2.0;
+
+/// Sentinel light value for un-baked floor/ceiling/media vertices. The fragment
+/// shader (box 3.2) replaces this with the per-polygon light from the data
+/// texture; 1.0 keeps appearance neutral until then.
+pub const UNBAKED_LIGHT: f32 = 1.0;
 
 /// A batch of triangles sharing the same texture collection.
 pub struct DrawBatch {
@@ -72,13 +90,13 @@ pub fn build_level_mesh(map: &MapData, poly_info: &[PolygonInfo]) -> LevelMesh {
 
         let info = &poly_info[poly_idx];
 
-        build_floor(&mut vertices, &mut indices, map, polygon, info, vert_count);
-        build_ceiling(&mut vertices, &mut indices, map, polygon, info, vert_count);
+        build_floor(&mut vertices, &mut indices, map, polygon, info, vert_count, poly_idx);
+        build_ceiling(&mut vertices, &mut indices, map, polygon, info, vert_count, poly_idx);
 
         if polygon.media_index >= 0 {
             if let Some(media) = map.media.get(polygon.media_index as usize) {
                 build_media_surface(
-                    &mut vertices, &mut indices, map, polygon, info, vert_count, media,
+                    &mut vertices, &mut indices, map, polygon, info, vert_count, media, poly_idx,
                 );
             }
         }
@@ -157,9 +175,14 @@ fn build_floor(
     polygon: &marathon_formats::Polygon,
     info: &PolygonInfo,
     vert_count: usize,
+    poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
-    let floor_y = world_to_f32(polygon.floor_height);
+    // Height is NOT baked here — the shader adds the per-polygon floor height
+    // from the data texture (box 3.1). `position.y` instead carries a surface
+    // discriminator the vertex shader reads to pick which data-texture height
+    // to apply: 0.0 = floor, 1.0 = ceiling, 2.0 = media.
+    let floor_y = SURFACE_FLOOR;
     let tex_desc = polygon.floor_texture.0 as u32;
 
     let mut actual_verts = 0u32;
@@ -178,8 +201,12 @@ fn build_floor(
             position: [wx, floor_y, wz],
             uv: [u, v],
             texture_descriptor: tex_desc,
-            light: info.floor_light,
+            // Light is NOT baked — the fragment shader applies the per-polygon
+            // floor light from the data texture (box 3.2). Sentinel 1.0 keeps
+            // the pre-shader-change appearance neutral.
+            light: UNBAKED_LIGHT,
             transfer_mode: info.floor_transfer_mode,
+            polygon_index: poly_idx as u32,
         });
         actual_verts += 1;
     }
@@ -200,9 +227,11 @@ fn build_ceiling(
     polygon: &marathon_formats::Polygon,
     info: &PolygonInfo,
     vert_count: usize,
+    poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
-    let ceil_y = world_to_f32(polygon.ceiling_height);
+    // Height un-baked; Y carries the ceiling surface discriminator (see build_floor).
+    let ceil_y = SURFACE_CEILING;
     let tex_desc = polygon.ceiling_texture.0 as u32;
 
     let mut actual_verts = 0u32;
@@ -221,8 +250,9 @@ fn build_ceiling(
             position: [wx, ceil_y, wz],
             uv: [u, v],
             texture_descriptor: tex_desc,
-            light: info.ceiling_light,
+            light: UNBAKED_LIGHT,
             transfer_mode: info.ceiling_transfer_mode,
+            polygon_index: poly_idx as u32,
         });
         actual_verts += 1;
     }
@@ -244,9 +274,11 @@ fn build_media_surface(
     info: &PolygonInfo,
     vert_count: usize,
     media: &marathon_formats::MediaData,
+    poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
-    let media_y = world_to_f32(media.height);
+    // Height un-baked; Y carries the media surface discriminator (see build_floor).
+    let media_y = SURFACE_MEDIA;
     let tex_desc = media.texture.0 as u32;
 
     let mut actual_verts = 0u32;
@@ -265,8 +297,9 @@ fn build_media_surface(
             position: [wx, media_y, wz],
             uv: [u, v],
             texture_descriptor: tex_desc,
-            light: info.floor_light,
+            light: UNBAKED_LIGHT,
             transfer_mode: media.transfer_mode as u32,
+            polygon_index: poly_idx as u32,
         });
         actual_verts += 1;
     }
@@ -353,6 +386,7 @@ fn build_wall_side(
                 emit_wall_quad(
                     vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
                     tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                    poly_idx,
                 );
             }
         }
@@ -366,6 +400,7 @@ fn build_wall_side(
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
                         tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                        poly_idx,
                     );
                 }
             }
@@ -380,6 +415,7 @@ fn build_wall_side(
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
                         tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                        poly_idx,
                     );
                 }
             }
@@ -395,6 +431,7 @@ fn build_wall_side(
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, low_bottom, low_top, wall_len, tex,
                         tex.texture.0 as u32, info.floor_light, side.secondary_transfer_mode as u32,
+                        poly_idx,
                     );
                 }
 
@@ -405,6 +442,7 @@ fn build_wall_side(
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, trans_bottom, trans_top, wall_len,
                         tex, tex.texture.0 as u32, info.floor_light, side.transparent_transfer_mode as u32,
+                        poly_idx,
                     );
                 }
 
@@ -415,6 +453,7 @@ fn build_wall_side(
                     emit_wall_quad(
                         vertices, indices, x0, z0, x1, z1, high_bottom, high_top, wall_len,
                         tex, tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                        poly_idx,
                     );
                 }
             }
@@ -437,11 +476,13 @@ fn emit_wall_quad(
     tex_desc: u32,
     light: f32,
     transfer_mode: u32,
+    poly_idx: usize,
 ) {
     let base = vertices.len() as u32;
     let height = top - bottom;
     let u_off = side_tex.x0 as f32 / 1024.0;
     let v_off = side_tex.y0 as f32 / 1024.0;
+    let polygon_index = poly_idx as u32;
 
     vertices.push(Vertex {
         position: [x0, bottom, z0],
@@ -449,6 +490,7 @@ fn emit_wall_quad(
         texture_descriptor: tex_desc,
         light,
         transfer_mode,
+        polygon_index,
     });
     vertices.push(Vertex {
         position: [x0, top, z0],
@@ -456,6 +498,7 @@ fn emit_wall_quad(
         texture_descriptor: tex_desc,
         light,
         transfer_mode,
+        polygon_index,
     });
     vertices.push(Vertex {
         position: [x1, top, z1],
@@ -463,6 +506,7 @@ fn emit_wall_quad(
         texture_descriptor: tex_desc,
         light,
         transfer_mode,
+        polygon_index,
     });
     vertices.push(Vertex {
         position: [x1, bottom, z1],
@@ -470,6 +514,7 @@ fn emit_wall_quad(
         texture_descriptor: tex_desc,
         light,
         transfer_mode,
+        polygon_index,
     });
 
     indices.push(base);
@@ -596,8 +641,9 @@ mod tests {
 
     #[test]
     fn vertex_size_matches_gpu_layout() {
-        // 3 floats (pos) + 2 floats (uv) + 1 u32 (tex_desc) + 1 float (light) + 1 u32 (transfer) = 8 * 4 = 32 bytes
-        assert_eq!(std::mem::size_of::<Vertex>(), 32);
+        // 3 floats (pos) + 2 floats (uv) + 1 u32 (tex_desc) + 1 float (light)
+        // + 1 u32 (transfer) + 1 u32 (polygon_index) = 9 * 4 = 36 bytes
+        assert_eq!(std::mem::size_of::<Vertex>(), 36);
     }
 
     #[test]
@@ -609,9 +655,131 @@ mod tests {
             texture_descriptor: 42,
             light: 0.8,
             transfer_mode: 0,
+            polygon_index: 7,
         };
         let bytes: &[u8] = bytemuck::bytes_of(&v);
-        assert_eq!(bytes.len(), 32);
+        assert_eq!(bytes.len(), 36);
+    }
+
+    #[test]
+    fn vertex_layout_includes_polygon_index_attribute() {
+        let layout = Vertex::layout();
+        assert_eq!(layout.array_stride, 36);
+        // 6 attributes: pos, uv, tex_desc, light, transfer, polygon_index.
+        assert_eq!(layout.attributes.len(), 6);
+        let pi = layout.attributes[5];
+        assert_eq!(pi.shader_location, 5);
+        assert_eq!(pi.format, wgpu::VertexFormat::Uint32);
+    }
+
+    #[test]
+    fn floor_height_no_longer_baked_into_vertex_y() {
+        // Two square polygons with DIFFERENT floor heights. After un-baking,
+        // their floor vertices must have identical Y (the height-zero floor
+        // discriminant) and differ only by polygon_index.
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+            make_endpoint(1024, 1024),
+            make_endpoint(0, 1024),
+        ];
+        let mut p0 = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        p0.floor_height = 0;
+        let mut p1 = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        p1.floor_height = 2048; // very different absolute height
+        let map = make_map_data(endpoints, vec![p0, p1], vec![], vec![]);
+        let poly_info = vec![make_info(), make_info()];
+
+        let mut v0 = Vec::new();
+        let mut i0 = Vec::new();
+        build_floor(&mut v0, &mut i0, &map, &map.polygons[0], &poly_info[0], 4, 0);
+        let mut v1 = Vec::new();
+        let mut i1 = Vec::new();
+        build_floor(&mut v1, &mut i1, &map, &map.polygons[1], &poly_info[1], 4, 1);
+
+        assert_eq!(v0.len(), v1.len());
+        for (a, b) in v0.iter().zip(v1.iter()) {
+            assert_eq!(a.position[1], SURFACE_FLOOR, "floor Y must be the height-zero discriminator");
+            assert_eq!(b.position[1], SURFACE_FLOOR);
+            assert_eq!(a.position[1], b.position[1], "Y identical despite different floor_height");
+            // Differ only by polygon_index.
+            assert_eq!(a.polygon_index, 0);
+            assert_eq!(b.polygon_index, 1);
+            assert_ne!(a.polygon_index, b.polygon_index);
+            // X/Z geometry unchanged.
+            assert_eq!(a.position[0], b.position[0]);
+            assert_eq!(a.position[2], b.position[2]);
+        }
+    }
+
+    #[test]
+    fn floor_ceiling_media_light_is_unbaked_sentinel() {
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+            make_endpoint(1024, 1024),
+            make_endpoint(0, 1024),
+        ];
+        let polygon = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        let map = make_map_data(endpoints, vec![polygon], vec![], vec![]);
+        // info carries non-1.0 light to prove it is NOT baked in.
+        let info = PolygonInfo { floor_light: 0.3, floor_transfer_mode: 0, ceiling_light: 0.7, ceiling_transfer_mode: 0 };
+
+        let mut vf = Vec::new();
+        let mut idx = Vec::new();
+        build_floor(&mut vf, &mut idx, &map, &map.polygons[0], &info, 4, 0);
+        for v in &vf {
+            assert_eq!(v.light, UNBAKED_LIGHT, "floor light must be the unbaked sentinel, not info.floor_light");
+        }
+
+        let mut vc = Vec::new();
+        let mut idc = Vec::new();
+        build_ceiling(&mut vc, &mut idc, &map, &map.polygons[0], &info, 4, 0);
+        for v in &vc {
+            assert_eq!(v.position[1], SURFACE_CEILING);
+            assert_eq!(v.light, UNBAKED_LIGHT);
+        }
+    }
+
+    #[test]
+    fn build_level_mesh_assigns_source_polygon_index_to_every_vertex() {
+        // Two stacked square polygons; every emitted floor/ceiling vertex must
+        // carry the index of its source polygon.
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+            make_endpoint(1024, 1024),
+            make_endpoint(0, 1024),
+        ];
+        let mut p0 = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        p0.floor_height = 0;
+        p0.ceiling_height = 1024;
+        let mut p1 = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        p1.floor_height = 512;
+        p1.ceiling_height = 2048;
+        let map = make_map_data(endpoints, vec![p0, p1], vec![], vec![]);
+        let poly_info = vec![make_info(), make_info()];
+
+        let mesh = build_level_mesh(&map, &poly_info);
+
+        assert!(!mesh.vertices.is_empty());
+        // Both polygon indices must appear, and no vertex may reference a
+        // polygon outside [0, 2).
+        let mut seen0 = false;
+        let mut seen1 = false;
+        for v in &mesh.vertices {
+            assert!(
+                (v.polygon_index as usize) < map.polygons.len(),
+                "polygon_index {} out of range",
+                v.polygon_index
+            );
+            match v.polygon_index {
+                0 => seen0 = true,
+                1 => seen1 = true,
+                other => panic!("unexpected polygon_index {other}"),
+            }
+        }
+        assert!(seen0 && seen1, "vertices from both polygons must be present");
     }
 
     #[test]
@@ -628,7 +796,7 @@ mod tests {
 
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 5);
+        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 5, 0);
 
         assert_eq!(vertices.len(), 4, "should emit 4 vertices (skipping -1)");
         assert_eq!(indices.len(), 6, "should emit 2 triangles (6 indices) from 4 verts");
@@ -646,7 +814,7 @@ mod tests {
 
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 4);
+        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 4, 0);
 
         assert_eq!(vertices.len(), 2, "should emit 2 vertices");
         assert_eq!(indices.len(), 0, "should emit 0 triangles (not enough verts)");
