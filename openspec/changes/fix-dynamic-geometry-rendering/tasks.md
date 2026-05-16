@@ -12,7 +12,7 @@
 
 ## 3. Shader changes (marathon-web)
 
-- [ ] 3.1 In `shader.wgsl` vertex stage, sample the data texture by `polygon_index` and add the per-polygon floor/ceiling/media height offset to vertex Y (selecting floor vs ceiling vs media by an existing surface discriminator); add a shader-compile test in the web test suite
+- [x] 3.1 In `shader.wgsl` vertex stage, sample the data texture by `polygon_index` and add the per-polygon floor/ceiling/media height offset to vertex Y (selecting floor vs ceiling vs media by an existing surface discriminator); add a shader-compile test in the web test suite
 - [ ] 3.2 In `shader.wgsl` fragment stage, replace the baked `light` attribute usage with the per-polygon light sampled from the data texture; verify the render pipeline still builds under WebGL2 limits
 
 ## 4. Frame-loop synchronization (marathon-web)

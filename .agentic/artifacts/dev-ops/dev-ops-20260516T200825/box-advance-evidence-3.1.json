@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "changeId": "fix-dynamic-geometry-rendering",
+  "boxId": "fix-dynamic-geometry-rendering#L16",
+  "testFilePath": "marathon-web/tests/wasm.rs",
+  "testStatus": "passed",
+  "filesModified": [
+    "marathon-web/src/shader.wgsl",
+    "marathon-web/Cargo.toml",
+    "marathon-web/tests/wasm.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "writtenPaths": [
+    "marathon-web/src/shader.wgsl",
+    "marathon-web/Cargo.toml",
+    "marathon-web/tests/wasm.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "tasksMdBefore": "3c3ef741243b9484d1b110cfcd2f5e020e3bb1ca6c862e0f49102202cde1b2a6",
+  "tasksMdAfter": "92b3d9bcb5fa8fe9da314af84b2f73268dd533218adda24cf53042fb6aae6efd",
+  "generatedAt": "2026-05-16T20:43:26Z",
+  "notes": "Vertex stage now binds the group(2) poly_data_tex/sampler, fetches per-polygon texels via textureLoad, and replaces position.y by floor/ceiling/media height from the data texture, selected by the SURFACE_FLOOR/CEILING/MEDIA discriminator (matches mesh.rs constants). polygon_index forwarded through VertexOutput for box 3.2. Added naga 24 (non-wasm dev-dep, wgsl-in) and a headless shader-compile test shader_wgsl_compiles_and_validates (naga parse + full Validator) in the web test suite. 29 lib + 9 integration tests pass; wasm32 cargo check green."
+}

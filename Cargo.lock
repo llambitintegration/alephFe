@@ -1832,6 +1832,7 @@ dependencies = [
  "log",
  "marathon-formats",
  "marathon-sim",
+ "naga 24.0.0",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-bindgen-test",
