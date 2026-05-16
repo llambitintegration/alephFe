@@ -2,7 +2,7 @@
 
 - [x] 1.1 Decide and document the texel packing layout (resolve design Open Question 1): define a `PolyDynData` struct (floor_h, ceiling_h, media_h, floor_light, ceiling_light) and a function `pack_poly_data(&[PolyDynData]) -> Vec<f32>` with a unit test asserting the packed offsets for a known 2-polygon input
 - [x] 1.2 Add a `Rgba32Float` (or chosen format) data texture + sampler + bind group layout entry sized for `map.polygons.len()`, created in `run_web`/`load_level_into`; unit/integration test asserting texture dimensions match polygon count under `downlevel_webgl2_defaults` limits
-- [ ] 1.3 Add `write_poly_data_texture(queue, &[PolyDynData])` helper that uploads the packed buffer via `queue.write_texture`; test that a round-trip pack→(layout)→unpack yields the input values
+- [x] 1.3 Add `write_poly_data_texture(queue, &[PolyDynData])` helper that uploads the packed buffer via `queue.write_texture`; test that a round-trip pack→(layout)→unpack yields the input values
 
 ## 2. Mesh / vertex changes (marathon-web)
 

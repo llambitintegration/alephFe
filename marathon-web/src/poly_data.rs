@@ -157,6 +157,50 @@ pub fn unpack_poly_data(packed: &[f32]) -> Vec<PolyDynData> {
     out
 }
 
+/// Bytes per texture row for the packed buffer: `DATA_TEXTURE_WIDTH` RGBA32F
+/// texels = 2 * 4 channels * 4 bytes = 32 bytes.
+pub const DATA_TEXTURE_BYTES_PER_ROW: u32 = DATA_TEXTURE_WIDTH * 4 * 4;
+
+/// The `TexelCopyBufferLayout` describing how [`pack_poly_data`]'s output maps
+/// onto the data texture rows.
+pub fn data_texture_copy_layout(poly_count: usize) -> wgpu::TexelCopyBufferLayout {
+    wgpu::TexelCopyBufferLayout {
+        offset: 0,
+        bytes_per_row: Some(DATA_TEXTURE_BYTES_PER_ROW),
+        rows_per_image: Some(poly_count.max(1) as u32),
+    }
+}
+
+/// Upload per-polygon dynamic data into the data texture via
+/// `queue.write_texture`. The packed buffer is laid out 2 RGBA32F texels per
+/// polygon, one texture row per polygon (see module docs).
+///
+/// `texture` must have been created with [`data_texture_descriptor`] for the
+/// same `data.len()`.
+pub fn write_poly_data_texture(
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    data: &[PolyDynData],
+) {
+    if data.is_empty() {
+        return;
+    }
+    let packed = pack_poly_data(data);
+    let extent = data_texture_extent(data.len())
+        .expect("polygon count exceeds WebGL2 max texture dimension");
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        bytemuck::cast_slice(&packed),
+        data_texture_copy_layout(data.len()),
+        extent,
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +309,50 @@ mod tests {
             }
             _ => panic!("entry 1 must be a sampler binding"),
         }
+    }
+
+    #[test]
+    fn copy_layout_bytes_per_row_matches_packed_buffer() {
+        // bytes_per_row must equal one polygon row's byte size, and the packed
+        // buffer length must be rows_per_image * bytes_per_row.
+        let input = vec![PolyDynData::default(); 7];
+        let packed = pack_poly_data(&input);
+        let layout = data_texture_copy_layout(input.len());
+
+        assert_eq!(layout.bytes_per_row, Some(32)); // 2 texels * 4 ch * 4 bytes
+        assert_eq!(layout.rows_per_image, Some(7));
+
+        let packed_bytes = packed.len() * std::mem::size_of::<f32>();
+        let expected = layout.bytes_per_row.unwrap() as usize
+            * layout.rows_per_image.unwrap() as usize;
+        assert_eq!(packed_bytes, expected);
+    }
+
+    #[test]
+    fn round_trip_through_texel_byte_layout_yields_input() {
+        // Simulate the GPU path: pack -> bytes (what write_texture uploads) ->
+        // reinterpret as f32 -> unpack. Must reproduce the input exactly.
+        let input = vec![
+            PolyDynData {
+                floor_h: 12.5,
+                ceiling_h: 30.0,
+                media_h: 7.25,
+                floor_light: 0.6,
+                ceiling_light: 0.9,
+            },
+            PolyDynData {
+                floor_h: -1.0,
+                ceiling_h: 0.0,
+                media_h: 100.0,
+                floor_light: 0.0,
+                ceiling_light: 1.0,
+            },
+        ];
+        let packed = pack_poly_data(&input);
+        let bytes: &[u8] = bytemuck::cast_slice(&packed);
+        let back: &[f32] = bytemuck::cast_slice(bytes);
+        let restored = unpack_poly_data(back);
+        assert_eq!(restored, input);
     }
 
     #[test]
