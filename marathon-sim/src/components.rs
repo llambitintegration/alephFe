@@ -226,6 +226,17 @@ pub struct Light {
     pub current_intensity: f32,
 }
 
+/// Light state-machine phase (Marathon light definition state field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LightState {
+    BecomingActive,
+    PrimaryActive,
+    SecondaryActive,
+    BecomingInactive,
+    PrimaryInactive,
+    SecondaryInactive,
+}
+
 /// Light animation function types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LightFunction {
@@ -286,6 +297,41 @@ mod tests {
     #[test]
     fn light_function_variants() {
         assert_ne!(LightFunction::Constant, LightFunction::Flicker);
+    }
+
+    #[test]
+    fn light_state_variants_distinct_and_copy_debug() {
+        // All 6 variants exist.
+        let all = [
+            LightState::BecomingActive,
+            LightState::PrimaryActive,
+            LightState::SecondaryActive,
+            LightState::BecomingInactive,
+            LightState::PrimaryInactive,
+            LightState::SecondaryInactive,
+        ];
+
+        // Pairwise distinct.
+        for (i, a) in all.iter().enumerate() {
+            for (j, b) in all.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+
+        // Explicit spot-check on a key transition pair.
+        assert_ne!(LightState::BecomingActive, LightState::PrimaryActive);
+
+        // Copy + Clone + Debug smoke check.
+        let a = LightState::SecondaryInactive;
+        let b = a; // Copy
+        let c = a.clone(); // Clone
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_eq!(format!("{:?}", LightState::PrimaryInactive), "PrimaryInactive");
     }
 
     #[test]
