@@ -753,6 +753,9 @@ fn player_wall_collision_slide_response() {
         line_solid: vec![true, true, true, true],
         line_transparent: vec![false, false, false, false],
         polygon_media_index: vec![-1],
+        polygon_types: vec![0],
+        polygon_permutations: vec![-1],
+        line_side_indices: vec![(None, None), (None, None), (None, None), (None, None)],
     };
 
     // Player tries to walk through the right wall
@@ -826,6 +829,12 @@ fn step_climbing_allows_small_height_difference() {
         line_solid: vec![true, false, true, true, true, true, true],
         line_transparent: vec![false, true, false, false, false, false, false],
         polygon_media_index: vec![-1, -1],
+        polygon_types: vec![0, 0],
+        polygon_permutations: vec![-1, -1],
+        line_side_indices: vec![
+            (None, None), (None, None), (None, None), (None, None),
+            (None, None), (None, None), (None, None),
+        ],
     };
 
     // Step up: 0.2 < step_delta 0.3, should cross

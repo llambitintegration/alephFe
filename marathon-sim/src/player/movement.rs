@@ -749,6 +749,12 @@ mod tests {
             line_solid: vec![false, true, true, true, true, true, true],
             line_transparent: vec![true, false, false, false, false, false, false],
             polygon_media_index: vec![-1, -1],
+            polygon_types: vec![0, 0],
+            polygon_permutations: vec![-1, -1],
+            line_side_indices: vec![
+                (None, None), (None, None), (None, None), (None, None),
+                (None, None), (None, None), (None, None),
+            ],
         }
     }
 

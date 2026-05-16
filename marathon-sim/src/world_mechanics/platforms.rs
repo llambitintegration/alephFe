@@ -66,15 +66,34 @@ pub fn tick_platform(platform: &mut Platform) -> (f32, f32) {
 /// Activate a platform (trigger it to start extending).
 pub fn activate_platform(platform: &mut Platform) {
     if platform.state == PlatformState::AtRest {
-        platform.state = PlatformState::Extending;
+        // Doors that start extended (closed) need to return (open).
+        // Check if we're at the extended position.
+        let at_extended = (platform.current_floor - platform.floor_extended).abs() < f32::EPSILON
+            && (platform.current_ceiling - platform.ceiling_extended).abs() < f32::EPSILON;
+        if at_extended {
+            platform.state = PlatformState::Returning;
+        } else {
+            platform.state = PlatformState::Extending;
+        }
     }
 }
 
-/// Platform activation type flag constants.
-pub const PLATFORM_ACTIVATE_ON_PLAYER_ENTRY: u32 = 0x0001;
-pub const PLATFORM_ACTIVATE_ON_ACTION_KEY: u32 = 0x0004;
-pub const PLATFORM_ACTIVATE_ON_MONSTER_ENTRY: u32 = 0x0010;
-pub const PLATFORM_ACTIVATE_ON_PROJECTILE: u32 = 0x0040;
+/// Platform static flag bit positions (from Marathon's platform_definitions.h).
+pub const PLATFORM_IS_INITIALLY_ACTIVE: u32 = 1 << 0;
+pub const PLATFORM_IS_INITIALLY_EXTENDED: u32 = 1 << 1;
+pub const PLATFORM_DEACTIVATES_AT_INITIAL_LEVEL: u32 = 1 << 3;
+pub const PLATFORM_COMES_FROM_FLOOR: u32 = 1 << 6;
+pub const PLATFORM_COMES_FROM_CEILING: u32 = 1 << 7;
+pub const PLATFORM_IS_PLAYER_CONTROLLABLE: u32 = 1 << 12;
+pub const PLATFORM_IS_MONSTER_CONTROLLABLE: u32 = 1 << 13;
+pub const PLATFORM_REVERSES_DIRECTION_WHEN_OBSTRUCTED: u32 = 1 << 14;
+pub const PLATFORM_IS_DOOR: u32 = 1 << 25;
+
+/// Legacy aliases used by existing code.
+pub const PLATFORM_ACTIVATE_ON_PLAYER_ENTRY: u32 = PLATFORM_IS_INITIALLY_ACTIVE;
+pub const PLATFORM_ACTIVATE_ON_ACTION_KEY: u32 = PLATFORM_IS_PLAYER_CONTROLLABLE;
+pub const PLATFORM_ACTIVATE_ON_MONSTER_ENTRY: u32 = PLATFORM_IS_MONSTER_CONTROLLABLE;
+pub const PLATFORM_ACTIVATE_ON_PROJECTILE: u32 = 1 << 15; // not used yet
 
 /// Check if a platform should be activated based on trigger type.
 pub fn should_activate(platform: &Platform, trigger: PlatformTrigger) -> bool {

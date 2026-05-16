@@ -25,7 +25,7 @@ impl Default for SimConfig {
 }
 
 /// Shared map geometry resource for collision and pathfinding.
-#[derive(Resource, Debug)]
+#[derive(Resource, Debug, Clone)]
 pub struct MapGeometry {
     /// Polygon vertex positions (2D, in world units converted to f32).
     pub polygon_vertices: Vec<Vec<Vec2>>,
@@ -43,6 +43,12 @@ pub struct MapGeometry {
     pub line_transparent: Vec<bool>,
     /// Per-polygon media index (-1 if none).
     pub polygon_media_index: Vec<i16>,
+    /// Polygon type (e.g. 5 = platform) per polygon.
+    pub polygon_types: Vec<i16>,
+    /// Polygon permutation (e.g. platform index) per polygon.
+    pub polygon_permutations: Vec<i16>,
+    /// Side indices per line: (clockwise_side, counterclockwise_side).
+    pub line_side_indices: Vec<(Option<usize>, Option<usize>)>,
 }
 
 /// Physics tables resource (monster defs, weapon defs, etc.).
@@ -143,6 +149,10 @@ impl SimWorld {
 
         // Initialize media
         spawn_media(&mut world, map_data);
+
+        // Initialize control panels from map sides
+        let control_panels = build_control_panels(map_data);
+        world.insert_resource(control_panels);
 
         // Initialize player weapon inventory (start with fists)
         let mut weapon_inventory = crate::player::inventory::WeaponInventory::default();
@@ -259,6 +269,36 @@ fn build_map_geometry(map_data: &MapData) -> MapGeometry {
         .map(|poly| poly.media_index)
         .collect();
 
+    let polygon_types: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.polygon_type)
+        .collect();
+
+    let polygon_permutations: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.permutation)
+        .collect();
+
+    let line_side_indices: Vec<(Option<usize>, Option<usize>)> = map_data
+        .lines
+        .iter()
+        .map(|line| {
+            let cw = if line.clockwise_polygon_side_index >= 0 {
+                Some(line.clockwise_polygon_side_index as usize)
+            } else {
+                None
+            };
+            let ccw = if line.counterclockwise_polygon_side_index >= 0 {
+                Some(line.counterclockwise_polygon_side_index as usize)
+            } else {
+                None
+            };
+            (cw, ccw)
+        })
+        .collect();
+
     MapGeometry {
         polygon_vertices,
         floor_heights,
@@ -268,6 +308,9 @@ fn build_map_geometry(map_data: &MapData) -> MapGeometry {
         line_solid,
         line_transparent,
         polygon_media_index,
+        polygon_types,
+        polygon_permutations,
+        line_side_indices,
     }
 }
 
@@ -384,21 +427,25 @@ fn spawn_map_objects(
 }
 
 fn spawn_platforms(world: &mut World, map_data: &MapData) {
+    use crate::world_mechanics::platforms::*;
+
+    // Track which polygon indices have explicit platform data
+    let mut explicit_polys = std::collections::HashSet::new();
+
+    // First pass: explicit PLAT entries
     for platform in &map_data.platforms {
         let poly_idx = platform.polygon_index as usize;
+        explicit_polys.insert(poly_idx);
         let speed = world_coord(platform.speed);
         let min_height = world_coord(platform.minimum_height);
         let max_height = world_coord(platform.maximum_height);
 
-        // Get the polygon's ceiling height for floor-only platforms.
         let poly_ceiling = if poly_idx < map_data.polygons.len() {
             world_coord(map_data.polygons[poly_idx].ceiling_height)
         } else {
-            2.0 // fallback
+            2.0
         };
 
-        // Marathon platforms move floors between min and max height.
-        // Ceiling stays at polygon ceiling for floor-only platforms.
         world.spawn(Platform {
             polygon_index: poly_idx,
             floor_rest: min_height,
@@ -412,8 +459,54 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
             return_delay: platform.delay as u16,
             delay_remaining: 0,
             activation_flags: platform.static_flags,
-            crushes: platform.static_flags & 0x2000 != 0,
+            crushes: platform.static_flags & (1 << 8) != 0,
         });
+    }
+
+    // Second pass: implicit platforms from polygon_type == 5 without explicit PLAT data.
+    // Marathon creates these with defaults for _platform_is_spht_split_door (type 1).
+    const POLYGON_IS_PLATFORM: i16 = 5;
+    // Default flags for _platform_is_spht_split_door:
+    // deactivates_at_initial_level | extends_floor_to_ceiling | player_controllable |
+    // monster_controllable | reverses_when_obstructed | comes_from_floor |
+    // comes_from_ceiling | initially_extended | is_door
+    let default_flags: u32 = PLATFORM_DEACTIVATES_AT_INITIAL_LEVEL
+        | (1 << 5) // extends_floor_to_ceiling
+        | PLATFORM_IS_PLAYER_CONTROLLABLE
+        | PLATFORM_IS_MONSTER_CONTROLLABLE
+        | PLATFORM_REVERSES_DIRECTION_WHEN_OBSTRUCTED
+        | PLATFORM_COMES_FROM_FLOOR
+        | PLATFORM_COMES_FROM_CEILING
+        | PLATFORM_IS_INITIALLY_EXTENDED
+        | PLATFORM_IS_DOOR;
+    // Default speed: _slow_platform = WORLD_ONE / (2 * 30) ≈ 0.0167 WU/tick
+    let default_speed: f32 = 1.0 / 60.0;
+    // Default delay: _very_long_delay_platform = 4 * 30 = 120 ticks
+    let default_delay: u16 = 120;
+
+    for (poly_idx, polygon) in map_data.polygons.iter().enumerate() {
+        if polygon.polygon_type == POLYGON_IS_PLATFORM && !explicit_polys.contains(&poly_idx) {
+            let floor = world_coord(polygon.floor_height);
+            let ceiling = world_coord(polygon.ceiling_height);
+
+            // Initially extended (closed door): floor at ceiling level
+            // Rest position (open): floor at floor level
+            world.spawn(Platform {
+                polygon_index: poly_idx,
+                floor_rest: floor,
+                floor_extended: ceiling,  // floor rises to ceiling when closed
+                ceiling_rest: ceiling,
+                ceiling_extended: floor,  // ceiling lowers to floor when closed
+                current_floor: ceiling,   // starts extended (closed)
+                current_ceiling: floor,   // starts extended (closed)
+                speed: default_speed,
+                state: PlatformState::AtRest,
+                return_delay: default_delay,
+                delay_remaining: 0,
+                activation_flags: default_flags,
+                crushes: false,
+            });
+        }
     }
 }
 
@@ -464,6 +557,54 @@ fn spawn_media(world: &mut World, map_data: &MapData) {
             current_magnitude: world_coord(media.current_magnitude),
         });
     }
+}
+
+fn build_control_panels(map_data: &MapData) -> crate::world_mechanics::panels::ControlPanels {
+    use crate::world_mechanics::panels::{ControlPanel, ControlPanels, PanelAction};
+
+    let mut panels = Vec::new();
+
+    for (side_idx, side) in map_data.sides.iter().enumerate() {
+        // Check IS_CONTROL_PANEL flag (0x0002)
+        if side.flags & 0x0002 == 0 {
+            continue;
+        }
+        if side.control_panel_type < 0 {
+            continue;
+        }
+
+        let permutation = side.control_panel_permutation as usize;
+        let action = match side.control_panel_type {
+            4 => PanelAction::ToggleLight { light_index: permutation },
+            5 => PanelAction::ActivatePlatform { platform_index: permutation },
+            6 => PanelAction::ActivateTaggedPlatforms { tag: side.control_panel_permutation },
+            9 => PanelAction::ActivateTerminal { terminal_index: permutation },
+            _ => continue,
+        };
+
+        let line_index = side.line_index as usize;
+        let side_num = if line_index < map_data.lines.len() {
+            let line = &map_data.lines[line_index];
+            if line.clockwise_polygon_side_index >= 0
+                && line.clockwise_polygon_side_index as usize == side_idx
+            {
+                0
+            } else {
+                1
+            }
+        } else {
+            0
+        };
+
+        panels.push(ControlPanel {
+            line_index,
+            side: side_num,
+            action,
+            max_distance: 1.5,
+        });
+    }
+
+    ControlPanels(panels)
 }
 
 /// Serializable snapshot of the simulation state for save/load.
@@ -662,6 +803,10 @@ impl SimWorld {
 
         // Restore RNG from seed
         world.insert_resource(SimRng(StdRng::seed_from_u64(snapshot.rng_seed)));
+
+        // Rebuild control panels
+        let control_panels = build_control_panels(map_data);
+        world.insert_resource(control_panels);
 
         // Restore player
         if let Some(p) = snapshot.player {

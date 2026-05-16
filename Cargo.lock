@@ -1796,6 +1796,7 @@ dependencies = [
  "bevy_ecs",
  "bincode",
  "glam 0.29.3",
+ "log",
  "marathon-formats",
  "pretty_assertions",
  "rand",

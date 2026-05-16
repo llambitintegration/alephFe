@@ -100,6 +100,8 @@ impl SimWorld {
         self.update_media();
         // 3. Update platforms (before player physics so collision uses new heights)
         self.update_platforms();
+        // 3b. Action key processing (doors and control panels)
+        self.process_action_key();
         // 4. Player physics
         self.run_player_physics();
         // 5. Player weapons (depends on player position/facing)
@@ -128,16 +130,7 @@ impl SimWorld {
         };
         let geometry = self.world.resource::<MapGeometry>();
         // Clone what we need from geometry to avoid borrow conflicts
-        let geo_clone = MapGeometry {
-            polygon_vertices: geometry.polygon_vertices.clone(),
-            floor_heights: geometry.floor_heights.clone(),
-            ceiling_heights: geometry.ceiling_heights.clone(),
-            polygon_adjacency: geometry.polygon_adjacency.clone(),
-            line_endpoints: geometry.line_endpoints.clone(),
-            line_solid: geometry.line_solid.clone(),
-            line_transparent: geometry.line_transparent.clone(),
-            polygon_media_index: geometry.polygon_media_index.clone(),
-        };
+        let geo_clone = geometry.clone();
 
         // Collect media data for submersion checks
         let media_data: std::collections::HashMap<usize, (f32, i16)> = {
@@ -286,6 +279,132 @@ impl SimWorld {
             if let Some(&intensity) = light_intensities.get(&media.light_index) {
                 media.current_height =
                     crate::world_mechanics::media::compute_media_height(&*media, intensity);
+            }
+        }
+    }
+
+    fn process_action_key(&mut self) {
+        let tick_input = self.world.resource::<TickInput>();
+        if !tick_input.action_flags.contains(ActionFlags::ACTION) {
+            return;
+        }
+
+        // Get player position, facing, polygon
+        let player_data: Option<(glam::Vec2, f32, usize)> = {
+            let mut q = self.world.query_filtered::<(
+                &crate::Position,
+                &crate::Facing,
+                &crate::PolygonIndex,
+            ), bevy_ecs::prelude::With<crate::Player>>();
+            q.iter(&self.world).next().map(|(pos, fac, poly)| {
+                (glam::Vec2::new(pos.0.x, pos.0.y), fac.0, poly.0)
+            })
+        };
+
+        let (player_pos, player_facing, player_poly) = match player_data {
+            Some(data) => data,
+            None => return,
+        };
+
+        // Get control panels resource
+        let panels = self.world.get_resource::<crate::world_mechanics::panels::ControlPanels>()
+            .cloned()
+            .unwrap_or_default();
+        let geometry = self.world.resource::<MapGeometry>().clone();
+
+        let target = crate::world_mechanics::action_key::find_action_key_target(
+            player_pos,
+            player_facing,
+            player_poly,
+            &geometry,
+            &panels,
+        );
+
+        match target {
+            crate::world_mechanics::action_key::ActionTarget::Platform(platform_poly_idx) => {
+                let mut query = self.world.query::<&mut crate::Platform>();
+                for mut platform in query.iter_mut(&mut self.world) {
+                    if platform.polygon_index == platform_poly_idx {
+                        if crate::world_mechanics::platforms::should_activate(
+                            &*platform,
+                            crate::world_mechanics::platforms::PlatformTrigger::ActionKey,
+                        ) {
+                            crate::world_mechanics::platforms::activate_platform(&mut *platform);
+                        } else if platform.state == crate::PlatformState::Extending {
+                            platform.state = crate::PlatformState::Returning;
+                        } else if platform.state == crate::PlatformState::Returning {
+                            platform.state = crate::PlatformState::Extending;
+                        }
+                        break;
+                    }
+                }
+            }
+            crate::world_mechanics::action_key::ActionTarget::Panel(panel_idx) => {
+                self.execute_panel_action(panel_idx, &panels);
+            }
+            crate::world_mechanics::action_key::ActionTarget::None => {}
+        }
+    }
+
+    fn execute_panel_action(
+        &mut self,
+        panel_idx: usize,
+        panels: &crate::world_mechanics::panels::ControlPanels,
+    ) {
+        let panel = match panels.0.get(panel_idx) {
+            Some(p) => p,
+            None => return,
+        };
+
+        match &panel.action {
+            crate::world_mechanics::panels::PanelAction::ActivatePlatform { platform_index } => {
+                let target_idx = *platform_index;
+                let mut query = self.world.query::<&mut crate::Platform>();
+                for mut platform in query.iter_mut(&mut self.world) {
+                    if platform.polygon_index == target_idx {
+                        crate::world_mechanics::platforms::activate_platform(&mut *platform);
+                        break;
+                    }
+                }
+            }
+            crate::world_mechanics::panels::PanelAction::ToggleLight { light_index } => {
+                let target_idx = *light_index;
+                let mut query = self.world.query::<&mut crate::Light>();
+                for mut light in query.iter_mut(&mut self.world) {
+                    if light.light_index == target_idx {
+                        if light.current_intensity > 0.5 {
+                            light.current_intensity = 0.0;
+                            light.intensity_max = 0.0;
+                        } else {
+                            light.current_intensity = 1.0;
+                            light.intensity_max = 1.0;
+                        }
+                        break;
+                    }
+                }
+            }
+            crate::world_mechanics::panels::PanelAction::ActivateTaggedPlatforms { tag } => {
+                let tag_val = *tag;
+                let geometry = self.world.resource::<MapGeometry>();
+                let matching_polys: Vec<usize> = geometry.polygon_types.iter()
+                    .zip(geometry.polygon_permutations.iter())
+                    .enumerate()
+                    .filter(|(_, (&ptype, &perm))| ptype == 5 && perm == tag_val)
+                    .map(|(idx, _)| idx)
+                    .collect();
+
+                let mut query = self.world.query::<&mut crate::Platform>();
+                for mut platform in query.iter_mut(&mut self.world) {
+                    if matching_polys.contains(&platform.polygon_index) {
+                        crate::world_mechanics::platforms::activate_platform(&mut *platform);
+                    }
+                }
+            }
+            crate::world_mechanics::panels::PanelAction::ActivateTerminal { terminal_index } => {
+                let idx = *terminal_index;
+                self.world.resource_mut::<crate::world::SimEvents>().push(
+                    crate::world::SimEvent::TerminalActivation { terminal_index: idx },
+                );
             }
         }
     }
@@ -1955,6 +2074,8 @@ impl SimWorld {
             collection: def.collection as u16,
             shape: shape as u16,
             frame: 0,
+            vertical_position: def.idle_height,
+            horizontal_position: def.idle_width,
         })
     }
 
@@ -2144,6 +2265,10 @@ pub struct WeaponRenderState {
     pub shape: u16,
     /// Animation frame within the shape sequence.
     pub frame: u16,
+    /// Vertical position of the weapon sprite origin (normalized, from idle_height).
+    pub vertical_position: f32,
+    /// Horizontal position of the weapon sprite origin (normalized, from idle_width).
+    pub horizontal_position: f32,
 }
 
 #[cfg(test)]
