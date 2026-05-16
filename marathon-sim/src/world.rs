@@ -79,6 +79,7 @@ pub enum SimEvent {
     SoundTrigger { sound_index: usize, position: Vec3 },
     EntityDamaged { entity: Entity, amount: i16, damage_type: i16 },
     EntityKilled { entity: Entity },
+    ItemPickedUp { item_type: i16 },
 }
 
 impl SimEvents {
@@ -894,4 +895,18 @@ impl SimWorld {
 pub enum SimWorldError {
     #[error("Missing physics data: {0}")]
     MissingPhysicsData(String),
+}
+
+#[cfg(test)]
+mod sim_event_tests {
+    use super::*;
+
+    #[test]
+    fn item_picked_up_carries_item_type() {
+        let event = SimEvent::ItemPickedUp { item_type: 7 };
+        match event {
+            SimEvent::ItemPickedUp { item_type } => assert_eq!(item_type, 7),
+            _ => panic!("expected SimEvent::ItemPickedUp variant"),
+        }
+    }
 }
