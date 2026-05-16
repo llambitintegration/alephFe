@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "changeId": "fix-dynamic-geometry-rendering",
+  "boxId": "fix-dynamic-geometry-rendering#L4",
+  "testFilePath": "marathon-web/src/poly_data.rs",
+  "testStatus": "passed",
+  "filesModified": [
+    "marathon-web/src/poly_data.rs",
+    "marathon-web/src/render.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "writtenPaths": [
+    "marathon-web/src/poly_data.rs",
+    "marathon-web/src/render.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "tasksMdBefore": "8711a979faa8315bb60e3920f32fbe7729d19f88286663961a554ef03daef83c",
+  "tasksMdAfter": "b019d45c21bccecb2d4484d7e3896f56c47e4ac887e3f57ec5e5c2c2e3f72c8c",
+  "generatedAt": "2026-05-16T20:19:20Z",
+  "notes": "Added Rgba32Float data-texture descriptor/extent/BGL helpers in poly_data.rs (data_texture_extent, data_texture_descriptor, data_texture_bgl_entries) sized for polygon count, asserting <= downlevel_webgl2_defaults max_texture_dimension_2d (2048). Wired creation into run_web (placeholder) and load_level_into (sized to map.polygons.len()) with bind group + non-filtering sampler, group 2 in pipeline layout, bound in frame(). 3 new unit tests pass (extent vs polygon count incl. limit/overflow, descriptor format/usage, BGL vertex+fragment visibility). Native cargo test green; wasm32 cargo check green."
+}

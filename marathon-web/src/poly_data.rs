@@ -37,6 +37,73 @@ pub const FLOATS_PER_POLYGON: usize = 8;
 /// per polygon row).
 pub const DATA_TEXTURE_WIDTH: u32 = 2;
 
+/// `downlevel_webgl2_defaults` guarantees at least this for
+/// `max_texture_dimension_2d`. The data texture height (= polygon count) must
+/// not exceed it.
+pub const WEBGL2_MAX_TEXTURE_DIMENSION_2D: u32 = 2048;
+
+/// Compute the `Rgba32Float` data-texture size for a level with `polygon_count`
+/// polygons: 2 texels wide (see module docs), one row per polygon.
+///
+/// Returns `None` if `polygon_count` exceeds the WebGL2-guaranteed
+/// `max_texture_dimension_2d`, in which case the caller must tile (out of scope
+/// here) rather than silently truncate. `polygon_count == 0` yields a 2x1
+/// texture (wgpu rejects zero-sized textures) that is simply never sampled.
+pub fn data_texture_extent(polygon_count: usize) -> Option<wgpu::Extent3d> {
+    let height = polygon_count.max(1) as u32;
+    if height > WEBGL2_MAX_TEXTURE_DIMENSION_2D {
+        return None;
+    }
+    Some(wgpu::Extent3d {
+        width: DATA_TEXTURE_WIDTH,
+        height,
+        depth_or_array_layers: 1,
+    })
+}
+
+/// The texture format used for the per-polygon data texture.
+pub const DATA_TEXTURE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+
+/// Build the [`wgpu::TextureDescriptor`] for the per-polygon data texture.
+pub fn data_texture_descriptor(extent: wgpu::Extent3d) -> wgpu::TextureDescriptor<'static> {
+    wgpu::TextureDescriptor {
+        label: Some("poly_data_texture"),
+        size: extent,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: DATA_TEXTURE_FORMAT,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    }
+}
+
+/// Bind-group-layout entries for the per-polygon data texture: an unfilterable
+/// float texture sampled in both vertex (height offset) and fragment (light)
+/// stages, plus a non-filtering sampler. WebGL2 cannot linearly filter
+/// `Rgba32Float`, and per-polygon data must not be interpolated anyway, so the
+/// sample type is `Float { filterable: false }` with a `NonFiltering` sampler.
+pub fn data_texture_bgl_entries() -> [wgpu::BindGroupLayoutEntry; 2] {
+    [
+        wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        },
+        wgpu::BindGroupLayoutEntry {
+            binding: 1,
+            visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+            count: None,
+        },
+    ]
+}
+
 /// Dynamic per-polygon state that the shader needs each frame.
 ///
 /// Heights are in render units (Marathon world units / 1024). Light values are
@@ -141,6 +208,63 @@ mod tests {
     #[test]
     fn pack_empty_yields_empty() {
         assert!(pack_poly_data(&[]).is_empty());
+    }
+
+    #[test]
+    fn data_texture_extent_matches_polygon_count_within_webgl2_limits() {
+        // A realistic Marathon level (>1000 polygons) fits.
+        let ext = data_texture_extent(1500).expect("1500 polys must fit");
+        assert_eq!(ext.width, DATA_TEXTURE_WIDTH);
+        assert_eq!(ext.height, 1500, "one texture row per polygon");
+        assert_eq!(ext.depth_or_array_layers, 1);
+        assert!(ext.width <= WEBGL2_MAX_TEXTURE_DIMENSION_2D);
+        assert!(ext.height <= WEBGL2_MAX_TEXTURE_DIMENSION_2D);
+
+        // At the limit.
+        let at = data_texture_extent(WEBGL2_MAX_TEXTURE_DIMENSION_2D as usize).unwrap();
+        assert_eq!(at.height, WEBGL2_MAX_TEXTURE_DIMENSION_2D);
+
+        // Empty level still produces a valid (non-zero) 2x1 texture.
+        let empty = data_texture_extent(0).unwrap();
+        assert_eq!(empty.width, 2);
+        assert_eq!(empty.height, 1);
+
+        // Exceeding the WebGL2 guarantee is reported, not silently truncated.
+        assert!(data_texture_extent(WEBGL2_MAX_TEXTURE_DIMENSION_2D as usize + 1).is_none());
+    }
+
+    #[test]
+    fn data_texture_descriptor_is_rgba32float_bindable_copydst() {
+        let ext = data_texture_extent(10).unwrap();
+        let desc = data_texture_descriptor(ext);
+        assert_eq!(desc.format, wgpu::TextureFormat::Rgba32Float);
+        assert_eq!(desc.size.width, 2);
+        assert_eq!(desc.size.height, 10);
+        assert_eq!(desc.dimension, wgpu::TextureDimension::D2);
+        assert!(desc
+            .usage
+            .contains(wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST));
+    }
+
+    #[test]
+    fn data_texture_bgl_entries_are_vertex_and_fragment_visible() {
+        let entries = data_texture_bgl_entries();
+        // Texture entry visible to both stages (vertex offsets Y, fragment uses light).
+        assert!(entries[0]
+            .visibility
+            .contains(wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT));
+        match entries[0].ty {
+            wgpu::BindingType::Texture { sample_type, .. } => {
+                assert_eq!(sample_type, wgpu::TextureSampleType::Float { filterable: false });
+            }
+            _ => panic!("entry 0 must be a texture binding"),
+        }
+        match entries[1].ty {
+            wgpu::BindingType::Sampler(s) => {
+                assert_eq!(s, wgpu::SamplerBindingType::NonFiltering);
+            }
+            _ => panic!("entry 1 must be a sampler binding"),
+        }
     }
 
     #[test]
