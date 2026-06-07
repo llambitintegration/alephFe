@@ -439,6 +439,25 @@ impl GameState {
                 self.config.height as f32,
             );
         }
+        // Per-frame dynamic poly-data upload (box 4.2). Gather the sim's final
+        // per-polygon floor/ceiling/media heights and animated light intensities
+        // for this frame (after the tick loop above) and rewrite the data
+        // texture, so doors/platforms/light/media animate without re-baking
+        // geometry. This is the ONLY per-frame geometry-driving GPU write:
+        // the vertex and index buffers are created once in `load_level_into`
+        // and are NEVER recreated here in `frame()` — only `write_texture`
+        // (inside `write_poly_data_texture`) runs per frame. Box 4.2's
+        // buffer-stability constraint is enforced by that invariant.
+        if let Some(ref mut sim) = self.sim {
+            let sim_data = sim.poly_dynamic_data();
+            let mapped = crate::poly_data::poly_dyn_data_from_sim_slice(&sim_data);
+            crate::poly_data::write_poly_data_texture(
+                &self.queue,
+                &self.poly_data_texture,
+                &mapped,
+            );
+        }
+
         self.queue.submit(std::iter::once(enc.finish()));
         output.present();
 

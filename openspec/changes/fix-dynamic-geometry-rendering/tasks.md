@@ -18,7 +18,7 @@
 ## 4. Frame-loop synchronization (marathon-web)
 
 - [x] 4.1 Add a method on `SimWorld` (or reuse existing accessors) returning current per-polygon floor/ceiling heights, media heights, and animated light intensities for all polygons; unit test against a sim with one moving platform
-- [ ] 4.2 In `GameState::frame()`, after sim ticks and before `queue.submit`, gather per-polygon data and call `write_poly_data_texture`; assert vertex/index buffers are never recreated in `frame()` (code review checkbox + test that buffer handles are unchanged across frames)
+- [x] 4.2 In `GameState::frame()`, after sim ticks and before `queue.submit`, gather per-polygon data and call `write_poly_data_texture`; assert vertex/index buffers are never recreated in `frame()` (code review checkbox + test that buffer handles are unchanged across frames)
 - [ ] 4.3 Integration test (headless wgpu): tick a sim with an opening door for N ticks and assert the data-texture entry for the door polygon changes while the vertex buffer contents do not
 
 ## 5. Starting weapon loadout (marathon-sim)

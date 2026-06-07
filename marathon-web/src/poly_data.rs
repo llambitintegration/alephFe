@@ -240,9 +240,83 @@ pub fn build_poly_dyn_data(map: &marathon_formats::MapData) -> Vec<PolyDynData> 
         .collect()
 }
 
+/// Convert one sim-side [`marathon_sim::world::PolyDynamicData`] into the web
+/// renderer's [`PolyDynData`].
+///
+/// The two structs are deliberately separate (the sim crate carries no web
+/// dependency, see `world.rs:299`), but their fields correspond 1:1: both hold
+/// floor/ceiling/media heights in render units and floor/ceiling light as
+/// 0.0..=1.0 intensities. This is the seam box 4.2's per-frame upload uses to
+/// feed `SimWorld::poly_dynamic_data()` into [`write_poly_data_texture`].
+pub fn poly_dyn_data_from_sim(d: &marathon_sim::world::PolyDynamicData) -> PolyDynData {
+    PolyDynData {
+        floor_h: d.floor_height,
+        ceiling_h: d.ceiling_height,
+        media_h: d.media_height,
+        floor_light: d.floor_light,
+        ceiling_light: d.ceiling_light,
+    }
+}
+
+/// Map a whole slice of sim per-polygon data into web [`PolyDynData`],
+/// preserving polygon order so the result can be uploaded directly via
+/// [`write_poly_data_texture`].
+pub fn poly_dyn_data_from_sim_slice(
+    data: &[marathon_sim::world::PolyDynamicData],
+) -> Vec<PolyDynData> {
+    data.iter().map(poly_dyn_data_from_sim).collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sim_poly_dynamic_data_maps_to_web_poly_dyn_data() {
+        // Box 4.2: frame() gathers SimWorld::poly_dynamic_data() (a
+        // Vec<PolyDynamicData>) and feeds it to write_poly_data_texture, which
+        // wants &[PolyDynData]. The conversion must preserve every field 1:1:
+        // floor/ceiling/media heights and floor/ceiling light values.
+        let sim = marathon_sim::world::PolyDynamicData {
+            floor_height: 1.5,
+            ceiling_height: 4.25,
+            media_height: 0.75,
+            floor_light: 0.6,
+            ceiling_light: 0.9,
+        };
+        let web = poly_dyn_data_from_sim(&sim);
+        assert_eq!(web.floor_h, 1.5);
+        assert_eq!(web.ceiling_h, 4.25);
+        assert_eq!(web.media_h, 0.75);
+        assert_eq!(web.floor_light, 0.6);
+        assert_eq!(web.ceiling_light, 0.9);
+    }
+
+    #[test]
+    fn sim_poly_dynamic_data_slice_maps_in_order() {
+        let sim = vec![
+            marathon_sim::world::PolyDynamicData {
+                floor_height: 0.0,
+                ceiling_height: 1.0,
+                media_height: 0.0,
+                floor_light: 1.0,
+                ceiling_light: 1.0,
+            },
+            marathon_sim::world::PolyDynamicData {
+                floor_height: 2.0,
+                ceiling_height: 3.0,
+                media_height: 0.5,
+                floor_light: 0.25,
+                ceiling_light: 0.5,
+            },
+        ];
+        let web = poly_dyn_data_from_sim_slice(&sim);
+        assert_eq!(web.len(), 2);
+        assert_eq!(web[0], poly_dyn_data_from_sim(&sim[0]));
+        assert_eq!(web[1], poly_dyn_data_from_sim(&sim[1]));
+        assert_eq!(web[1].floor_h, 2.0);
+        assert_eq!(web[1].ceiling_light, 0.5);
+    }
 
     #[test]
     fn initial_poly_dyn_data_reproduces_prechange_baked_values() {
