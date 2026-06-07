@@ -19,20 +19,20 @@
 
 - [x] 4.1 Add a method on `SimWorld` (or reuse existing accessors) returning current per-polygon floor/ceiling heights, media heights, and animated light intensities for all polygons; unit test against a sim with one moving platform
 - [x] 4.2 In `GameState::frame()`, after sim ticks and before `queue.submit`, gather per-polygon data and call `write_poly_data_texture`; assert vertex/index buffers are never recreated in `frame()` (code review checkbox + test that buffer handles are unchanged across frames)
-- [ ] 4.3 Integration test (headless wgpu): tick a sim with an opening door for N ticks and assert the data-texture entry for the door polygon changes while the vertex buffer contents do not
+- [x] 4.3 Integration test (headless wgpu): tick a sim with an opening door for N ticks and assert the data-texture entry for the door polygon changes while the vertex buffer contents do not
 
 ## 5. Starting weapon loadout (marathon-sim)
 
-- [ ] 5.1 Write a failing test: a freshly created `SimWorld` has a weapon inventory containing fists and the magnum, magnum equipped with full primary magazine and positive reserve, `current()` resolves to a weapon with `projectile_type >= 0`
-- [ ] 5.2 Extend the starting `WeaponInventory` build in `SimWorld::new` (`world.rs:158`) to insert the magnum slot with magazine/reserve sourced from physics `WeaponDefinition`/`TriggerDefinition`; make 5.1 pass
-- [ ] 5.3 Write a test: with the starting loadout, a `FIRE_PRIMARY` tick spawns a projectile entity and decrements the magnum primary magazine by 1; make it pass
-- [ ] 5.4 Update any existing tests that assumed a fists-only starting inventory (combat-system delta is now authoritative)
+- [x] 5.1 Write a failing test: a freshly created `SimWorld` has a weapon inventory containing fists and the magnum, magnum equipped with full primary magazine and positive reserve, `current()` resolves to a weapon with `projectile_type >= 0`
+- [x] 5.2 Extend the starting `WeaponInventory` build in `SimWorld::new` (`world.rs:158`) to insert the magnum slot with magazine/reserve sourced from physics `WeaponDefinition`/`TriggerDefinition`; make 5.1 pass
+- [x] 5.3 Write a test: with the starting loadout, a `FIRE_PRIMARY` tick spawns a projectile entity and decrements the magnum primary magazine by 1; make it pass
+- [x] 5.4 Update any existing tests that assumed a fists-only starting inventory (combat-system delta is now authoritative)
 
 ## 6. Edge-triggered action key (marathon-sim)
 
-- [ ] 6.1 Write a failing test: holding ACTION for 5 consecutive ticks facing a door activates the platform exactly once
-- [ ] 6.2 Add previous-ACTION state to the sim and gate `process_action_key` on a clear→set transition; make 6.1 pass
-- [ ] 6.3 Write a test: release then re-press ACTION re-activates (second activation occurs); make it pass
+- [x] 6.1 Write a failing test: holding ACTION for 5 consecutive ticks facing a door activates the platform exactly once
+- [x] 6.2 Add previous-ACTION state to the sim and gate `process_action_key` on a clear→set transition; make 6.1 pass
+- [x] 6.3 Write a test: release then re-press ACTION re-activates (second activation occurs); make it pass
 
 ## 7. Verification & regression
 

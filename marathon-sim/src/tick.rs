@@ -67,6 +67,16 @@ pub struct TickInput {
     pub mouse_pitch: f32,
 }
 
+/// Persistent edge-detection state for the ACTION key.
+///
+/// Door / control-panel activation is a one-shot event: a single press must
+/// activate a target exactly once, no matter how many ticks the key is held.
+/// We detect a rising edge (previous tick clear -> this tick set) by stashing
+/// last tick's ACTION state here. Stored as a resource so it persists across
+/// ticks alongside the rest of the sim state.
+#[derive(Debug, Default, Clone, Copy, bevy_ecs::prelude::Resource)]
+pub struct PrevActionKey(pub bool);
+
 impl From<ActionFlags> for TickInput {
     fn from(action_flags: ActionFlags) -> Self {
         TickInput {
@@ -299,7 +309,14 @@ impl SimWorld {
 
     fn process_action_key(&mut self) {
         let tick_input = self.world.resource::<TickInput>();
-        if !tick_input.action_flags.contains(ActionFlags::ACTION) {
+        let action_now = tick_input.action_flags.contains(ActionFlags::ACTION);
+
+        // Edge-detect: update the stored previous-ACTION state EVERY tick (even
+        // on release) so the edge re-arms, then only act on a rising edge.
+        let action_prev = self.world.resource::<PrevActionKey>().0;
+        self.world.resource_mut::<PrevActionKey>().0 = action_now;
+        let rising_edge = action_now && !action_prev;
+        if !rising_edge {
             return;
         }
 
