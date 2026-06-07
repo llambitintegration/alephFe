@@ -1,8 +1,8 @@
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3};
-use marathon_formats::MapData;
 use marathon_formats::map::LightData;
 use marathon_formats::physics::PhysicsData;
+use marathon_formats::MapData;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -25,7 +25,7 @@ impl Default for SimConfig {
 }
 
 /// Shared map geometry resource for collision and pathfinding.
-#[derive(Resource, Debug)]
+#[derive(Resource, Debug, Clone)]
 pub struct MapGeometry {
     /// Polygon vertex positions (2D, in world units converted to f32).
     pub polygon_vertices: Vec<Vec<Vec2>>,
@@ -43,6 +43,16 @@ pub struct MapGeometry {
     pub line_transparent: Vec<bool>,
     /// Per-polygon media index (-1 if none).
     pub polygon_media_index: Vec<i16>,
+    /// Per-polygon floor light-source index (-1 if none).
+    pub polygon_floor_light_index: Vec<i16>,
+    /// Per-polygon ceiling light-source index (-1 if none).
+    pub polygon_ceiling_light_index: Vec<i16>,
+    /// Polygon type (e.g. 5 = platform) per polygon.
+    pub polygon_types: Vec<i16>,
+    /// Polygon permutation (e.g. platform index) per polygon.
+    pub polygon_permutations: Vec<i16>,
+    /// Side indices per line: (clockwise_side, counterclockwise_side).
+    pub line_side_indices: Vec<(Option<usize>, Option<usize>)>,
 }
 
 /// Physics tables resource (monster defs, weapon defs, etc.).
@@ -68,11 +78,27 @@ pub struct SimEvents {
 /// A simulation event.
 #[derive(Debug, Clone)]
 pub enum SimEvent {
-    LevelTeleport { target_level: usize },
-    TerminalActivation { terminal_index: usize },
-    SoundTrigger { sound_index: usize, position: Vec3 },
-    EntityDamaged { entity: Entity, amount: i16, damage_type: i16 },
-    EntityKilled { entity: Entity },
+    LevelTeleport {
+        target_level: usize,
+    },
+    TerminalActivation {
+        terminal_index: usize,
+    },
+    SoundTrigger {
+        sound_index: usize,
+        position: Vec3,
+    },
+    EntityDamaged {
+        entity: Entity,
+        amount: i16,
+        damage_type: i16,
+    },
+    EntityKilled {
+        entity: Entity,
+    },
+    ItemPickedUp {
+        item_type: i16,
+    },
 }
 
 impl SimEvents {
@@ -144,6 +170,10 @@ impl SimWorld {
         // Initialize media
         spawn_media(&mut world, map_data);
 
+        // Initialize control panels from map sides
+        let control_panels = build_control_panels(map_data);
+        world.insert_resource(control_panels);
+
         // Initialize player weapon inventory (start with fists)
         let mut weapon_inventory = crate::player::inventory::WeaponInventory::default();
         {
@@ -180,6 +210,101 @@ impl SimWorld {
     pub fn ecs_world_mut(&mut self) -> &mut bevy_ecs::world::World {
         &mut self.world
     }
+
+    /// Return current per-polygon dynamic geometry/lighting data for every
+    /// polygon in the level, indexed by polygon.
+    ///
+    /// This is the sim-side source the web renderer feeds into its per-polygon
+    /// data texture each frame (box 4.2). Heights are in render units (Marathon
+    /// world units / 1024) so they match the renderer's X/Z scale; light values
+    /// are 0.0..=1.0 intensity multipliers.
+    ///
+    /// Field sources:
+    /// - `floor_height` / `ceiling_height`: live values from `MapGeometry`,
+    ///   which `update_platforms` rewrites each tick as platforms/doors move.
+    /// - `media_height`: the current surface height of the `Media` referenced by
+    ///   the polygon's `media_index` (animated by `update_media`); `0.0` when the
+    ///   polygon has no media.
+    /// - `floor_light` / `ceiling_light`: the current intensity of the `Light`
+    ///   referenced by the polygon's floor/ceiling light-source index (animated
+    ///   by `update_lights`); `1.0` when the polygon references no valid light
+    ///   (mirrors the web `evaluate_light_intensity` fallback).
+    pub fn poly_dynamic_data(&mut self) -> Vec<PolyDynamicData> {
+        let geometry = self.world.resource::<MapGeometry>();
+        let floor_heights = geometry.floor_heights.clone();
+        let ceiling_heights = geometry.ceiling_heights.clone();
+        let polygon_media_index = geometry.polygon_media_index.clone();
+        let polygon_floor_light_index = geometry.polygon_floor_light_index.clone();
+        let polygon_ceiling_light_index = geometry.polygon_ceiling_light_index.clone();
+
+        // Media current surface height keyed by media array index.
+        let media_heights: std::collections::HashMap<usize, f32> = {
+            let mut map = std::collections::HashMap::new();
+            let mut q = self.world.query::<&crate::components::Media>();
+            for media in q.iter(&self.world) {
+                map.insert(media.index, media.current_height);
+            }
+            map
+        };
+
+        // Current light intensity keyed by light array index.
+        let light_intensities: std::collections::HashMap<usize, f32> = {
+            let mut map = std::collections::HashMap::new();
+            let mut q = self.world.query::<&crate::components::Light>();
+            for light in q.iter(&self.world) {
+                map.insert(light.light_index, light.current_intensity);
+            }
+            map
+        };
+
+        let light_for = |idx: i16| -> f32 {
+            if idx < 0 {
+                return 1.0;
+            }
+            light_intensities
+                .get(&(idx as usize))
+                .copied()
+                .unwrap_or(1.0)
+        };
+
+        let poly_count = floor_heights.len();
+        (0..poly_count)
+            .map(|p| {
+                let media_height = {
+                    let mi = polygon_media_index.get(p).copied().unwrap_or(-1);
+                    if mi >= 0 {
+                        media_heights.get(&(mi as usize)).copied().unwrap_or(0.0)
+                    } else {
+                        0.0
+                    }
+                };
+                PolyDynamicData {
+                    floor_height: floor_heights[p],
+                    ceiling_height: ceiling_heights.get(p).copied().unwrap_or(0.0),
+                    media_height,
+                    floor_light: light_for(polygon_floor_light_index.get(p).copied().unwrap_or(-1)),
+                    ceiling_light: light_for(
+                        polygon_ceiling_light_index.get(p).copied().unwrap_or(-1),
+                    ),
+                }
+            })
+            .collect()
+    }
+}
+
+/// Current per-polygon dynamic geometry/lighting state, indexed by polygon.
+///
+/// Heights are in render units (Marathon world units / 1024); light values are
+/// 0.0..=1.0 intensity multipliers. This is the sim-side equivalent of the web
+/// renderer's `PolyDynData`; the web layer maps one to the other so the sim
+/// crate stays free of any web dependency.
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
+pub struct PolyDynamicData {
+    pub floor_height: f32,
+    pub ceiling_height: f32,
+    pub media_height: f32,
+    pub floor_light: f32,
+    pub ceiling_light: f32,
 }
 
 fn build_map_geometry(map_data: &MapData) -> MapGeometry {
@@ -259,6 +384,48 @@ fn build_map_geometry(map_data: &MapData) -> MapGeometry {
         .map(|poly| poly.media_index)
         .collect();
 
+    let polygon_floor_light_index: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.floor_lightsource_index)
+        .collect();
+
+    let polygon_ceiling_light_index: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.ceiling_lightsource_index)
+        .collect();
+
+    let polygon_types: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.polygon_type)
+        .collect();
+
+    let polygon_permutations: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.permutation)
+        .collect();
+
+    let line_side_indices: Vec<(Option<usize>, Option<usize>)> = map_data
+        .lines
+        .iter()
+        .map(|line| {
+            let cw = if line.clockwise_polygon_side_index >= 0 {
+                Some(line.clockwise_polygon_side_index as usize)
+            } else {
+                None
+            };
+            let ccw = if line.counterclockwise_polygon_side_index >= 0 {
+                Some(line.counterclockwise_polygon_side_index as usize)
+            } else {
+                None
+            };
+            (cw, ccw)
+        })
+        .collect();
+
     MapGeometry {
         polygon_vertices,
         floor_heights,
@@ -268,6 +435,11 @@ fn build_map_geometry(map_data: &MapData) -> MapGeometry {
         line_solid,
         line_transparent,
         polygon_media_index,
+        polygon_floor_light_index,
+        polygon_ceiling_light_index,
+        polygon_types,
+        polygon_permutations,
+        line_side_indices,
     }
 }
 
@@ -292,11 +464,7 @@ fn spawn_map_objects(
         // Clamp spawn Z: at least floor height so entities don't spawn below the floor
         let floor_z = floor_heights.get(polygon).copied().unwrap_or(0.0);
         let z = raw_z.max(floor_z);
-        let pos = Vec3::new(
-            world_coord(obj.location.x),
-            world_coord(obj.location.y),
-            z,
-        );
+        let pos = Vec3::new(world_coord(obj.location.x), world_coord(obj.location.y), z);
         let facing = (obj.facing as f32) * (std::f32::consts::TAU / 512.0);
 
         match obj.object_type {
@@ -339,7 +507,9 @@ fn spawn_map_objects(
                     let is_flying = def.flags & 0x0002 != 0;
 
                     let mut entity = world.spawn((
-                        Monster { definition_index: def_index },
+                        Monster {
+                            definition_index: def_index,
+                        },
                         MonsterState::Idle,
                         Target::default(),
                         AttackCooldown::default(),
@@ -354,10 +524,7 @@ fn spawn_map_objects(
                         PolygonIndex(polygon),
                         Grounded(!is_flying),
                     ));
-                    entity.insert((
-                        SpriteShape(def.stationary_shape),
-                        AnimationFrame::default(),
-                    ));
+                    entity.insert((SpriteShape(def.stationary_shape), AnimationFrame::default()));
 
                     if is_flying {
                         entity.insert(Flying {
@@ -368,7 +535,9 @@ fn spawn_map_objects(
             }
             OBJECT_IS_ITEM => {
                 world.spawn((
-                    Item { item_type: obj.index },
+                    Item {
+                        item_type: obj.index,
+                    },
                     Position(pos),
                     CollisionRadius(0.25),
                     PolygonIndex(polygon),
@@ -384,21 +553,25 @@ fn spawn_map_objects(
 }
 
 fn spawn_platforms(world: &mut World, map_data: &MapData) {
+    use crate::world_mechanics::platforms::*;
+
+    // Track which polygon indices have explicit platform data
+    let mut explicit_polys = std::collections::HashSet::new();
+
+    // First pass: explicit PLAT entries
     for platform in &map_data.platforms {
         let poly_idx = platform.polygon_index as usize;
+        explicit_polys.insert(poly_idx);
         let speed = world_coord(platform.speed);
         let min_height = world_coord(platform.minimum_height);
         let max_height = world_coord(platform.maximum_height);
 
-        // Get the polygon's ceiling height for floor-only platforms.
         let poly_ceiling = if poly_idx < map_data.polygons.len() {
             world_coord(map_data.polygons[poly_idx].ceiling_height)
         } else {
-            2.0 // fallback
+            2.0
         };
 
-        // Marathon platforms move floors between min and max height.
-        // Ceiling stays at polygon ceiling for floor-only platforms.
         world.spawn(Platform {
             polygon_index: poly_idx,
             floor_rest: min_height,
@@ -412,8 +585,54 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
             return_delay: platform.delay as u16,
             delay_remaining: 0,
             activation_flags: platform.static_flags,
-            crushes: platform.static_flags & 0x2000 != 0,
+            crushes: platform.static_flags & (1 << 8) != 0,
         });
+    }
+
+    // Second pass: implicit platforms from polygon_type == 5 without explicit PLAT data.
+    // Marathon creates these with defaults for _platform_is_spht_split_door (type 1).
+    const POLYGON_IS_PLATFORM: i16 = 5;
+    // Default flags for _platform_is_spht_split_door:
+    // deactivates_at_initial_level | extends_floor_to_ceiling | player_controllable |
+    // monster_controllable | reverses_when_obstructed | comes_from_floor |
+    // comes_from_ceiling | initially_extended | is_door
+    let default_flags: u32 = PLATFORM_DEACTIVATES_AT_INITIAL_LEVEL
+        | (1 << 5) // extends_floor_to_ceiling
+        | PLATFORM_IS_PLAYER_CONTROLLABLE
+        | PLATFORM_IS_MONSTER_CONTROLLABLE
+        | PLATFORM_REVERSES_DIRECTION_WHEN_OBSTRUCTED
+        | PLATFORM_COMES_FROM_FLOOR
+        | PLATFORM_COMES_FROM_CEILING
+        | PLATFORM_IS_INITIALLY_EXTENDED
+        | PLATFORM_IS_DOOR;
+    // Default speed: _slow_platform = WORLD_ONE / (2 * 30) ≈ 0.0167 WU/tick
+    let default_speed: f32 = 1.0 / 60.0;
+    // Default delay: _very_long_delay_platform = 4 * 30 = 120 ticks
+    let default_delay: u16 = 120;
+
+    for (poly_idx, polygon) in map_data.polygons.iter().enumerate() {
+        if polygon.polygon_type == POLYGON_IS_PLATFORM && !explicit_polys.contains(&poly_idx) {
+            let floor = world_coord(polygon.floor_height);
+            let ceiling = world_coord(polygon.ceiling_height);
+
+            // Initially extended (closed door): floor at ceiling level
+            // Rest position (open): floor at floor level
+            world.spawn(Platform {
+                polygon_index: poly_idx,
+                floor_rest: floor,
+                floor_extended: ceiling, // floor rises to ceiling when closed
+                ceiling_rest: ceiling,
+                ceiling_extended: floor, // ceiling lowers to floor when closed
+                current_floor: ceiling,  // starts extended (closed)
+                current_ceiling: floor,  // starts extended (closed)
+                speed: default_speed,
+                state: PlatformState::AtRest,
+                return_delay: default_delay,
+                delay_remaining: 0,
+                activation_flags: default_flags,
+                crushes: false,
+            });
+        }
     }
 }
 
@@ -464,6 +683,62 @@ fn spawn_media(world: &mut World, map_data: &MapData) {
             current_magnitude: world_coord(media.current_magnitude),
         });
     }
+}
+
+fn build_control_panels(map_data: &MapData) -> crate::world_mechanics::panels::ControlPanels {
+    use crate::world_mechanics::panels::{ControlPanel, ControlPanels, PanelAction};
+
+    let mut panels = Vec::new();
+
+    for (side_idx, side) in map_data.sides.iter().enumerate() {
+        // Check IS_CONTROL_PANEL flag (0x0002)
+        if side.flags & 0x0002 == 0 {
+            continue;
+        }
+        if side.control_panel_type < 0 {
+            continue;
+        }
+
+        let permutation = side.control_panel_permutation as usize;
+        let action = match side.control_panel_type {
+            4 => PanelAction::ToggleLight {
+                light_index: permutation,
+            },
+            5 => PanelAction::ActivatePlatform {
+                platform_index: permutation,
+            },
+            6 => PanelAction::ActivateTaggedPlatforms {
+                tag: side.control_panel_permutation,
+            },
+            9 => PanelAction::ActivateTerminal {
+                terminal_index: permutation,
+            },
+            _ => continue,
+        };
+
+        let line_index = side.line_index as usize;
+        let side_num = if line_index < map_data.lines.len() {
+            let line = &map_data.lines[line_index];
+            if line.clockwise_polygon_side_index >= 0
+                && line.clockwise_polygon_side_index as usize == side_idx
+            {
+                0
+            } else {
+                1
+            }
+        } else {
+            0
+        };
+
+        panels.push(ControlPanel {
+            line_index,
+            side: side_num,
+            action,
+            max_distance: 1.5,
+        });
+    }
+
+    ControlPanels(panels)
 }
 
 /// Serializable snapshot of the simulation state for save/load.
@@ -526,7 +801,7 @@ pub struct ItemSnapshot {
     pub polygon_index: usize,
 }
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 impl SimWorld {
     /// Create a serializable snapshot of the current simulation state.
@@ -534,32 +809,47 @@ impl SimWorld {
         // Player
         let player = {
             let mut q = self.world.query_filtered::<(
-                &Position, &Velocity, &Facing, &crate::components::VerticalLook,
-                &Health, &Shield, &Oxygen, &PolygonIndex, &Grounded,
+                &Position,
+                &Velocity,
+                &Facing,
+                &crate::components::VerticalLook,
+                &Health,
+                &Shield,
+                &Oxygen,
+                &PolygonIndex,
+                &Grounded,
             ), bevy_ecs::prelude::With<Player>>();
-            q.iter(&self.world).next().map(|(pos, vel, fac, vlook, hp, sh, ox, poly, gr)| {
-                PlayerSnapshot {
-                    position: pos.0,
-                    velocity: vel.0,
-                    facing: fac.0,
-                    vertical_look: vlook.0,
-                    health: hp.0,
-                    shield: sh.0,
-                    oxygen: ox.0,
-                    polygon_index: poly.0,
-                    grounded: gr.0,
-                }
-            })
+            q.iter(&self.world)
+                .next()
+                .map(
+                    |(pos, vel, fac, vlook, hp, sh, ox, poly, gr)| PlayerSnapshot {
+                        position: pos.0,
+                        velocity: vel.0,
+                        facing: fac.0,
+                        vertical_look: vlook.0,
+                        health: hp.0,
+                        shield: sh.0,
+                        oxygen: ox.0,
+                        polygon_index: poly.0,
+                        grounded: gr.0,
+                    },
+                )
         };
 
         // Monsters
         let monsters = {
             let mut q = self.world.query::<(
-                &Monster, &crate::components::MonsterState, &Position, &Velocity,
-                &Facing, &Health, &PolygonIndex, &AttackCooldown,
+                &Monster,
+                &crate::components::MonsterState,
+                &Position,
+                &Velocity,
+                &Facing,
+                &Health,
+                &PolygonIndex,
+                &AttackCooldown,
             )>();
-            q.iter(&self.world).map(|(m, state, pos, vel, fac, hp, poly, cd)| {
-                MonsterSnapshot {
+            q.iter(&self.world)
+                .map(|(m, state, pos, vel, fac, hp, poly, cd)| MonsterSnapshot {
                     definition_index: m.definition_index,
                     state: *state,
                     position: pos.0,
@@ -568,15 +858,15 @@ impl SimWorld {
                     health: hp.0,
                     polygon_index: poly.0,
                     attack_cooldown: cd.0,
-                }
-            }).collect()
+                })
+                .collect()
         };
 
         // Projectiles
         let projectiles = {
             let mut q = self.world.query::<(&Projectile, &Position, &Velocity)>();
-            q.iter(&self.world).map(|(p, pos, vel)| {
-                ProjectileSnapshot {
+            q.iter(&self.world)
+                .map(|(p, pos, vel)| ProjectileSnapshot {
                     definition_index: p.definition_index,
                     position: pos.0,
                     velocity: vel.0,
@@ -584,20 +874,20 @@ impl SimWorld {
                     ticks_alive: p.ticks_alive,
                     contrails_spawned: p.contrails_spawned,
                     current_polygon: p.current_polygon,
-                }
-            }).collect()
+                })
+                .collect()
         };
 
         // Items
         let items = {
             let mut q = self.world.query::<(&Item, &Position, &PolygonIndex)>();
-            q.iter(&self.world).map(|(item, pos, poly)| {
-                ItemSnapshot {
+            q.iter(&self.world)
+                .map(|(item, pos, poly)| ItemSnapshot {
                     item_type: item.item_type,
                     position: pos.0,
                     polygon_index: poly.0,
-                }
-            }).collect()
+                })
+                .collect()
         };
 
         // Platforms
@@ -656,12 +946,18 @@ impl SimWorld {
         // Rebuild geometry and resources
         let geometry = build_map_geometry(map_data);
         world.insert_resource(geometry);
-        world.insert_resource(PhysicsTables { data: physics_data.clone() });
+        world.insert_resource(PhysicsTables {
+            data: physics_data.clone(),
+        });
         world.insert_resource(TickCounter(snapshot.tick_count));
         world.insert_resource(SimEvents::default());
 
         // Restore RNG from seed
         world.insert_resource(SimRng(StdRng::seed_from_u64(snapshot.rng_seed)));
+
+        // Rebuild control panels
+        let control_panels = build_control_panels(map_data);
+        world.insert_resource(control_panels);
 
         // Restore player
         if let Some(p) = snapshot.player {
@@ -684,7 +980,9 @@ impl SimWorld {
         // Restore monsters
         for m in snapshot.monsters {
             world.spawn((
-                Monster { definition_index: m.definition_index },
+                Monster {
+                    definition_index: m.definition_index,
+                },
                 m.state,
                 crate::components::Target::default(),
                 AttackCooldown(m.attack_cooldown),
@@ -720,7 +1018,9 @@ impl SimWorld {
         // Restore items
         for item in snapshot.items {
             world.spawn((
-                Item { item_type: item.item_type },
+                Item {
+                    item_type: item.item_type,
+                },
                 Position(item.position),
                 PolygonIndex(item.polygon_index),
                 CollisionRadius(0.25),
@@ -749,4 +1049,249 @@ impl SimWorld {
 pub enum SimWorldError {
     #[error("Missing physics data: {0}")]
     MissingPhysicsData(String),
+}
+
+#[cfg(test)]
+mod sim_event_tests {
+    use super::*;
+
+    #[test]
+    fn item_picked_up_carries_item_type() {
+        let event = SimEvent::ItemPickedUp { item_type: 7 };
+        match event {
+            SimEvent::ItemPickedUp { item_type } => assert_eq!(item_type, 7),
+            _ => panic!("expected SimEvent::ItemPickedUp variant"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod poly_dynamic_data_tests {
+    use super::*;
+    use marathon_formats::map::{LightData, LightingFunctionSpec, StaticLightData};
+    use marathon_formats::physics::PhysicsData;
+    use marathon_formats::{Endpoint, Line, MapData, Polygon, ShapeDescriptor, WorldPoint2d};
+
+    const POLYGON_IS_PLATFORM: i16 = 5;
+
+    fn mk_endpoint(x: i16, y: i16, poly: i16) -> Endpoint {
+        Endpoint {
+            flags: 0,
+            highest_adjacent_floor_height: 0,
+            lowest_adjacent_ceiling_height: 2048,
+            vertex: WorldPoint2d { x, y },
+            transformed: WorldPoint2d { x, y },
+            supporting_polygon_index: poly,
+        }
+    }
+
+    fn mk_line(a: i16, b: i16) -> Line {
+        Line {
+            endpoint_indexes: [a, b],
+            flags: 0x4000, // SOLID
+            length: 1024,
+            highest_adjacent_floor: 0,
+            lowest_adjacent_ceiling: 2048,
+            clockwise_polygon_side_index: -1,
+            counterclockwise_polygon_side_index: -1,
+            clockwise_polygon_owner: -1,
+            counterclockwise_polygon_owner: -1,
+        }
+    }
+
+    fn mk_square_polygon(
+        polygon_type: i16,
+        endpoint_indexes: [i16; 8],
+        line_indexes: [i16; 8],
+        floor_height: i16,
+        ceiling_height: i16,
+    ) -> Polygon {
+        let wp_zero = WorldPoint2d { x: 0, y: 0 };
+        Polygon {
+            polygon_type,
+            flags: 0,
+            permutation: 0,
+            vertex_count: 4,
+            endpoint_indexes,
+            line_indexes,
+            floor_texture: ShapeDescriptor(0xFFFF),
+            ceiling_texture: ShapeDescriptor(0xFFFF),
+            floor_height,
+            ceiling_height,
+            floor_lightsource_index: 0,
+            ceiling_lightsource_index: 0,
+            area: 1024 * 1024,
+            floor_transfer_mode: 0,
+            ceiling_transfer_mode: 0,
+            adjacent_polygon_indexes: [-1; 8],
+            center: wp_zero,
+            side_indexes: [-1; 8],
+            floor_origin: wp_zero,
+            ceiling_origin: wp_zero,
+            media_index: -1,
+            media_lightsource_index: -1,
+            sound_source_indexes: -1,
+            ambient_sound_image_index: -1,
+            random_sound_image_index: -1,
+        }
+    }
+
+    fn constant_light(intensity: f32) -> StaticLightData {
+        let spec = LightingFunctionSpec {
+            function: 0, // constant
+            period: 1,
+            delta_period: 0,
+            intensity,
+            delta_intensity: 0.0,
+        };
+        StaticLightData {
+            light_type: 0,
+            flags: 0,
+            phase: 0,
+            primary_active: spec,
+            secondary_active: spec,
+            becoming_active: spec,
+            primary_inactive: spec,
+            secondary_inactive: spec,
+            becoming_inactive: spec,
+            tag: 0,
+        }
+    }
+
+    /// Map with two square polygons: poly 0 static (type 0), poly 1 a platform
+    /// (type 5). Platform polygons spawn an implicit door platform that starts
+    /// "extended" (closed) and can be activated to move.
+    fn platform_map() -> MapData {
+        // Two side-by-side 1024x1024 squares sharing endpoints 1 and 2.
+        let endpoints = vec![
+            mk_endpoint(0, 0, 0),
+            mk_endpoint(1024, 0, 0),
+            mk_endpoint(1024, 1024, 0),
+            mk_endpoint(0, 1024, 0),
+            mk_endpoint(2048, 0, 1),
+            mk_endpoint(2048, 1024, 1),
+        ];
+        let lines = vec![
+            mk_line(0, 1),
+            mk_line(1, 2),
+            mk_line(2, 3),
+            mk_line(3, 0),
+            mk_line(1, 4),
+            mk_line(4, 5),
+            mk_line(5, 2),
+        ];
+        // poly 0: static room, floor 0, ceiling 2048.
+        let poly0 = mk_square_polygon(
+            0,
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            0,
+            2048,
+        );
+        // poly 1: platform/door, floor 0, ceiling 2048.
+        let poly1 = mk_square_polygon(
+            POLYGON_IS_PLATFORM,
+            [1, 4, 5, 2, -1, -1, -1, -1],
+            [4, 5, 6, 1, -1, -1, -1, -1],
+            0,
+            2048,
+        );
+
+        MapData {
+            endpoints,
+            lines,
+            sides: vec![],
+            polygons: vec![poly0, poly1],
+            objects: vec![],
+            lights: LightData::Static(vec![constant_light(1.0)]),
+            platforms: vec![],
+            media: vec![],
+            annotations: vec![],
+            terminals: vec![],
+            ambient_sounds: vec![],
+            random_sounds: vec![],
+            map_info: None,
+            item_placement: vec![],
+            guard_paths: None,
+        }
+    }
+
+    fn empty_physics() -> PhysicsData {
+        PhysicsData {
+            monsters: None,
+            effects: None,
+            projectiles: None,
+            physics: None,
+            weapons: None,
+        }
+    }
+
+    #[test]
+    fn poly_dynamic_data_tracks_moving_platform() {
+        let map = platform_map();
+        let physics = empty_physics();
+        let config = SimConfig::default();
+        let mut world = SimWorld::new(&map, &physics, &config).expect("world construction");
+
+        // Tick once so `MapGeometry` is synced from the platform's current
+        // (closed) state — the platform writes its live heights into geometry
+        // during `update_platforms`, which is what `poly_dynamic_data` reads.
+        world.tick(crate::tick::TickInput::default());
+
+        let before = world.poly_dynamic_data();
+        assert_eq!(before.len(), 2, "one entry per polygon");
+
+        // Static polygon 0: floor 0.0, ceiling 2.0, full light, no media.
+        assert_eq!(before[0].floor_height, 0.0);
+        assert_eq!(before[0].ceiling_height, 2.0);
+        assert_eq!(before[0].media_height, 0.0);
+        assert_eq!(before[0].floor_light, 1.0);
+        assert_eq!(before[0].ceiling_light, 1.0);
+
+        // Platform polygon 1 starts extended (closed door): floor risen to
+        // ceiling height (2.0), ceiling lowered to floor height (0.0).
+        let start_floor = before[1].floor_height;
+        let start_ceiling = before[1].ceiling_height;
+        assert_eq!(start_floor, 2.0, "door starts closed (floor at ceiling)");
+        assert_eq!(start_ceiling, 0.0, "door starts closed (ceiling at floor)");
+
+        // Activate the platform (open the door) by flipping its state to
+        // Returning, mirroring what an action-key activation does.
+        {
+            let ecs = world.ecs_world_mut();
+            let mut q = ecs.query::<&mut crate::components::Platform>();
+            for mut platform in q.iter_mut(ecs) {
+                if platform.polygon_index == 1 {
+                    crate::world_mechanics::platforms::activate_platform(&mut platform);
+                }
+            }
+        }
+
+        // Tick the sim a few times; the platform should move toward its rest
+        // (open) position.
+        for _ in 0..5 {
+            world.tick(crate::tick::TickInput::default());
+        }
+
+        let after = world.poly_dynamic_data();
+        assert_eq!(after.len(), 2);
+
+        // Static polygon 0 is unchanged.
+        assert_eq!(after[0].floor_height, before[0].floor_height);
+        assert_eq!(after[0].ceiling_height, before[0].ceiling_height);
+        assert_eq!(after[0].floor_light, before[0].floor_light);
+
+        // Platform polygon 1's floor height has changed (door opening: floor
+        // dropping from 2.0 toward 0.0).
+        assert_ne!(
+            after[1].floor_height, start_floor,
+            "moving platform's floor height must change after ticking"
+        );
+        assert!(
+            after[1].floor_height < start_floor,
+            "opening door floor should drop from {} (got {})",
+            start_floor,
+            after[1].floor_height
+        );
+    }
 }

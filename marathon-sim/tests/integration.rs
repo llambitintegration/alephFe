@@ -1,7 +1,7 @@
 //! Integration tests for marathon-sim.
 
-use marathon_formats::*;
 use marathon_formats::map::*;
+use marathon_formats::*;
 use marathon_sim::tick::ActionFlags;
 use marathon_sim::world::{SimConfig, SimWorld};
 
@@ -213,7 +213,11 @@ fn make_test_map() -> MapData {
         index: 0,
         facing: 0,
         polygon_index: 0,
-        location: WorldPoint3d { x: 512, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 512,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     };
 
@@ -305,8 +309,8 @@ fn make_test_physics() -> PhysicsData {
             random_sound: -1,
             random_sound_mask: 0,
             carrying_item_type: -1,
-            radius: 256,     // 0.25 WU
-            height: 768,     // 0.75 WU
+            radius: 256, // 0.25 WU
+            height: 768, // 0.75 WU
             preferred_hover_height: 0,
             minimum_ledge_delta: 0,
             maximum_ledge_delta: 512,
@@ -521,7 +525,11 @@ fn monster_spawns_from_map_object() {
         index: 0,       // monster definition 0
         facing: 256,    // facing west (toward player)
         polygon_index: 1,
-        location: WorldPoint3d { x: 1536, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 1536,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     });
 
@@ -532,7 +540,10 @@ fn monster_spawns_from_map_object() {
 
     // Should have entities (the monster)
     let entities = world.entities();
-    assert!(!entities.is_empty(), "monster should be spawned as an entity");
+    assert!(
+        !entities.is_empty(),
+        "monster should be spawned as an entity"
+    );
 }
 
 // ──────────────────── Test 9.3: Projectile detonation ────────────────────
@@ -540,8 +551,8 @@ fn monster_spawns_from_map_object() {
 
 #[test]
 fn projectile_wall_collision_detects_hit() {
-    use marathon_sim::combat::projectiles::{check_projectile_wall_collision, WallHitResult};
     use glam::Vec2;
+    use marathon_sim::combat::projectiles::{check_projectile_wall_collision, WallHitResult};
 
     // Simulate a projectile moving east into a solid wall at x=1
     let adjacency = vec![vec![(0, None)]];
@@ -551,7 +562,8 @@ fn projectile_wall_collision_detects_hit() {
     let old = Vec2::new(0.5, 0.5);
     let new = Vec2::new(1.5, 0.5);
 
-    let result = check_projectile_wall_collision(old, new, 0.5, 0.5, 0, &adjacency, &endpoints, &solid);
+    let result =
+        check_projectile_wall_collision(old, new, 0.5, 0.5, 0, &adjacency, &endpoints, &solid);
     match result {
         WallHitResult::Hit { hit_point, .. } => {
             assert!((hit_point.x - 1.0).abs() < 0.01);
@@ -564,7 +576,7 @@ fn projectile_wall_collision_detects_hit() {
 
 #[test]
 fn platform_moves_over_ticks() {
-    use marathon_sim::world_mechanics::platforms::{tick_platform, activate_platform};
+    use marathon_sim::world_mechanics::platforms::{activate_platform, tick_platform};
 
     let mut platform = marathon_sim::Platform {
         polygon_index: 0,
@@ -614,26 +626,44 @@ fn item_pickup_gives_correct_effects() {
 
     // Test weapon pickup
     let effect = item_effect(ITEM_SHOTGUN);
-    assert!(matches!(effect, Some(ItemEffect::AddWeapon { weapon_definition_index: 7 })));
+    assert!(matches!(
+        effect,
+        Some(ItemEffect::AddWeapon {
+            weapon_definition_index: 7
+        })
+    ));
 
     // Test health pickup
     let effect = item_effect(ITEM_HEALTH_MAJOR);
-    assert!(matches!(effect, Some(ItemEffect::RestoreHealth { amount: 40 })));
+    assert!(matches!(
+        effect,
+        Some(ItemEffect::RestoreHealth { amount: 40 })
+    ));
 
     // Test ammo pickup
     let effect = item_effect(ITEM_AR_AMMO);
     assert!(matches!(
         effect,
-        Some(ItemEffect::AddAmmo { weapon_definition_index: 3, is_primary: true, amount: 52 })
+        Some(ItemEffect::AddAmmo {
+            weapon_definition_index: 3,
+            is_primary: true,
+            amount: 52
+        })
     ));
 
     // Test shield pickup
     let effect = item_effect(ITEM_SHIELD_2X);
-    assert!(matches!(effect, Some(ItemEffect::RestoreShield { amount: 300 })));
+    assert!(matches!(
+        effect,
+        Some(ItemEffect::RestoreShield { amount: 300 })
+    ));
 
     // Test inventory item pickup
     let effect = item_effect(ITEM_UPLINK_CHIP);
-    assert!(matches!(effect, Some(ItemEffect::AddInventoryItem { item_type: 30 })));
+    assert!(matches!(
+        effect,
+        Some(ItemEffect::AddInventoryItem { item_type: 30 })
+    ));
 }
 
 // ──────────────────── Test 8.6: Deterministic replay ────────────────────
@@ -642,7 +672,10 @@ fn item_pickup_gives_correct_effects() {
 fn deterministic_replay_produces_identical_state() {
     let map = make_test_map();
     let physics = make_test_physics();
-    let config = SimConfig { random_seed: 42, difficulty: 2 };
+    let config = SimConfig {
+        random_seed: 42,
+        difficulty: 2,
+    };
 
     let mut world_a = SimWorld::new(&map, &physics, &config).unwrap();
     let mut world_b = SimWorld::new(&map, &physics, &config).unwrap();
@@ -677,7 +710,10 @@ fn deterministic_replay_produces_identical_state() {
 fn serialization_round_trip() {
     let map = make_test_map();
     let physics = make_test_physics();
-    let config = SimConfig { random_seed: 123, difficulty: 2 };
+    let config = SimConfig {
+        random_seed: 123,
+        difficulty: 2,
+    };
 
     let mut world = SimWorld::new(&map, &physics, &config).unwrap();
 
@@ -694,8 +730,8 @@ fn serialization_round_trip() {
     let data = world.serialize().expect("serialization failed");
 
     // Deserialize
-    let mut restored = SimWorld::deserialize(&data, &map, &physics)
-        .expect("deserialization failed");
+    let mut restored =
+        SimWorld::deserialize(&data, &map, &physics).expect("deserialization failed");
 
     assert_eq!(restored.tick_count(), tick_before);
     assert_eq!(restored.player_position(), pos_before);
@@ -753,6 +789,11 @@ fn player_wall_collision_slide_response() {
         line_solid: vec![true, true, true, true],
         line_transparent: vec![false, false, false, false],
         polygon_media_index: vec![-1],
+        polygon_floor_light_index: vec![-1],
+        polygon_ceiling_light_index: vec![-1],
+        polygon_types: vec![0],
+        polygon_permutations: vec![-1],
+        line_side_indices: vec![(None, None), (None, None), (None, None), (None, None)],
     };
 
     // Player tries to walk through the right wall
@@ -800,12 +841,16 @@ fn step_climbing_allows_small_height_difference() {
     let geometry = MapGeometry {
         polygon_vertices: vec![
             vec![
-                Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0),
-                Vec2::new(1.0, 1.0), Vec2::new(0.0, 1.0),
+                Vec2::new(0.0, 0.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(1.0, 1.0),
+                Vec2::new(0.0, 1.0),
             ],
             vec![
-                Vec2::new(1.0, 0.0), Vec2::new(2.0, 0.0),
-                Vec2::new(2.0, 1.0), Vec2::new(1.0, 1.0),
+                Vec2::new(1.0, 0.0),
+                Vec2::new(2.0, 0.0),
+                Vec2::new(2.0, 1.0),
+                Vec2::new(1.0, 1.0),
             ],
         ],
         floor_heights: vec![0.0, 0.2], // 0.2 WU step up
@@ -826,6 +871,19 @@ fn step_climbing_allows_small_height_difference() {
         line_solid: vec![true, false, true, true, true, true, true],
         line_transparent: vec![false, true, false, false, false, false, false],
         polygon_media_index: vec![-1, -1],
+        polygon_floor_light_index: vec![-1, -1],
+        polygon_ceiling_light_index: vec![-1, -1],
+        polygon_types: vec![0, 0],
+        polygon_permutations: vec![-1, -1],
+        line_side_indices: vec![
+            (None, None),
+            (None, None),
+            (None, None),
+            (None, None),
+            (None, None),
+            (None, None),
+            (None, None),
+        ],
     };
 
     // Step up: 0.2 < step_delta 0.3, should cross
@@ -851,21 +909,18 @@ fn media_submersion_depletes_oxygen_and_applies_drag() {
     let vel = Vec3::new(1.0, 0.5, 0.0);
 
     // Submerged in water (player_z=0.0 < surface=2.0)
-    let (new_vel, oxy_change, dmg) =
-        apply_media_effects(vel, 0.0, Some(2.0), Some(0), 500, 600);
+    let (new_vel, oxy_change, dmg) = apply_media_effects(vel, 0.0, Some(2.0), Some(0), 500, 600);
     assert!(new_vel.x < vel.x, "drag should reduce X velocity");
     assert!(new_vel.y < vel.y, "drag should reduce Y velocity");
     assert!(oxy_change < 0, "oxygen should deplete when submerged");
     assert_eq!(dmg, 0, "no drowning damage when oxygen > 0");
 
     // Drowning: oxygen at 0
-    let (_, _, drowning_dmg) =
-        apply_media_effects(Vec3::ZERO, 0.0, Some(2.0), Some(0), 0, 600);
+    let (_, _, drowning_dmg) = apply_media_effects(Vec3::ZERO, 0.0, Some(2.0), Some(0), 0, 600);
     assert!(drowning_dmg > 0, "drowning damage when oxygen is 0");
 
     // Above surface: oxygen recharges
-    let (above_vel, oxy_recharge, _) =
-        apply_media_effects(vel, 5.0, Some(2.0), Some(0), 400, 600);
+    let (above_vel, oxy_recharge, _) = apply_media_effects(vel, 5.0, Some(2.0), Some(0), 400, 600);
     assert_eq!(above_vel, vel, "no drag above surface");
     assert!(oxy_recharge > 0, "oxygen should recharge above surface");
 }
@@ -915,11 +970,11 @@ fn monster_activation_cascading() {
     use marathon_sim::MonsterState;
 
     let monsters = vec![
-        (Vec2::new(1.0, 0.0), 0, 0xFF, MonsterState::Idle),    // same class, in range
-        (Vec2::new(2.0, 0.0), 0, 0xFF, MonsterState::Idle),    // same class, in range
-        (Vec2::new(50.0, 0.0), 0, 0xFF, MonsterState::Idle),   // same class, out of range
-        (Vec2::new(1.5, 0.0), 1, 0xFF, MonsterState::Idle),    // different class
-        (Vec2::new(1.0, 0.0), 0, 0x0F, MonsterState::Idle),    // different enemies mask
+        (Vec2::new(1.0, 0.0), 0, 0xFF, MonsterState::Idle), // same class, in range
+        (Vec2::new(2.0, 0.0), 0, 0xFF, MonsterState::Idle), // same class, in range
+        (Vec2::new(50.0, 0.0), 0, 0xFF, MonsterState::Idle), // same class, out of range
+        (Vec2::new(1.5, 0.0), 1, 0xFF, MonsterState::Idle), // different class
+        (Vec2::new(1.0, 0.0), 0, 0x0F, MonsterState::Idle), // different enemies mask
         (Vec2::new(0.5, 0.0), 0, 0xFF, MonsterState::Alerted), // already alerted
     ];
 
@@ -1001,33 +1056,81 @@ fn monster_attack_melee_vs_ranged() {
 
     // Melee range: within 1.0
     let result = compute_monster_attack(
-        MonsterState::Attacking, 0.8, 0,
-        1.0, 15, 5, 2, 1.0,
-        8.0, 5, Vec3::new(0.0, 0.0, 0.5), 0.1,
+        MonsterState::Attacking,
+        0.8,
+        0,
+        1.0,
+        15,
+        5,
+        2,
+        1.0,
+        8.0,
+        5,
+        Vec3::new(0.0, 0.0, 0.5),
+        0.1,
     );
-    assert!(matches!(result, AttackResult::Melee { damage_base: 15, .. }));
+    assert!(matches!(
+        result,
+        AttackResult::Melee {
+            damage_base: 15,
+            ..
+        }
+    ));
 
     // Ranged: beyond melee but within ranged range
     let result = compute_monster_attack(
-        MonsterState::Attacking, 5.0, 0,
-        1.0, 15, 5, 2, 1.0,
-        8.0, 5, Vec3::new(0.0, 0.0, 0.5), 0.1,
+        MonsterState::Attacking,
+        5.0,
+        0,
+        1.0,
+        15,
+        5,
+        2,
+        1.0,
+        8.0,
+        5,
+        Vec3::new(0.0, 0.0, 0.5),
+        0.1,
     );
-    assert!(matches!(result, AttackResult::Ranged { projectile_type: 5, .. }));
+    assert!(matches!(
+        result,
+        AttackResult::Ranged {
+            projectile_type: 5,
+            ..
+        }
+    ));
 
     // Out of all range
     let result = compute_monster_attack(
-        MonsterState::Attacking, 20.0, 0,
-        1.0, 15, 5, 2, 1.0,
-        8.0, 5, Vec3::new(0.0, 0.0, 0.5), 0.1,
+        MonsterState::Attacking,
+        20.0,
+        0,
+        1.0,
+        15,
+        5,
+        2,
+        1.0,
+        8.0,
+        5,
+        Vec3::new(0.0, 0.0, 0.5),
+        0.1,
     );
     assert!(matches!(result, AttackResult::None));
 
     // On cooldown
     let result = compute_monster_attack(
-        MonsterState::Attacking, 0.5, 10,
-        1.0, 15, 5, 2, 1.0,
-        8.0, 5, Vec3::ZERO, 0.0,
+        MonsterState::Attacking,
+        0.5,
+        10,
+        1.0,
+        15,
+        5,
+        2,
+        1.0,
+        8.0,
+        5,
+        Vec3::ZERO,
+        0.0,
     );
     assert!(matches!(result, AttackResult::None));
 }
@@ -1124,7 +1227,10 @@ fn projectile_misses_when_z_out_of_range() {
         Vec3::new(10.0, 0.0, 2.0),
         &entities,
     );
-    assert!(result.is_none(), "projectile should miss entity above its z range");
+    assert!(
+        result.is_none(),
+        "projectile should miss entity above its z range"
+    );
 }
 
 // ──────────────────── E2E: Damage application with shield/health ────────────────────
@@ -1203,7 +1309,10 @@ fn platform_activation_by_trigger_type() {
     assert!(!should_activate(&platform, PlatformTrigger::PlayerEntry));
     assert!(should_activate(&platform, PlatformTrigger::ActionKey));
     assert!(!should_activate(&platform, PlatformTrigger::MonsterEntry));
-    assert!(should_activate(&platform, PlatformTrigger::ProjectileImpact));
+    assert!(should_activate(
+        &platform,
+        PlatformTrigger::ProjectileImpact
+    ));
 
     // After activation, shouldn't re-trigger
     activate_platform(&mut platform);
@@ -1295,9 +1404,7 @@ fn control_panel_distance_and_facing_check() {
     use glam::Vec2;
     use marathon_sim::world_mechanics::panels::*;
 
-    let endpoints = vec![
-        (Vec2::new(2.0, -0.5), Vec2::new(2.0, 0.5)),
-    ];
+    let endpoints = vec![(Vec2::new(2.0, -0.5), Vec2::new(2.0, 0.5))];
     let panel = ControlPanel {
         line_index: 0,
         side: 0,
@@ -1306,7 +1413,12 @@ fn control_panel_distance_and_facing_check() {
     };
 
     // Player facing east, close enough -> activates
-    assert!(can_activate_panel(Vec2::new(1.0, 0.0), 0.0, &panel, &endpoints));
+    assert!(can_activate_panel(
+        Vec2::new(1.0, 0.0),
+        0.0,
+        &panel,
+        &endpoints
+    ));
 
     // Player facing west -> doesn't activate
     assert!(!can_activate_panel(
@@ -1317,20 +1429,35 @@ fn control_panel_distance_and_facing_check() {
     ));
 
     // Player too far
-    assert!(!can_activate_panel(Vec2::new(-5.0, 0.0), 0.0, &panel, &endpoints));
+    assert!(!can_activate_panel(
+        Vec2::new(-5.0, 0.0),
+        0.0,
+        &panel,
+        &endpoints
+    ));
 
     // Different panel types
     let platform_panel = ControlPanel {
         action: PanelAction::ActivatePlatform { platform_index: 0 },
         ..panel.clone()
     };
-    assert!(can_activate_panel(Vec2::new(1.0, 0.0), 0.0, &platform_panel, &endpoints));
+    assert!(can_activate_panel(
+        Vec2::new(1.0, 0.0),
+        0.0,
+        &platform_panel,
+        &endpoints
+    ));
 
     let light_panel = ControlPanel {
         action: PanelAction::ToggleLight { light_index: 2 },
         ..panel.clone()
     };
-    assert!(can_activate_panel(Vec2::new(1.0, 0.0), 0.0, &light_panel, &endpoints));
+    assert!(can_activate_panel(
+        Vec2::new(1.0, 0.0),
+        0.0,
+        &light_panel,
+        &endpoints
+    ));
 }
 
 // ──────────────────── E2E: Item respawn timer ────────────────────
@@ -1374,7 +1501,7 @@ fn weapon_inventory_full_cycle() {
     let mut inv = WeaponInventory {
         weapons: vec![
             Some(make_slot(0, 8)),
-            None,                   // empty slot
+            None, // empty slot
             Some(make_slot(2, 10)),
             None,
             Some(make_slot(4, 5)),
@@ -1452,7 +1579,11 @@ fn homing_projectile_converges_on_target() {
     }
 
     // The homing projectile should pass close to the target at some point
-    assert!(min_dist < 1.0, "homing projectile should pass near target, min_dist={}", min_dist);
+    assert!(
+        min_dist < 1.0,
+        "homing projectile should pass near target, min_dist={}",
+        min_dist
+    );
 }
 
 // ──────────────────── E2E: Entity iterator ────────────────────
@@ -1467,7 +1598,11 @@ fn entity_iterator_returns_monsters_and_items() {
         index: 0,
         facing: 0,
         polygon_index: 1,
-        location: WorldPoint3d { x: 1536, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 1536,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     });
     map.objects.push(MapObject {
@@ -1475,7 +1610,11 @@ fn entity_iterator_returns_monsters_and_items() {
         index: 20,      // health minor
         facing: 0,
         polygon_index: 0,
-        location: WorldPoint3d { x: 256, y: 256, z: 0 },
+        location: WorldPoint3d {
+            x: 256,
+            y: 256,
+            z: 0,
+        },
         flags: 0,
     });
 
@@ -1484,13 +1623,22 @@ fn entity_iterator_returns_monsters_and_items() {
     let mut world = SimWorld::new(&map, &physics, &config).unwrap();
 
     let entities = world.entities();
-    assert!(entities.len() >= 2, "should have at least a monster and an item");
+    assert!(
+        entities.len() >= 2,
+        "should have at least a monster and an item"
+    );
 
     let has_monster = entities.iter().any(|e| {
-        matches!(e.entity_type, marathon_sim::tick::RenderEntityType::Monster { .. })
+        matches!(
+            e.entity_type,
+            marathon_sim::tick::RenderEntityType::Monster { .. }
+        )
     });
     let has_item = entities.iter().any(|e| {
-        matches!(e.entity_type, marathon_sim::tick::RenderEntityType::Item { .. })
+        matches!(
+            e.entity_type,
+            marathon_sim::tick::RenderEntityType::Item { .. }
+        )
     });
 
     assert!(has_monster, "entity list should contain a monster");
@@ -1505,16 +1653,35 @@ fn serialization_preserves_all_entity_types() {
 
     // Add monsters and items
     map.objects.push(MapObject {
-        object_type: 0, index: 0, facing: 0, polygon_index: 1,
-        location: WorldPoint3d { x: 1536, y: 512, z: 0 }, flags: 0,
+        object_type: 0,
+        index: 0,
+        facing: 0,
+        polygon_index: 1,
+        location: WorldPoint3d {
+            x: 1536,
+            y: 512,
+            z: 0,
+        },
+        flags: 0,
     });
     map.objects.push(MapObject {
-        object_type: 2, index: 20, facing: 0, polygon_index: 0,
-        location: WorldPoint3d { x: 256, y: 256, z: 0 }, flags: 0,
+        object_type: 2,
+        index: 20,
+        facing: 0,
+        polygon_index: 0,
+        location: WorldPoint3d {
+            x: 256,
+            y: 256,
+            z: 0,
+        },
+        flags: 0,
     });
 
     let physics = make_test_physics();
-    let config = SimConfig { random_seed: 77, difficulty: 2 };
+    let config = SimConfig {
+        random_seed: 77,
+        difficulty: 2,
+    };
     let mut world = SimWorld::new(&map, &physics, &config).unwrap();
 
     // Advance some ticks
@@ -1529,7 +1696,10 @@ fn serialization_preserves_all_entity_types() {
     let mut restored = SimWorld::deserialize(&data, &map, &physics).unwrap();
 
     let entities_after = restored.entities().len();
-    assert_eq!(entities_before, entities_after, "entity count should be preserved");
+    assert_eq!(
+        entities_before, entities_after,
+        "entity count should be preserved"
+    );
     assert_eq!(restored.tick_count(), 10);
 }
 
@@ -1549,11 +1719,41 @@ fn make_light_test_map() -> MapData {
             intensity: 0.0,
             delta_intensity: 1.0,
         },
-        secondary_active: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 1.0, delta_intensity: 0.0 },
-        becoming_active: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 1.0, delta_intensity: 0.0 },
-        primary_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
-        secondary_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
-        becoming_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
+        secondary_active: LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity: 1.0,
+            delta_intensity: 0.0,
+        },
+        becoming_active: LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity: 1.0,
+            delta_intensity: 0.0,
+        },
+        primary_inactive: LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity: 0.0,
+            delta_intensity: 0.0,
+        },
+        secondary_inactive: LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity: 0.0,
+            delta_intensity: 0.0,
+        },
+        becoming_inactive: LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity: 0.0,
+            delta_intensity: 0.0,
+        },
         tag: 0,
     }]);
     map
@@ -1599,16 +1799,49 @@ fn tick_loop_lights_determinism() {
             intensity: 0.0,
             delta_intensity: 1.0,
         },
-        secondary_active: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 1.0, delta_intensity: 0.0 },
-        becoming_active: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 1.0, delta_intensity: 0.0 },
-        primary_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
-        secondary_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
-        becoming_inactive: LightingFunctionSpec { function: 0, period: 1, delta_period: 0, intensity: 0.0, delta_intensity: 0.0 },
+        secondary_active: LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity: 1.0,
+            delta_intensity: 0.0,
+        },
+        becoming_active: LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity: 1.0,
+            delta_intensity: 0.0,
+        },
+        primary_inactive: LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity: 0.0,
+            delta_intensity: 0.0,
+        },
+        secondary_inactive: LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity: 0.0,
+            delta_intensity: 0.0,
+        },
+        becoming_inactive: LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity: 0.0,
+            delta_intensity: 0.0,
+        },
         tag: 0,
     }]);
 
     let physics = make_test_physics();
-    let config = SimConfig { random_seed: 42, difficulty: 2 };
+    let config = SimConfig {
+        random_seed: 42,
+        difficulty: 2,
+    };
 
     let mut world_a = SimWorld::new(&map2, &physics, &config).unwrap();
     let mut world_b = SimWorld::new(&map2, &physics, &config).unwrap();
@@ -1621,8 +1854,10 @@ fn tick_loop_lights_determinism() {
     let snap_a = world_a.snapshot();
     let snap_b = world_b.snapshot();
 
-    assert_eq!(snap_a.lights[0].current_intensity, snap_b.lights[0].current_intensity,
-        "same seed should produce identical flicker intensities");
+    assert_eq!(
+        snap_a.lights[0].current_intensity, snap_b.lights[0].current_intensity,
+        "same seed should produce identical flicker intensities"
+    );
 }
 
 #[test]
@@ -1720,7 +1955,10 @@ fn tick_loop_effect_despawns_after_countdown() {
 
     // Manually spawn an effect entity
     world.ecs_world_mut().spawn((
-        marathon_sim::Effect { definition_index: 0, ticks_remaining: 3 },
+        marathon_sim::Effect {
+            definition_index: 0,
+            ticks_remaining: 3,
+        },
         marathon_sim::Position(glam::Vec3::new(0.5, 0.5, 0.0)),
     ));
 
@@ -1728,7 +1966,12 @@ fn tick_loop_effect_despawns_after_countdown() {
     let entities = world.entities();
     let effects: Vec<_> = entities
         .iter()
-        .filter(|e| matches!(e.entity_type, marathon_sim::tick::RenderEntityType::Effect { .. }))
+        .filter(|e| {
+            matches!(
+                e.entity_type,
+                marathon_sim::tick::RenderEntityType::Effect { .. }
+            )
+        })
         .collect();
     assert_eq!(effects.len(), 1, "should have 1 effect");
 
@@ -1740,9 +1983,18 @@ fn tick_loop_effect_despawns_after_countdown() {
     let entities = world.entities();
     let effects: Vec<_> = entities
         .iter()
-        .filter(|e| matches!(e.entity_type, marathon_sim::tick::RenderEntityType::Effect { .. }))
+        .filter(|e| {
+            matches!(
+                e.entity_type,
+                marathon_sim::tick::RenderEntityType::Effect { .. }
+            )
+        })
         .collect();
-    assert_eq!(effects.len(), 0, "effect should be despawned after ticks_remaining reaches 0");
+    assert_eq!(
+        effects.len(),
+        0,
+        "effect should be despawned after ticks_remaining reaches 0"
+    );
 }
 
 #[test]
@@ -1754,7 +2006,11 @@ fn tick_loop_item_pickup_restores_health() {
         index: 21,      // ITEM_HEALTH_MAJOR (restores 40 HP)
         facing: 0,
         polygon_index: 0,
-        location: WorldPoint3d { x: 512, y: 512, z: 0 }, // same as player
+        location: WorldPoint3d {
+            x: 512,
+            y: 512,
+            z: 0,
+        }, // same as player
         flags: 0,
     });
 
@@ -1775,8 +2031,15 @@ fn tick_loop_item_pickup_restores_health() {
     assert_eq!(initial_health, 100);
 
     // Count items before
-    let items_before: Vec<_> = world.entities().iter()
-        .filter(|e| matches!(e.entity_type, marathon_sim::tick::RenderEntityType::Item { .. }))
+    let items_before: Vec<_> = world
+        .entities()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.entity_type,
+                marathon_sim::tick::RenderEntityType::Item { .. }
+            )
+        })
         .cloned()
         .collect();
     assert!(items_before.len() >= 1, "should have at least 1 item");
@@ -1801,7 +2064,11 @@ fn tick_loop_item_not_picked_up_at_max_health() {
         index: 21,      // ITEM_HEALTH_MAJOR
         facing: 0,
         polygon_index: 0,
-        location: WorldPoint3d { x: 512, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 512,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     });
 
@@ -1817,8 +2084,15 @@ fn tick_loop_item_not_picked_up_at_max_health() {
     world.tick(ActionFlags::default().into());
 
     // Item should still exist
-    let items: Vec<_> = world.entities().iter()
-        .filter(|e| matches!(e.entity_type, marathon_sim::tick::RenderEntityType::Item { .. }))
+    let items: Vec<_> = world
+        .entities()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.entity_type,
+                marathon_sim::tick::RenderEntityType::Item { .. }
+            )
+        })
         .cloned()
         .collect();
     assert_eq!(items.len(), 1, "item should not be picked up at max health");
@@ -1833,7 +2107,11 @@ fn tick_loop_monster_alerts_on_sight() {
         index: 0,
         facing: 256, // ~180 degrees = facing west toward player
         polygon_index: 1,
-        location: WorldPoint3d { x: 1536, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 1536,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     });
 
@@ -1884,7 +2162,11 @@ fn tick_loop_full_systems_no_panics() {
         index: 0,
         facing: 256,
         polygon_index: 1,
-        location: WorldPoint3d { x: 1536, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 1536,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     });
 
@@ -1893,7 +2175,11 @@ fn tick_loop_full_systems_no_panics() {
         index: 23,      // Shield
         facing: 0,
         polygon_index: 0,
-        location: WorldPoint3d { x: 256, y: 256, z: 0 },
+        location: WorldPoint3d {
+            x: 256,
+            y: 256,
+            z: 0,
+        },
         flags: 0,
     });
 
@@ -1920,7 +2206,10 @@ fn tick_loop_full_systems_no_panics() {
     assert_eq!(world.tick_count(), 100);
     // Player should still be alive
     let health = world.player_health().unwrap();
-    assert!(health > 0 || health <= 0, "player health should be a valid value");
+    assert!(
+        health > 0 || health <= 0,
+        "player health should be a valid value"
+    );
 }
 
 #[test]
@@ -1931,7 +2220,11 @@ fn tick_loop_determinism_two_worlds_same_seed() {
         index: 0,
         facing: 256,
         polygon_index: 1,
-        location: WorldPoint3d { x: 1536, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 1536,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     });
 
@@ -1941,7 +2234,10 @@ fn tick_loop_determinism_two_worlds_same_seed() {
         monsters[0].half_visual_arc = 128;
     }
 
-    let config = SimConfig { random_seed: 42, difficulty: 2 };
+    let config = SimConfig {
+        random_seed: 42,
+        difficulty: 2,
+    };
 
     let mut world_a = SimWorld::new(&map, &physics, &config).unwrap();
     let mut world_b = SimWorld::new(&map, &physics, &config).unwrap();
@@ -1998,10 +2294,14 @@ fn make_projectile_test_physics() -> PhysicsData {
         radius: 64,
         area_of_effect: 0,
         damage: DamageDefinition {
-            damage_type: 0, flags: 0, base: 20, random: 0, scale: 1.0,
+            damage_type: 0,
+            flags: 0,
+            base: 20,
+            random: 0,
+            scale: 1.0,
         },
         flags: 0,
-        speed: 512,          // 0.5 WU/tick
+        speed: 512,           // 0.5 WU/tick
         maximum_range: 16384, // 16 WU
         sound_pitch: 1.0,
         flyby_sound: -1,
@@ -2059,19 +2359,23 @@ fn make_projectile_test_physics() -> PhysicsData {
 
     let mut base_physics = make_test_physics();
     base_physics.projectiles = Some(vec![
-        basic, gravity, rebound_wall, rebound_floor,
-        persistent, homing, contrail, short_range,
+        basic,
+        gravity,
+        rebound_wall,
+        rebound_floor,
+        persistent,
+        homing,
+        contrail,
+        short_range,
     ]);
-    base_physics.effects = Some(vec![
-        marathon_formats::physics::EffectDefinition {
-            collection: 0,
-            shape: 0,
-            sound_pitch: 1.0,
-            flags: 0,
-            delay: 10,
-            delay_sound: -1,
-        },
-    ]);
+    base_physics.effects = Some(vec![marathon_formats::physics::EffectDefinition {
+        collection: 0,
+        shape: 0,
+        sound_pitch: 1.0,
+        flags: 0,
+        delay: 10,
+        delay_sound: -1,
+    }]);
     base_physics
 }
 
@@ -2086,7 +2390,9 @@ fn spawn_test_projectile(
     use marathon_sim::components::*;
     // Get the player entity so we can set ProjectileSource (avoids self-collision)
     let player_entity = {
-        let mut q = world.ecs_world_mut().query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::prelude::With<Player>>();
+        let mut q = world
+            .ecs_world_mut()
+            .query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::prelude::With<Player>>();
         q.iter(world.ecs_world_mut()).next().unwrap()
     };
     world.ecs_world_mut().spawn((
@@ -2129,15 +2435,26 @@ fn projectile_advances_position_each_tick() {
 
     // Verify projectile exists before tick
     let snap_before = world.snapshot();
-    assert_eq!(snap_before.projectiles.len(), 1, "projectile should exist before tick");
+    assert_eq!(
+        snap_before.projectiles.len(),
+        1,
+        "projectile should exist before tick"
+    );
 
     let empty = ActionFlags::new(0);
     world.tick(empty.into());
 
     let snap = world.snapshot();
-    assert_eq!(snap.projectiles.len(), 1, "projectile should still exist after 1 tick, def_idx=0 max_range=16");
+    assert_eq!(
+        snap.projectiles.len(),
+        1,
+        "projectile should still exist after 1 tick, def_idx=0 max_range=16"
+    );
     let proj = &snap.projectiles[0];
-    assert!((proj.position.x - 0.52).abs() < 0.01, "projectile should advance by velocity.x");
+    assert!(
+        (proj.position.x - 0.52).abs() < 0.01,
+        "projectile should advance by velocity.x"
+    );
     assert!(proj.distance_traveled > 0.0, "distance should accumulate");
 }
 
@@ -2168,7 +2485,11 @@ fn gravity_projectile_arcs_downward() {
     if !snap.projectiles.is_empty() {
         let proj = &snap.projectiles[0];
         // Z should decrease due to gravity
-        assert!(proj.position.z < 1.0, "gravity should pull projectile down, z={}", proj.position.z);
+        assert!(
+            proj.position.z < 1.0,
+            "gravity should pull projectile down, z={}",
+            proj.position.z
+        );
     }
     // If projectile hit floor and detonated, that's also correct behavior
 }
@@ -2206,7 +2527,11 @@ fn homing_projectile_turns_toward_target() {
     if !snap.projectiles.is_empty() {
         let proj = &snap.projectiles[0];
         // Velocity should have turned northward (increasing Y)
-        assert!(proj.velocity.y > 0.01, "homing should turn toward target, vel.y={}", proj.velocity.y);
+        assert!(
+            proj.velocity.y > 0.01,
+            "homing should turn toward target, vel.y={}",
+            proj.velocity.y
+        );
     }
 }
 
@@ -2231,7 +2556,11 @@ fn projectile_detonates_on_wall_hit() {
     world.tick(empty.into());
 
     // Projectile should be gone (detonated)
-    assert_eq!(count_projectiles(&mut world), 0, "projectile should detonate on wall hit");
+    assert_eq!(
+        count_projectiles(&mut world),
+        0,
+        "projectile should detonate on wall hit"
+    );
 }
 
 // 7.5: Projectile with REBOUNDS_FROM_WALLS reflects velocity
@@ -2256,9 +2585,17 @@ fn projectile_rebounds_from_wall() {
 
     // Projectile should still exist (rebounded)
     let snap = world.snapshot();
-    assert_eq!(snap.projectiles.len(), 1, "rebounding projectile should survive wall hit");
+    assert_eq!(
+        snap.projectiles.len(),
+        1,
+        "rebounding projectile should survive wall hit"
+    );
     // Velocity X should be positive now (reflected from left wall)
-    assert!(snap.projectiles[0].velocity.x > 0.0, "velocity should be reflected, vel.x={}", snap.projectiles[0].velocity.x);
+    assert!(
+        snap.projectiles[0].velocity.x > 0.0,
+        "velocity should be reflected, vel.x={}",
+        snap.projectiles[0].velocity.x
+    );
 }
 
 // 7.6: Projectile with REBOUNDS_FROM_FLOOR bounces
@@ -2283,9 +2620,17 @@ fn projectile_rebounds_from_floor() {
 
     // Projectile should still exist (bounced)
     let snap = world.snapshot();
-    assert_eq!(snap.projectiles.len(), 1, "floor-rebounding projectile should survive");
+    assert_eq!(
+        snap.projectiles.len(),
+        1,
+        "floor-rebounding projectile should survive"
+    );
     // Velocity Z should be positive (bounced up)
-    assert!(snap.projectiles[0].velocity.z > 0.0, "velocity Z should be positive after bounce, vel.z={}", snap.projectiles[0].velocity.z);
+    assert!(
+        snap.projectiles[0].velocity.z > 0.0,
+        "velocity Z should be positive after bounce, vel.z={}",
+        snap.projectiles[0].velocity.z
+    );
 }
 
 // 7.7: Non-persistent projectile detonates on entity hit
@@ -2302,7 +2647,11 @@ fn projectile_detonates_on_entity_hit() {
         index: 0,
         facing: 0,
         polygon_index: 0,
-        location: WorldPoint3d { x: 820, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 820,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     });
 
@@ -2311,7 +2660,9 @@ fn projectile_detonates_on_entity_hit() {
     // Spawn player projectile heading toward the monster
     use marathon_sim::components::*;
     let player_entity = {
-        let mut q = world.ecs_world_mut().query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::prelude::With<Player>>();
+        let mut q = world
+            .ecs_world_mut()
+            .query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::prelude::With<Player>>();
         q.iter(world.ecs_world_mut()).next().unwrap()
     };
 
@@ -2333,7 +2684,11 @@ fn projectile_detonates_on_entity_hit() {
     world.tick(empty.into());
 
     // Projectile should be gone (detonated on monster hit)
-    assert_eq!(count_projectiles(&mut world), 0, "projectile should detonate on entity hit");
+    assert_eq!(
+        count_projectiles(&mut world),
+        0,
+        "projectile should detonate on entity hit"
+    );
 }
 
 // 7.8: Persistent projectile passes through entity
@@ -2349,7 +2704,11 @@ fn persistent_projectile_passes_through() {
         index: 0,
         facing: 0,
         polygon_index: 0,
-        location: WorldPoint3d { x: 700, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 700,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     });
 
@@ -2357,7 +2716,9 @@ fn persistent_projectile_passes_through() {
 
     use marathon_sim::components::*;
     let player_entity = {
-        let mut q = world.ecs_world_mut().query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::prelude::With<Player>>();
+        let mut q = world
+            .ecs_world_mut()
+            .query_filtered::<bevy_ecs::entity::Entity, bevy_ecs::prelude::With<Player>>();
         q.iter(world.ecs_world_mut()).next().unwrap()
     };
 
@@ -2379,7 +2740,11 @@ fn persistent_projectile_passes_through() {
     world.tick(empty.into());
 
     // Persistent projectile should still exist
-    assert_eq!(count_projectiles(&mut world), 1, "persistent projectile should survive entity hit");
+    assert_eq!(
+        count_projectiles(&mut world),
+        1,
+        "persistent projectile should survive entity hit"
+    );
 }
 
 // 7.9: AoE detonation applies distance-scaled damage
@@ -2396,7 +2761,11 @@ fn aoe_detonation_applies_scaled_damage() {
         index: 0,
         facing: 0,
         polygon_index: 0,
-        location: WorldPoint3d { x: 300, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 300,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     });
 
@@ -2430,7 +2799,8 @@ fn aoe_detonation_applies_scaled_damage() {
     assert!(
         monster_health_after < monster_health_before,
         "monster should take AoE damage: before={}, after={}",
-        monster_health_before, monster_health_after
+        monster_health_before,
+        monster_health_after
     );
 }
 
@@ -2458,7 +2828,11 @@ fn projectile_despawned_at_max_range() {
     }
 
     // Projectile should be despawned
-    assert_eq!(count_projectiles(&mut world), 0, "projectile should despawn after exceeding range");
+    assert_eq!(
+        count_projectiles(&mut world),
+        0,
+        "projectile should despawn after exceeding range"
+    );
 }
 
 // 7.11: Contrails spawn at correct intervals
@@ -2488,8 +2862,14 @@ fn contrails_spawn_at_intervals() {
     // Check contrails_spawned on the projectile
     if !snap.projectiles.is_empty() {
         let proj = &snap.projectiles[0];
-        assert!(proj.contrails_spawned > 0, "contrails should have been spawned");
-        assert!(proj.contrails_spawned <= 5, "should not exceed maximum_contrails");
+        assert!(
+            proj.contrails_spawned > 0,
+            "contrails should have been spawned"
+        );
+        assert!(
+            proj.contrails_spawned <= 5,
+            "should not exceed maximum_contrails"
+        );
     }
 }
 
@@ -2572,7 +2952,10 @@ fn weapon_fire_produces_projectile() {
     world.tick(fire.into());
 
     // Should have spawned a projectile
-    assert!(count_projectiles(&mut world) >= 1, "weapon fire should spawn projectile");
+    assert!(
+        count_projectiles(&mut world) >= 1,
+        "weapon fire should spawn projectile"
+    );
 }
 
 // 7.14: Snapshot round-trip preserves in-flight projectile state
@@ -2599,20 +2982,37 @@ fn snapshot_preserves_projectile_state() {
     let bytes = world.serialize().expect("serialize should work");
 
     // Deserialize
-    let mut world2 = SimWorld::deserialize(&bytes, &map, &physics).expect("deserialize should work");
+    let mut world2 =
+        SimWorld::deserialize(&bytes, &map, &physics).expect("deserialize should work");
 
     let snap1 = world.snapshot();
     let snap2 = world2.snapshot();
 
-    assert_eq!(snap1.projectiles.len(), snap2.projectiles.len(), "projectile count should match");
+    assert_eq!(
+        snap1.projectiles.len(),
+        snap2.projectiles.len(),
+        "projectile count should match"
+    );
     if !snap1.projectiles.is_empty() {
         let p1 = &snap1.projectiles[0];
         let p2 = &snap2.projectiles[0];
         assert_eq!(p1.definition_index, p2.definition_index);
-        assert!((p1.position - p2.position).length() < 0.001, "position should match");
-        assert!((p1.velocity - p2.velocity).length() < 0.001, "velocity should match");
+        assert!(
+            (p1.position - p2.position).length() < 0.001,
+            "position should match"
+        );
+        assert!(
+            (p1.velocity - p2.velocity).length() < 0.001,
+            "velocity should match"
+        );
         assert_eq!(p1.ticks_alive, p2.ticks_alive, "ticks_alive should match");
-        assert_eq!(p1.contrails_spawned, p2.contrails_spawned, "contrails should match");
-        assert_eq!(p1.current_polygon, p2.current_polygon, "polygon should match");
+        assert_eq!(
+            p1.contrails_spawned, p2.contrails_spawned,
+            "contrails should match"
+        );
+        assert_eq!(
+            p1.current_polygon, p2.current_polygon,
+            "polygon should match"
+        );
     }
 }

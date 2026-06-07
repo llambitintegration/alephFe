@@ -13,22 +13,39 @@ pub struct FireResult {
 
 impl FireResult {
     pub fn none() -> Self {
-        Self { fired: false, projectile_count: 0, theta_error: 0.0 }
+        Self {
+            fired: false,
+            projectile_count: 0,
+            theta_error: 0.0,
+        }
     }
 
     pub fn single() -> Self {
-        Self { fired: true, projectile_count: 1, theta_error: 0.0 }
+        Self {
+            fired: true,
+            projectile_count: 1,
+            theta_error: 0.0,
+        }
     }
 
     pub fn burst(count: u16, theta_error: f32) -> Self {
-        Self { fired: true, projectile_count: count, theta_error }
+        Self {
+            fired: true,
+            projectile_count: count,
+            theta_error,
+        }
     }
 }
 
 /// Advance the weapon state machine by one tick.
 ///
 /// Returns true if the weapon fired this tick.
-pub fn tick_weapon(weapon: &mut WeaponSlot, fire_requested: bool, ticks_per_round: u16, recovery_ticks: u16) -> bool {
+pub fn tick_weapon(
+    weapon: &mut WeaponSlot,
+    fire_requested: bool,
+    ticks_per_round: u16,
+    recovery_ticks: u16,
+) -> bool {
     // Decrement cooldown
     if weapon.cooldown_ticks > 0 {
         weapon.cooldown_ticks -= 1;
@@ -139,8 +156,18 @@ impl DualWieldState {
         ticks_per_round: u16,
         recovery_ticks: u16,
     ) -> (bool, bool) {
-        let right = tick_weapon(&mut self.right, fire_primary, ticks_per_round, recovery_ticks);
-        let left = tick_weapon(&mut self.left, fire_secondary, ticks_per_round, recovery_ticks);
+        let right = tick_weapon(
+            &mut self.right,
+            fire_primary,
+            ticks_per_round,
+            recovery_ticks,
+        );
+        let left = tick_weapon(
+            &mut self.left,
+            fire_secondary,
+            ticks_per_round,
+            recovery_ticks,
+        );
         (right, left)
     }
 }
@@ -229,10 +256,7 @@ mod tests {
 
     #[test]
     fn dual_wield_both_fire() {
-        let mut dual = DualWieldState::new(
-            make_weapon(8, 0),
-            make_weapon(8, 0),
-        );
+        let mut dual = DualWieldState::new(make_weapon(8, 0), make_weapon(8, 0));
         let (right, left) = dual.tick(true, true, 2, 3);
         assert!(right);
         assert!(left);

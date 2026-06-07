@@ -17,8 +17,7 @@ use marathon_integration::shell::states::{is_valid_transition, TickAccumulator};
 use marathon_integration::types::{ActionFlags, Difficulty, GameConfig, GameModeType, GameState};
 
 fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../marathon-formats/tests/fixtures")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../marathon-formats/tests/fixtures")
 }
 
 fn fixture(name: &str) -> Option<PathBuf> {
@@ -120,7 +119,10 @@ fn tick_accumulator_simulation_timing() {
 
     // Interpolation factor should be near 0.0 (just after a tick)
     let factor = accumulator.interpolation_factor();
-    assert!(factor < 0.1, "interpolation should be near 0 right after tick");
+    assert!(
+        factor < 0.1,
+        "interpolation should be near 0 right after tick"
+    );
 
     // Simulate a slow frame (100ms) -> should catch up with 3 ticks
     let ticks = accumulator.accumulate(100_000);
@@ -219,7 +221,9 @@ fn save_load_film_round_trip() {
         fake_sim_state.clone(),
     );
 
-    save_manager.save(0, &save_data).expect("save should succeed");
+    save_manager
+        .save(0, &save_data)
+        .expect("save should succeed");
 
     // Load it back
     let loaded = save_manager.load(0).expect("load should succeed");
@@ -278,17 +282,38 @@ fn hud_pipeline_produces_valid_draw_list_at_multiple_resolutions() {
         primary_ammo: Some(52),
         secondary_ammo: Some(7),
         inventory_items: vec![
-            InventoryItem { icon_index: 1, count: 2 },
-            InventoryItem { icon_index: 5, count: 1 },
-            InventoryItem { icon_index: 8, count: 4 },
+            InventoryItem {
+                icon_index: 1,
+                count: 2,
+            },
+            InventoryItem {
+                icon_index: 5,
+                count: 1,
+            },
+            InventoryItem {
+                icon_index: 8,
+                count: 4,
+            },
         ],
         player_x: 500,
         player_y: 300,
         player_facing: 16384, // 90 degrees (north)
         nearby_entities: vec![
-            RadarEntity { x: 510, y: 310, entity_type: RadarEntityType::Enemy },
-            RadarEntity { x: 490, y: 305, entity_type: RadarEntityType::Ally },
-            RadarEntity { x: 505, y: 295, entity_type: RadarEntityType::Item },
+            RadarEntity {
+                x: 510,
+                y: 310,
+                entity_type: RadarEntityType::Enemy,
+            },
+            RadarEntity {
+                x: 490,
+                y: 305,
+                entity_type: RadarEntityType::Ally,
+            },
+            RadarEntity {
+                x: 505,
+                y: 295,
+                entity_type: RadarEntityType::Item,
+            },
         ],
     };
 
@@ -364,7 +389,10 @@ fn hud_pipeline_produces_valid_draw_list_at_multiple_resolutions() {
             "resolution {width}x{height}: radar circle center off-screen: {:?}",
             circle.center
         );
-        assert!(circle.radius > 0.0, "radar circle must have positive radius");
+        assert!(
+            circle.radius > 0.0,
+            "radar circle must have positive radius"
+        );
 
         // Validate all colors have values in [0, 1] range
         for quad in &list.quads {

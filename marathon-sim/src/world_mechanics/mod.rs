@@ -1,3 +1,4 @@
+pub mod action_key;
 pub mod items;
 pub mod lights;
 pub mod media;

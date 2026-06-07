@@ -1,3 +1,4 @@
+use bevy_ecs::prelude::Resource;
 use glam::Vec2;
 
 /// Types of control panel actions.
@@ -6,7 +7,12 @@ pub enum PanelAction {
     ActivatePlatform { platform_index: usize },
     ToggleLight { light_index: usize },
     ActivateTerminal { terminal_index: usize },
+    ActivateTaggedPlatforms { tag: i16 },
 }
+
+/// Resource holding all control panels in the level.
+#[derive(Resource, Default, Clone)]
+pub struct ControlPanels(pub Vec<ControlPanel>);
 
 /// A control panel on a wall side.
 #[derive(Debug, Clone)]

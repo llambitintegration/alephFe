@@ -23,7 +23,7 @@ fn validate_tag_length(
     data_len: usize,
     record_size: usize,
 ) -> Result<(), PhysicsError> {
-    if record_size == 0 || data_len % record_size != 0 {
+    if record_size == 0 || !data_len.is_multiple_of(record_size) {
         return Err(PhysicsError::InvalidTagLength {
             tag: tag_name.to_string(),
             length: data_len,

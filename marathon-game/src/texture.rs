@@ -15,7 +15,9 @@ pub struct TextureManager {
 }
 
 pub struct GpuCollectionTexture {
+    #[allow(dead_code)]
     pub texture: wgpu::Texture,
+    #[allow(dead_code)]
     pub view: wgpu::TextureView,
     pub bind_group: wgpu::BindGroup,
 }
@@ -143,8 +145,18 @@ fn load_collection(collection: &Collection, clut_index: usize) -> Option<LoadedC
 
     let clut = collection.color_tables.get(clut_index)?;
 
-    let max_width = collection.bitmaps.iter().map(|b| b.width as u32).max().unwrap_or(1);
-    let max_height = collection.bitmaps.iter().map(|b| b.height as u32).max().unwrap_or(1);
+    let max_width = collection
+        .bitmaps
+        .iter()
+        .map(|b| b.width as u32)
+        .max()
+        .unwrap_or(1);
+    let max_height = collection
+        .bitmaps
+        .iter()
+        .map(|b| b.height as u32)
+        .max()
+        .unwrap_or(1);
 
     let bitmaps: Vec<Vec<u8>> = collection
         .bitmaps

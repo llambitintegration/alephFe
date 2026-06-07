@@ -14,7 +14,7 @@ pub fn calculate_damage(
     let damage_type = def.damage_type;
 
     // Check immunity
-    if damage_type >= 0 && damage_type < 32 {
+    if (0..32).contains(&damage_type) {
         let type_bit = 1u32 << damage_type;
         if target_immunities & type_bit != 0 {
             return 0;
@@ -30,7 +30,7 @@ pub fn calculate_damage(
     let raw_damage = ((def.base + random_add) as f32 * def.scale) as i16;
 
     // Check weakness (double damage)
-    if damage_type >= 0 && damage_type < 32 {
+    if (0..32).contains(&damage_type) {
         let type_bit = 1u32 << damage_type;
         if target_weaknesses & type_bit != 0 {
             return raw_damage.saturating_mul(2);
@@ -43,11 +43,7 @@ pub fn calculate_damage(
 /// Calculate area-of-effect damage scaled by distance.
 ///
 /// Full damage at center, zero at the edge of the radius.
-pub fn calculate_aoe_damage(
-    base_damage: i16,
-    distance: f32,
-    aoe_radius: f32,
-) -> i16 {
+pub fn calculate_aoe_damage(base_damage: i16, distance: f32, aoe_radius: f32) -> i16 {
     if distance >= aoe_radius || aoe_radius <= 0.0 {
         return 0;
     }

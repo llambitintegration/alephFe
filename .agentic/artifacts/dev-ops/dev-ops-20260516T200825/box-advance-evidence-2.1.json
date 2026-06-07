@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "changeId": "fix-dynamic-geometry-rendering",
+  "boxId": "fix-dynamic-geometry-rendering#L9",
+  "testFilePath": "marathon-web/src/mesh.rs",
+  "testStatus": "passed",
+  "filesModified": [
+    "marathon-web/src/mesh.rs",
+    "marathon-web/src/shader.wgsl",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "writtenPaths": [
+    "marathon-web/src/mesh.rs",
+    "marathon-web/src/shader.wgsl",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "tasksMdBefore": "a4b83179c1fdf6827b9a2a4f6ec31324f069686e0b044e3cf6bc2d77ba6d5e1b",
+  "tasksMdAfter": "619eca9914863e7fa9f31aabe56cbc397b9906ff423178901e1ee10cdf981e35",
+  "generatedAt": "2026-05-16T20:25:46Z",
+  "notes": "Added polygon_index: u32 (location 5, Uint32) to mesh::Vertex and Vertex::layout(); threaded poly_idx through build_floor/build_ceiling/build_media_surface/build_wall_side/emit_wall_quad (wall vertices carry owning polygon's index). Updated shader.wgsl VertexInput with @location(5) polygon_index. New tests: vertex_layout_includes_polygon_index_attribute, build_level_mesh_assigns_source_polygon_index_to_every_vertex; updated vertex_size (36 bytes) and vertex_is_pod. All 26 lib + 8 integration tests pass; wasm32 cargo check green."
+}

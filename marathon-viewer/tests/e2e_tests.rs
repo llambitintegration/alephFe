@@ -9,8 +9,7 @@
 use std::path::PathBuf;
 
 fn fixtures_dir() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../marathon-formats/tests/fixtures")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../marathon-formats/tests/fixtures")
 }
 
 fn fixture(name: &str) -> Option<PathBuf> {
@@ -134,7 +133,10 @@ fn test_mesh_vertex_count_sanity() {
         let mut inverted_count = 0;
         for polygon in &map.polygons {
             let vc = polygon.vertex_count as usize;
-            assert!(vc >= 3 && vc <= 8, "polygon vertex count {vc} out of range [3,8]");
+            assert!(
+                vc >= 3 && vc <= 8,
+                "polygon vertex count {vc} out of range [3,8]"
+            );
 
             for i in 0..vc {
                 let ep_idx = polygon.endpoint_indexes[i];
@@ -177,7 +179,10 @@ fn test_side_types_are_valid() {
         .iter()
         .filter_map(|t| type_counts.get(t))
         .sum();
-    assert!(known_count > 0, "should have at least some known side types (full/high/low/split)");
+    assert!(
+        known_count > 0,
+        "should have at least some known side types (full/high/low/split)"
+    );
 }
 
 // ── Texture pipeline ─────────────────────────────────────────────────
@@ -192,7 +197,10 @@ fn test_shapes_file_loading() {
     assert_eq!(headers.len(), 32, "should have 32 collection headers");
 
     // Some collections should have data (offset != -1)
-    let active_count = headers.iter().filter(|h| h.has_8bit_data() || h.has_16bit_data()).count();
+    let active_count = headers
+        .iter()
+        .filter(|h| h.has_8bit_data() || h.has_16bit_data())
+        .count();
     assert!(
         active_count >= 10,
         "expected at least 10 collections with data, got {active_count}"
@@ -216,15 +224,21 @@ fn test_collection_bitmap_loading() {
 
         match shapes.collection(coll_idx) {
             Ok(collection) => {
-                assert!(!collection.bitmaps.is_empty(), "active collection {coll_idx} should have bitmaps");
-                assert!(!collection.color_tables.is_empty(), "collection {coll_idx} should have CLUTs");
+                assert!(
+                    !collection.bitmaps.is_empty(),
+                    "active collection {coll_idx} should have bitmaps"
+                );
+                assert!(
+                    !collection.color_tables.is_empty(),
+                    "collection {coll_idx} should have CLUTs"
+                );
 
                 for bitmap in &collection.bitmaps {
-                    assert!(bitmap.width > 0 && bitmap.height > 0, "bitmap dimensions should be positive");
                     assert!(
-                        !bitmap.pixels.is_empty(),
-                        "bitmap should have pixel data"
+                        bitmap.width > 0 && bitmap.height > 0,
+                        "bitmap dimensions should be positive"
                     );
+                    assert!(!bitmap.pixels.is_empty(), "bitmap should have pixel data");
                 }
 
                 eprintln!(
@@ -330,16 +344,26 @@ fn test_texture_descriptors_in_level() {
         }
     }
 
-    eprintln!("Level references {} unique collections: {:?}", collections.len(), collections);
+    eprintln!(
+        "Level references {} unique collections: {:?}",
+        collections.len(),
+        collections
+    );
 
-    assert!(!collections.is_empty(), "level should reference at least one texture collection");
+    assert!(
+        !collections.is_empty(),
+        "level should reference at least one texture collection"
+    );
 
     // Verify each referenced collection can be loaded
     let mut load_failures = 0;
     for &coll_idx in &collections {
         match shapes.collection(coll_idx as usize) {
             Ok(c) => {
-                assert!(!c.bitmaps.is_empty(), "referenced collection {coll_idx} should have bitmaps");
+                assert!(
+                    !c.bitmaps.is_empty(),
+                    "referenced collection {coll_idx} should have bitmaps"
+                );
             }
             Err(e) => {
                 eprintln!("WARNING: collection {coll_idx} failed to load: {e}");
@@ -432,7 +456,10 @@ fn test_platform_data() {
             }
         }
         eprintln!("Found {platform_polygons} platform-type polygons across all levels");
-        assert!(platform_polygons > 0, "should have at least some platform-type polygons");
+        assert!(
+            platform_polygons > 0,
+            "should have at least some platform-type polygons"
+        );
     }
 }
 

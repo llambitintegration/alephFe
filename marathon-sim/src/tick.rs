@@ -100,6 +100,8 @@ impl SimWorld {
         self.update_media();
         // 3. Update platforms (before player physics so collision uses new heights)
         self.update_platforms();
+        // 3b. Action key processing (doors and control panels)
+        self.process_action_key();
         // 4. Player physics
         self.run_player_physics();
         // 5. Player weapons (depends on player position/facing)
@@ -128,16 +130,7 @@ impl SimWorld {
         };
         let geometry = self.world.resource::<MapGeometry>();
         // Clone what we need from geometry to avoid borrow conflicts
-        let geo_clone = MapGeometry {
-            polygon_vertices: geometry.polygon_vertices.clone(),
-            floor_heights: geometry.floor_heights.clone(),
-            ceiling_heights: geometry.ceiling_heights.clone(),
-            polygon_adjacency: geometry.polygon_adjacency.clone(),
-            line_endpoints: geometry.line_endpoints.clone(),
-            line_solid: geometry.line_solid.clone(),
-            line_transparent: geometry.line_transparent.clone(),
-            polygon_media_index: geometry.polygon_media_index.clone(),
-        };
+        let geo_clone = geometry.clone();
 
         // Collect media data for submersion checks
         let media_data: std::collections::HashMap<usize, (f32, i16)> = {
@@ -162,14 +155,27 @@ impl SimWorld {
             &mut crate::Shield,
         ), bevy_ecs::prelude::With<crate::Player>>();
 
-        for (mut pos, mut vel, mut facing, mut vlook, mut angular_vel, mut poly_idx, mut grounded, mut oxygen, mut health, mut shield) in query.iter_mut(&mut self.world) {
+        for (
+            mut pos,
+            mut vel,
+            mut facing,
+            mut vlook,
+            mut angular_vel,
+            mut poly_idx,
+            mut grounded,
+            mut oxygen,
+            mut health,
+            mut shield,
+        ) in query.iter_mut(&mut self.world)
+        {
             // Velocity is stored in player-local frame: x=forward, y=perp, z=vert.
             // Compute the next tick's player-local velocity from input.
             let new_local_vel =
                 compute_player_velocity(vel.0, facing.0, &flags, &params, grounded.0);
 
             // Compute facing (turning) — mouse yaw applied directly, keyboard via angular velocity
-            let (new_facing, new_angular) = compute_facing(facing.0, angular_vel.0, &flags, &params, mouse_yaw);
+            let (new_facing, new_angular) =
+                compute_facing(facing.0, angular_vel.0, &flags, &params, mouse_yaw);
             facing.0 = new_facing;
             angular_vel.0 = new_angular;
 
@@ -181,9 +187,8 @@ impl SimWorld {
 
             // Apply collision in world-space.
             let new_pos = pos.0 + world_vel;
-            let result = apply_player_collision(
-                pos.0, new_pos, world_vel, poly_idx.0, &params, &geo_clone,
-            );
+            let result =
+                apply_player_collision(pos.0, new_pos, world_vel, poly_idx.0, &params, &geo_clone);
 
             pos.0 = result.position;
             vel.0 = velocity_world_to_local(result.velocity, new_facing);
@@ -191,7 +196,11 @@ impl SimWorld {
             grounded.0 = result.grounded;
 
             // Media interaction: check if player is submerged
-            let media_idx = geo_clone.polygon_media_index.get(poly_idx.0).copied().unwrap_or(-1);
+            let media_idx = geo_clone
+                .polygon_media_index
+                .get(poly_idx.0)
+                .copied()
+                .unwrap_or(-1);
             if media_idx >= 0 {
                 if let Some(&(media_height, media_type)) = media_data.get(&(media_idx as usize)) {
                     if pos.0.z < media_height {
@@ -236,10 +245,7 @@ impl SimWorld {
             .get::<crate::Shield>(entity)
             .map(|s| s.0)
             .unwrap_or(0);
-        let health_val = self
-            .world
-            .get::<crate::Health>(entity)
-            .map(|h| h.0);
+        let health_val = self.world.get::<crate::Health>(entity).map(|h| h.0);
         if let Some(hp) = health_val {
             let (new_h, new_s, _) = crate::combat::damage::apply_damage(damage, hp, shield_val);
             if let Some(mut health) = self.world.get_mut::<crate::Health>(entity) {
@@ -255,18 +261,19 @@ impl SimWorld {
 
     fn update_lights(&mut self) {
         let tick = self.world.resource::<TickCounter>().0;
-        self.world
-            .resource_scope(|world: &mut bevy_ecs::prelude::World, mut sim_rng: bevy_ecs::prelude::Mut<SimRng>| {
+        self.world.resource_scope(
+            |world: &mut bevy_ecs::prelude::World, mut sim_rng: bevy_ecs::prelude::Mut<SimRng>| {
                 let mut query = world.query::<&mut crate::Light>();
                 for mut light in query.iter_mut(world) {
                     let intensity = crate::world_mechanics::lights::compute_light_intensity(
-                        &*light,
+                        &light,
                         tick,
                         &mut sim_rng.0,
                     );
                     light.current_intensity = intensity;
                 }
-            });
+            },
+        );
     }
 
     fn update_media(&mut self) {
@@ -285,7 +292,139 @@ impl SimWorld {
         for mut media in query.iter_mut(&mut self.world) {
             if let Some(&intensity) = light_intensities.get(&media.light_index) {
                 media.current_height =
-                    crate::world_mechanics::media::compute_media_height(&*media, intensity);
+                    crate::world_mechanics::media::compute_media_height(&media, intensity);
+            }
+        }
+    }
+
+    fn process_action_key(&mut self) {
+        let tick_input = self.world.resource::<TickInput>();
+        if !tick_input.action_flags.contains(ActionFlags::ACTION) {
+            return;
+        }
+
+        // Get player position, facing, polygon
+        let player_data: Option<(glam::Vec2, f32, usize)> = {
+            let mut q = self.world.query_filtered::<(
+                &crate::Position,
+                &crate::Facing,
+                &crate::PolygonIndex,
+            ), bevy_ecs::prelude::With<crate::Player>>();
+            q.iter(&self.world)
+                .next()
+                .map(|(pos, fac, poly)| (glam::Vec2::new(pos.0.x, pos.0.y), fac.0, poly.0))
+        };
+
+        let (player_pos, player_facing, player_poly) = match player_data {
+            Some(data) => data,
+            None => return,
+        };
+
+        // Get control panels resource
+        let panels = self
+            .world
+            .get_resource::<crate::world_mechanics::panels::ControlPanels>()
+            .cloned()
+            .unwrap_or_default();
+        let geometry = self.world.resource::<MapGeometry>().clone();
+
+        let target = crate::world_mechanics::action_key::find_action_key_target(
+            player_pos,
+            player_facing,
+            player_poly,
+            &geometry,
+            &panels,
+        );
+
+        match target {
+            crate::world_mechanics::action_key::ActionTarget::Platform(platform_poly_idx) => {
+                let mut query = self.world.query::<&mut crate::Platform>();
+                for mut platform in query.iter_mut(&mut self.world) {
+                    if platform.polygon_index == platform_poly_idx {
+                        if crate::world_mechanics::platforms::should_activate(
+                            &platform,
+                            crate::world_mechanics::platforms::PlatformTrigger::ActionKey,
+                        ) {
+                            crate::world_mechanics::platforms::activate_platform(&mut platform);
+                        } else if platform.state == crate::PlatformState::Extending {
+                            platform.state = crate::PlatformState::Returning;
+                        } else if platform.state == crate::PlatformState::Returning {
+                            platform.state = crate::PlatformState::Extending;
+                        }
+                        break;
+                    }
+                }
+            }
+            crate::world_mechanics::action_key::ActionTarget::Panel(panel_idx) => {
+                self.execute_panel_action(panel_idx, &panels);
+            }
+            crate::world_mechanics::action_key::ActionTarget::None => {}
+        }
+    }
+
+    fn execute_panel_action(
+        &mut self,
+        panel_idx: usize,
+        panels: &crate::world_mechanics::panels::ControlPanels,
+    ) {
+        let panel = match panels.0.get(panel_idx) {
+            Some(p) => p,
+            None => return,
+        };
+
+        match &panel.action {
+            crate::world_mechanics::panels::PanelAction::ActivatePlatform { platform_index } => {
+                let target_idx = *platform_index;
+                let mut query = self.world.query::<&mut crate::Platform>();
+                for mut platform in query.iter_mut(&mut self.world) {
+                    if platform.polygon_index == target_idx {
+                        crate::world_mechanics::platforms::activate_platform(&mut platform);
+                        break;
+                    }
+                }
+            }
+            crate::world_mechanics::panels::PanelAction::ToggleLight { light_index } => {
+                let target_idx = *light_index;
+                let mut query = self.world.query::<&mut crate::Light>();
+                for mut light in query.iter_mut(&mut self.world) {
+                    if light.light_index == target_idx {
+                        if light.current_intensity > 0.5 {
+                            light.current_intensity = 0.0;
+                            light.intensity_max = 0.0;
+                        } else {
+                            light.current_intensity = 1.0;
+                            light.intensity_max = 1.0;
+                        }
+                        break;
+                    }
+                }
+            }
+            crate::world_mechanics::panels::PanelAction::ActivateTaggedPlatforms { tag } => {
+                let tag_val = *tag;
+                let geometry = self.world.resource::<MapGeometry>();
+                let matching_polys: Vec<usize> = geometry
+                    .polygon_types
+                    .iter()
+                    .zip(geometry.polygon_permutations.iter())
+                    .enumerate()
+                    .filter(|(_, (&ptype, &perm))| ptype == 5 && perm == tag_val)
+                    .map(|(idx, _)| idx)
+                    .collect();
+
+                let mut query = self.world.query::<&mut crate::Platform>();
+                for mut platform in query.iter_mut(&mut self.world) {
+                    if matching_polys.contains(&platform.polygon_index) {
+                        crate::world_mechanics::platforms::activate_platform(&mut platform);
+                    }
+                }
+            }
+            crate::world_mechanics::panels::PanelAction::ActivateTerminal { terminal_index } => {
+                let idx = *terminal_index;
+                self.world.resource_mut::<crate::world::SimEvents>().push(
+                    crate::world::SimEvent::TerminalActivation {
+                        terminal_index: idx,
+                    },
+                );
             }
         }
     }
@@ -297,7 +436,7 @@ impl SimWorld {
             let mut query = self.world.query::<&mut crate::Platform>();
             for mut platform in query.iter_mut(&mut self.world) {
                 let (floor, ceiling) =
-                    crate::world_mechanics::platforms::tick_platform(&mut *platform);
+                    crate::world_mechanics::platforms::tick_platform(&mut platform);
                 height_updates.push((platform.polygon_index, floor, ceiling));
             }
         }
@@ -317,10 +456,9 @@ impl SimWorld {
 
         // Player-entry activation check
         let player_poly = {
-            let mut q = self.world.query_filtered::<
-                &crate::PolygonIndex,
-                bevy_ecs::prelude::With<crate::Player>,
-            >();
+            let mut q = self
+                .world
+                .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Player>>();
             q.iter(&self.world).next().map(|p| p.0)
         };
 
@@ -331,8 +469,8 @@ impl SimWorld {
                     use crate::world_mechanics::platforms::{
                         activate_platform, should_activate, PlatformTrigger,
                     };
-                    if should_activate(&*platform, PlatformTrigger::PlayerEntry) {
-                        activate_platform(&mut *platform);
+                    if should_activate(&platform, PlatformTrigger::PlayerEntry) {
+                        activate_platform(&mut platform);
                     }
                 }
             }
@@ -440,12 +578,18 @@ impl SimWorld {
 
         // Handle weapon cycling
         if cycle_fwd {
-            if let Some(mut inv) = self.world.get_resource_mut::<crate::player::inventory::WeaponInventory>() {
+            if let Some(mut inv) = self
+                .world
+                .get_resource_mut::<crate::player::inventory::WeaponInventory>()
+            {
                 inv.cycle_forward(10);
             }
         }
         if cycle_back {
-            if let Some(mut inv) = self.world.get_resource_mut::<crate::player::inventory::WeaponInventory>() {
+            if let Some(mut inv) = self
+                .world
+                .get_resource_mut::<crate::player::inventory::WeaponInventory>()
+            {
                 inv.cycle_backward(10);
             }
         }
@@ -453,7 +597,10 @@ impl SimWorld {
         // Handle firing
         if !fire_primary && !fire_secondary {
             // Still need to tick weapon cooldowns
-            if let Some(mut inv) = self.world.get_resource_mut::<crate::player::inventory::WeaponInventory>() {
+            if let Some(mut inv) = self
+                .world
+                .get_resource_mut::<crate::player::inventory::WeaponInventory>()
+            {
                 if let Some(weapon) = inv.current_mut() {
                     crate::combat::weapons::tick_weapon(weapon, false, 2, 3);
                 }
@@ -464,7 +611,10 @@ impl SimWorld {
         // Get weapon definition and tick
         let mut projectile_spawn: Option<(usize, glam::Vec3, glam::Vec3)> = None;
 
-        if let Some(mut inv) = self.world.get_resource_mut::<crate::player::inventory::WeaponInventory>() {
+        if let Some(mut inv) = self
+            .world
+            .get_resource_mut::<crate::player::inventory::WeaponInventory>()
+        {
             let weapon_def_idx = inv.current().map(|w| w.definition_index);
             if let Some(def_idx) = weapon_def_idx {
                 // Look up weapon definition
@@ -491,12 +641,12 @@ impl SimWorld {
                                 .map(|p| p.speed as f32 / 1024.0)
                                 .unwrap_or(0.5);
 
-                            let dir = glam::Vec3::new(player_facing.cos(), player_facing.sin(), 0.0);
+                            let dir =
+                                glam::Vec3::new(player_facing.cos(), player_facing.sin(), 0.0);
                             let spawn_pos = player_pos + dir * 0.3 + glam::Vec3::new(0.0, 0.0, 0.4);
                             let velocity = dir * speed;
 
-                            projectile_spawn =
-                                Some((proj_type as usize, spawn_pos, velocity));
+                            projectile_spawn = Some((proj_type as usize, spawn_pos, velocity));
                         }
                     }
                 }
@@ -528,9 +678,7 @@ impl SimWorld {
                 bevy_ecs::entity::Entity,
                 &crate::Position,
             ), bevy_ecs::prelude::With<crate::Player>>();
-            q.iter(&self.world)
-                .next()
-                .map(|(e, pos)| (pos.0, e))
+            q.iter(&self.world).next().map(|(e, pos)| (pos.0, e))
         };
 
         let Some((player_pos, player_entity)) = player_data else {
@@ -584,8 +732,19 @@ impl SimWorld {
                 Option<&crate::Flying>,
             )>();
 
-            for (entity, monster, state, pos, vel, facing, health, cooldown, poly_idx, _grounded, flying) in
-                query.iter(&self.world)
+            for (
+                entity,
+                monster,
+                state,
+                pos,
+                vel,
+                facing,
+                health,
+                cooldown,
+                poly_idx,
+                _grounded,
+                flying,
+            ) in query.iter(&self.world)
             {
                 if *state == crate::MonsterState::Dead {
                     updates.push(MonsterUpdate {
@@ -629,7 +788,9 @@ impl SimWorld {
                 let monster_class = def.map(|d| d.monster_class as usize).unwrap_or(0);
                 let monster_enemies = def.map(|d| d.enemies as u32).unwrap_or(0);
                 let gravity = def.map(|d| d.gravity as f32 / 1024.0).unwrap_or(0.01);
-                let terminal_vel = def.map(|d| d.terminal_velocity as f32 / 1024.0).unwrap_or(0.5);
+                let terminal_vel = def
+                    .map(|d| d.terminal_velocity as f32 / 1024.0)
+                    .unwrap_or(0.5);
 
                 // Vision check
                 let can_see = crate::monster::ai::can_see_target(
@@ -714,7 +875,9 @@ impl SimWorld {
                     let melee_damage_random = def.map(|d| d.shrapnel_damage.random).unwrap_or(5);
                     let melee_damage_type = def.map(|d| d.shrapnel_damage.damage_type).unwrap_or(0);
                     let melee_damage_scale = def.map(|d| d.shrapnel_damage.scale).unwrap_or(1.0);
-                    let ranged_proj_type = def.map(|d| d.ranged_attack.attack_type as usize).unwrap_or(0);
+                    let ranged_proj_type = def
+                        .map(|d| d.ranged_attack.attack_type as usize)
+                        .unwrap_or(0);
                     let attack_frequency = def.map(|d| d.attack_frequency as u16).unwrap_or(30);
 
                     let attack_result = crate::monster::ai::compute_monster_attack(
@@ -779,7 +942,11 @@ impl SimWorld {
                     new_poly: new_poly_val,
                     new_grounded: new_grounded_val,
                     attack_cooldown: new_cooldown,
-                    target: if has_target { Some(player_entity) } else { None },
+                    target: if has_target {
+                        Some(player_entity)
+                    } else {
+                        None
+                    },
                     cascade_source: cascade,
                     cascade_pos: monster_pos_2d,
                     cascade_class: monster_class,
@@ -840,7 +1007,13 @@ impl SimWorld {
 
         if !cascade_sources.is_empty() {
             // Collect idle monster data for cascade
-            let idle_monsters: Vec<(glam::Vec2, usize, u32, crate::MonsterState, bevy_ecs::entity::Entity)> = {
+            let idle_monsters: Vec<(
+                glam::Vec2,
+                usize,
+                u32,
+                crate::MonsterState,
+                bevy_ecs::entity::Entity,
+            )> = {
                 let mut q = self.world.query::<(
                     bevy_ecs::entity::Entity,
                     &crate::Monster,
@@ -951,7 +1124,17 @@ impl SimWorld {
         };
 
         // Collect monster positions for entity collision
-        let monster_data: Vec<(bevy_ecs::entity::Entity, glam::Vec2, f32, f32, f32, glam::Vec3, u32, u32)> = {
+        #[allow(clippy::type_complexity)]
+        let monster_data: Vec<(
+            bevy_ecs::entity::Entity,
+            glam::Vec2,
+            f32,
+            f32,
+            f32,
+            glam::Vec3,
+            u32,
+            u32,
+        )> = {
             let mut q = self.world.query::<(
                 bevy_ecs::entity::Entity,
                 &crate::Monster,
@@ -978,18 +1161,30 @@ impl SimWorld {
         };
 
         // Get player data for collision and homing
-        let player_data: Option<(bevy_ecs::entity::Entity, glam::Vec2, f32, f32, f32, glam::Vec3)> = {
+        let player_data: Option<(
+            bevy_ecs::entity::Entity,
+            glam::Vec2,
+            f32,
+            f32,
+            f32,
+            glam::Vec3,
+        )> = {
             let mut q = self.world.query_filtered::<(
                 bevy_ecs::entity::Entity,
                 &crate::Position,
                 &crate::CollisionRadius,
                 &crate::EntityHeight,
             ), bevy_ecs::prelude::With<crate::Player>>();
-            q.iter(&self.world)
-                .next()
-                .map(|(e, pos, r, h)| {
-                    (e, glam::Vec2::new(pos.0.x, pos.0.y), r.0, pos.0.z, pos.0.z + h.0, pos.0)
-                })
+            q.iter(&self.world).next().map(|(e, pos, r, h)| {
+                (
+                    e,
+                    glam::Vec2::new(pos.0.x, pos.0.y),
+                    r.0,
+                    pos.0.z,
+                    pos.0.z + h.0,
+                    pos.0,
+                )
+            })
         };
 
         // Collect projectile data (collect-then-process pattern)
@@ -1013,17 +1208,16 @@ impl SimWorld {
                 Option<&crate::ProjectileSource>,
                 Option<&crate::HomingTarget>,
             )>();
-            query.iter(&self.world)
-                .map(|(entity, proj, pos, vel, poly, source, homing)| {
-                    ProjData {
-                        entity,
-                        proj: *proj,
-                        pos: pos.0,
-                        vel: vel.0,
-                        poly: poly.0,
-                        source: source.map(|s| s.0),
-                        homing_target: homing.map(|h| h.0),
-                    }
+            query
+                .iter(&self.world)
+                .map(|(entity, proj, pos, vel, poly, source, homing)| ProjData {
+                    entity,
+                    proj: *proj,
+                    pos: pos.0,
+                    vel: vel.0,
+                    poly: poly.0,
+                    source: source.map(|s| s.0),
+                    homing_target: homing.map(|h| h.0),
                 })
                 .collect()
         };
@@ -1066,12 +1260,11 @@ impl SimWorld {
                 effect_def: Option<usize>,
                 is_submerged: bool,
                 media_effect_def: Option<usize>,
+                #[allow(dead_code)]
                 rebound_sound: i16,
             },
             /// Despawn without effect (range exceeded).
-            DespawnSilent {
-                entity: bevy_ecs::entity::Entity,
-            },
+            DespawnSilent { entity: bevy_ecs::entity::Entity },
             /// Rebound from wall — update position and velocity.
             ReboundWall {
                 entity: bevy_ecs::entity::Entity,
@@ -1143,20 +1336,21 @@ impl SimWorld {
                     1.0
                 };
                 let gravity = (1.0 / 120.0) * gravity_mul;
-                current_vel = crate::combat::projectiles::apply_projectile_gravity(current_vel, gravity);
+                current_vel =
+                    crate::combat::projectiles::apply_projectile_gravity(current_vel, gravity);
             }
 
             // 2. Apply homing
             if flags & ProjectileFlags::GUIDED != 0 {
                 if let Some(target) = pd.homing_target {
-                    current_vel = crate::combat::projectiles::apply_homing(
-                        current_vel, pd.pos, target, 0.05,
-                    );
+                    current_vel =
+                        crate::combat::projectiles::apply_homing(current_vel, pd.pos, target, 0.05);
                 } else {
                     // Fallback: home toward nearest valid target
                     let is_player_fired = pd.source.is_some();
                     let target_pos = if is_player_fired {
-                        monster_data.iter()
+                        monster_data
+                            .iter()
                             .min_by(|a, b| {
                                 let da = a.1.distance(glam::Vec2::new(pd.pos.x, pd.pos.y));
                                 let db = b.1.distance(glam::Vec2::new(pd.pos.x, pd.pos.y));
@@ -1168,7 +1362,10 @@ impl SimWorld {
                     };
                     if let Some(target) = target_pos {
                         current_vel = crate::combat::projectiles::apply_homing(
-                            current_vel, pd.pos, target, 0.05,
+                            current_vel,
+                            pd.pos,
+                            target,
+                            0.05,
                         );
                     }
                 }
@@ -1203,7 +1400,12 @@ impl SimWorld {
 
             // 6. Check animation-based detonation
             if flags & ProjectileFlags::STOP_WHEN_ANIMATION_LOOPS != 0 && new_ticks >= 15 {
-                let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, new_pos.z);
+                let is_sub = is_submerged_at(
+                    &polygon_media_index,
+                    &media_data,
+                    current_polygon,
+                    new_pos.z,
+                );
                 actions.push(ProjAction::Detonate {
                     entity: pd.entity,
                     hit_point: new_pos,
@@ -1211,9 +1413,17 @@ impl SimWorld {
                     damage_amount: 0,
                     aoe_damage_base: proj_damage_base,
                     aoe_radius: def.area_of_effect as f32 / 1024.0,
-                    effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                    effect_def: if def.detonation_effect >= 0 {
+                        Some(def.detonation_effect as usize)
+                    } else {
+                        None
+                    },
                     is_submerged: is_sub,
-                    media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                    media_effect_def: if def.media_detonation_effect >= 0 {
+                        Some(def.media_detonation_effect as usize)
+                    } else {
+                        None
+                    },
                     rebound_sound,
                 });
                 continue;
@@ -1228,9 +1438,12 @@ impl SimWorld {
                 // Check all polygon edges for crossing
                 for &(line_idx, adj) in &polygon_adjacency[current_polygon] {
                     let (la, lb) = line_endpoints[line_idx];
-                    if let Some(hit) = crate::collision::segment_intersection(old_2d, new_2d, la, lb) {
+                    if let Some(hit) =
+                        crate::collision::segment_intersection(old_2d, new_2d, la, lb)
+                    {
                         let is_passable = adj.is_some() && !line_solid[line_idx];
-                        let is_transparent = line_transparent.get(line_idx).copied().unwrap_or(false);
+                        let is_transparent =
+                            line_transparent.get(line_idx).copied().unwrap_or(false);
 
                         if is_passable {
                             // Cross into adjacent polygon
@@ -1239,9 +1452,12 @@ impl SimWorld {
                             }
                         } else if is_transparent {
                             // Transparent wall: check pass-through flags
-                            let passes = if flags & ProjectileFlags::USUALLY_PASS_TRANSPARENT_SIDE != 0 {
+                            let passes = if flags & ProjectileFlags::USUALLY_PASS_TRANSPARENT_SIDE
+                                != 0
+                            {
                                 true
-                            } else if flags & ProjectileFlags::SOMETIMES_PASS_TRANSPARENT_SIDE != 0 {
+                            } else if flags & ProjectileFlags::SOMETIMES_PASS_TRANSPARENT_SIDE != 0
+                            {
                                 pass_transparent
                             } else {
                                 false
@@ -1254,7 +1470,12 @@ impl SimWorld {
                                 // Detonate at transparent wall
                                 let hit_z = pd.pos.z + (new_pos.z - pd.pos.z) * hit.t;
                                 let hit_point = glam::Vec3::new(hit.point.x, hit.point.y, hit_z);
-                                let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, hit_point.z);
+                                let is_sub = is_submerged_at(
+                                    &polygon_media_index,
+                                    &media_data,
+                                    current_polygon,
+                                    hit_point.z,
+                                );
                                 actions.push(ProjAction::Detonate {
                                     entity: pd.entity,
                                     hit_point,
@@ -1262,9 +1483,17 @@ impl SimWorld {
                                     damage_amount: 0,
                                     aoe_damage_base: proj_damage_base,
                                     aoe_radius: def.area_of_effect as f32 / 1024.0,
-                                    effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                                    effect_def: if def.detonation_effect >= 0 {
+                                        Some(def.detonation_effect as usize)
+                                    } else {
+                                        None
+                                    },
                                     is_submerged: is_sub,
-                                    media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                                    media_effect_def: if def.media_detonation_effect >= 0 {
+                                        Some(def.media_detonation_effect as usize)
+                                    } else {
+                                        None
+                                    },
                                     rebound_sound,
                                 });
                                 wall_handled = true;
@@ -1277,7 +1506,9 @@ impl SimWorld {
 
                             if flags & ProjectileFlags::REBOUNDS_FROM_WALLS != 0 {
                                 let reflected = crate::combat::projectiles::reflect_velocity_wall(
-                                    current_vel, la, lb,
+                                    current_vel,
+                                    la,
+                                    lb,
                                 );
                                 actions.push(ProjAction::ReboundWall {
                                     entity: pd.entity,
@@ -1289,7 +1520,12 @@ impl SimWorld {
                                     rebound_sound,
                                 });
                             } else {
-                                let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, hit_point.z);
+                                let is_sub = is_submerged_at(
+                                    &polygon_media_index,
+                                    &media_data,
+                                    current_polygon,
+                                    hit_point.z,
+                                );
                                 actions.push(ProjAction::Detonate {
                                     entity: pd.entity,
                                     hit_point,
@@ -1297,9 +1533,17 @@ impl SimWorld {
                                     damage_amount: 0,
                                     aoe_damage_base: proj_damage_base,
                                     aoe_radius: def.area_of_effect as f32 / 1024.0,
-                                    effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                                    effect_def: if def.detonation_effect >= 0 {
+                                        Some(def.detonation_effect as usize)
+                                    } else {
+                                        None
+                                    },
                                     is_submerged: is_sub,
-                                    media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                                    media_effect_def: if def.media_detonation_effect >= 0 {
+                                        Some(def.media_detonation_effect as usize)
+                                    } else {
+                                        None
+                                    },
                                     rebound_sound,
                                 });
                             }
@@ -1315,11 +1559,15 @@ impl SimWorld {
 
             // 8. Check floor/ceiling collision
             let floor_h = floor_heights.get(current_polygon).copied().unwrap_or(0.0);
-            let ceil_h = ceiling_heights.get(current_polygon).copied().unwrap_or(100.0);
+            let ceil_h = ceiling_heights
+                .get(current_polygon)
+                .copied()
+                .unwrap_or(100.0);
 
             if new_pos.z <= floor_h {
                 if flags & ProjectileFlags::REBOUNDS_FROM_FLOOR != 0 {
-                    let reflected = crate::combat::projectiles::reflect_velocity_floor(current_vel, 0.2);
+                    let reflected =
+                        crate::combat::projectiles::reflect_velocity_floor(current_vel, 0.2);
                     let clamped_pos = glam::Vec3::new(new_pos.x, new_pos.y, floor_h + 0.01);
                     actions.push(ProjAction::ReboundFloor {
                         entity: pd.entity,
@@ -1333,7 +1581,12 @@ impl SimWorld {
                     continue;
                 } else {
                     let hit_point = glam::Vec3::new(new_pos.x, new_pos.y, floor_h);
-                    let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, hit_point.z);
+                    let is_sub = is_submerged_at(
+                        &polygon_media_index,
+                        &media_data,
+                        current_polygon,
+                        hit_point.z,
+                    );
                     actions.push(ProjAction::Detonate {
                         entity: pd.entity,
                         hit_point,
@@ -1341,9 +1594,17 @@ impl SimWorld {
                         damage_amount: 0,
                         aoe_damage_base: proj_damage_base,
                         aoe_radius: def.area_of_effect as f32 / 1024.0,
-                        effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                        effect_def: if def.detonation_effect >= 0 {
+                            Some(def.detonation_effect as usize)
+                        } else {
+                            None
+                        },
                         is_submerged: is_sub,
-                        media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                        media_effect_def: if def.media_detonation_effect >= 0 {
+                            Some(def.media_detonation_effect as usize)
+                        } else {
+                            None
+                        },
                         rebound_sound,
                     });
                     continue;
@@ -1352,7 +1613,12 @@ impl SimWorld {
 
             if new_pos.z >= ceil_h {
                 let hit_point = glam::Vec3::new(new_pos.x, new_pos.y, ceil_h);
-                let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, hit_point.z);
+                let is_sub = is_submerged_at(
+                    &polygon_media_index,
+                    &media_data,
+                    current_polygon,
+                    hit_point.z,
+                );
                 actions.push(ProjAction::Detonate {
                     entity: pd.entity,
                     hit_point,
@@ -1360,9 +1626,17 @@ impl SimWorld {
                     damage_amount: 0,
                     aoe_damage_base: proj_damage_base,
                     aoe_radius: def.area_of_effect as f32 / 1024.0,
-                    effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                    effect_def: if def.detonation_effect >= 0 {
+                        Some(def.detonation_effect as usize)
+                    } else {
+                        None
+                    },
                     is_submerged: is_sub,
-                    media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                    media_effect_def: if def.media_detonation_effect >= 0 {
+                        Some(def.media_detonation_effect as usize)
+                    } else {
+                        None
+                    },
                     rebound_sound,
                 });
                 continue;
@@ -1409,7 +1683,12 @@ impl SimWorld {
                     });
                     continue;
                 } else {
-                    let is_sub = is_submerged_at(&polygon_media_index, &media_data, current_polygon, hit.hit_point.z);
+                    let is_sub = is_submerged_at(
+                        &polygon_media_index,
+                        &media_data,
+                        current_polygon,
+                        hit.hit_point.z,
+                    );
                     actions.push(ProjAction::Detonate {
                         entity: pd.entity,
                         hit_point: hit.hit_point,
@@ -1417,9 +1696,17 @@ impl SimWorld {
                         damage_amount,
                         aoe_damage_base: proj_damage_base,
                         aoe_radius: def.area_of_effect as f32 / 1024.0,
-                        effect_def: if def.detonation_effect >= 0 { Some(def.detonation_effect as usize) } else { None },
+                        effect_def: if def.detonation_effect >= 0 {
+                            Some(def.detonation_effect as usize)
+                        } else {
+                            None
+                        },
                         is_submerged: is_sub,
-                        media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                        media_effect_def: if def.media_detonation_effect >= 0 {
+                            Some(def.media_detonation_effect as usize)
+                        } else {
+                            None
+                        },
                         rebound_sound,
                     });
                     continue;
@@ -1427,7 +1714,10 @@ impl SimWorld {
             }
 
             // 10. Check media boundary interaction
-            let media_idx = polygon_media_index.get(current_polygon).copied().unwrap_or(-1);
+            let media_idx = polygon_media_index
+                .get(current_polygon)
+                .copied()
+                .unwrap_or(-1);
             if media_idx >= 0 {
                 if let Some(&(media_height, _media_type)) = media_data.get(&(media_idx as usize)) {
                     // Check if projectile crossed the media surface
@@ -1456,9 +1746,17 @@ impl SimWorld {
                                 damage_amount: 0,
                                 aoe_damage_base: proj_damage_base,
                                 aoe_radius: def.area_of_effect as f32 / 1024.0,
-                                effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                                effect_def: if def.media_detonation_effect >= 0 {
+                                    Some(def.media_detonation_effect as usize)
+                                } else {
+                                    None
+                                },
                                 is_submerged: true,
-                                media_effect_def: if def.media_detonation_effect >= 0 { Some(def.media_detonation_effect as usize) } else { None },
+                                media_effect_def: if def.media_detonation_effect >= 0 {
+                                    Some(def.media_detonation_effect as usize)
+                                } else {
+                                    None
+                                },
                                 rebound_sound,
                             });
                             continue;
@@ -1499,13 +1797,25 @@ impl SimWorld {
         let mut to_despawn: Vec<bevy_ecs::entity::Entity> = Vec::new();
         let mut effects_to_spawn: Vec<(glam::Vec3, usize)> = Vec::new();
         let mut sound_events: Vec<(i16, glam::Vec3)> = Vec::new();
-        let mut promotions: Vec<(bevy_ecs::entity::Entity, usize, glam::Vec3, glam::Vec3, usize, Option<bevy_ecs::entity::Entity>)> = Vec::new();
+        let mut promotions: Vec<(
+            bevy_ecs::entity::Entity,
+            usize,
+            glam::Vec3,
+            glam::Vec3,
+            usize,
+            Option<bevy_ecs::entity::Entity>,
+        )> = Vec::new();
 
         for action in &actions {
             match action {
                 ProjAction::Continue {
-                    entity, new_pos, new_vel, new_distance,
-                    new_ticks_alive, new_contrails_spawned, new_polygon,
+                    entity,
+                    new_pos,
+                    new_vel,
+                    new_distance,
+                    new_ticks_alive,
+                    new_contrails_spawned,
+                    new_polygon,
                     contrail_effect,
                 } => {
                     if let Some(mut pos) = self.world.get_mut::<crate::Position>(*entity) {
@@ -1528,8 +1838,15 @@ impl SimWorld {
                     }
                 }
                 ProjAction::Detonate {
-                    entity, hit_point, hit_entity, damage_amount,
-                    aoe_damage_base, aoe_radius, effect_def, is_submerged, media_effect_def,
+                    entity,
+                    hit_point,
+                    hit_entity,
+                    damage_amount,
+                    aoe_damage_base,
+                    aoe_radius,
+                    effect_def,
+                    is_submerged,
+                    media_effect_def,
                     ..
                 } => {
                     to_despawn.push(*entity);
@@ -1554,7 +1871,9 @@ impl SimWorld {
                         for (ent, center, _, _, _, _, _, _) in &monster_data {
                             let dist = det_2d.distance(*center);
                             let aoe_dmg = crate::combat::damage::calculate_aoe_damage(
-                                *aoe_damage_base, dist, *aoe_radius,
+                                *aoe_damage_base,
+                                dist,
+                                *aoe_radius,
                             );
                             if aoe_dmg > 0 {
                                 self.apply_damage_to_entity(*ent, aoe_dmg);
@@ -1563,7 +1882,9 @@ impl SimWorld {
                         if let Some((pe, pcenter, _, _, _, _)) = &player_data {
                             let dist = det_2d.distance(*pcenter);
                             let aoe_dmg = crate::combat::damage::calculate_aoe_damage(
-                                *aoe_damage_base, dist, *aoe_radius,
+                                *aoe_damage_base,
+                                dist,
+                                *aoe_radius,
                             );
                             if aoe_dmg > 0 {
                                 self.apply_damage_to_entity(*pe, aoe_dmg);
@@ -1585,11 +1906,22 @@ impl SimWorld {
                     to_despawn.push(*entity);
                 }
                 ProjAction::ReboundWall {
-                    entity, hit_point, new_vel, new_distance,
-                    new_ticks_alive, new_polygon, rebound_sound,
-                } | ProjAction::ReboundFloor {
-                    entity, new_pos: hit_point, new_vel, new_distance,
-                    new_ticks_alive, new_polygon, rebound_sound,
+                    entity,
+                    hit_point,
+                    new_vel,
+                    new_distance,
+                    new_ticks_alive,
+                    new_polygon,
+                    rebound_sound,
+                }
+                | ProjAction::ReboundFloor {
+                    entity,
+                    new_pos: hit_point,
+                    new_vel,
+                    new_distance,
+                    new_ticks_alive,
+                    new_polygon,
+                    rebound_sound,
                 } => {
                     if let Some(mut pos) = self.world.get_mut::<crate::Position>(*entity) {
                         pos.0 = *hit_point;
@@ -1607,9 +1939,14 @@ impl SimWorld {
                     }
                 }
                 ProjAction::PersistentHit {
-                    entity, hit_entity, damage_amount,
-                    new_pos, new_vel, new_distance,
-                    new_ticks_alive, new_polygon,
+                    entity,
+                    hit_entity,
+                    damage_amount,
+                    new_pos,
+                    new_vel,
+                    new_distance,
+                    new_ticks_alive,
+                    new_polygon,
                 } => {
                     // Apply damage but keep projectile alive
                     if *damage_amount > 0 {
@@ -1635,11 +1972,22 @@ impl SimWorld {
                     }
                 }
                 ProjAction::Promote {
-                    entity, new_def_index, position, velocity,
-                    polygon, source,
+                    entity,
+                    new_def_index,
+                    position,
+                    velocity,
+                    polygon,
+                    source,
                 } => {
                     to_despawn.push(*entity);
-                    promotions.push((*entity, *new_def_index, *position, *velocity, *polygon, *source));
+                    promotions.push((
+                        *entity,
+                        *new_def_index,
+                        *position,
+                        *velocity,
+                        *polygon,
+                        *source,
+                    ));
                 }
             }
         }
@@ -1779,7 +2127,8 @@ impl SimWorld {
                 let dist = player_pos.distance(item_pos);
 
                 if dist <= player_radius + radius.0 {
-                    if let Some(effect) = crate::world_mechanics::items::item_effect(item.item_type) {
+                    if let Some(effect) = crate::world_mechanics::items::item_effect(item.item_type)
+                    {
                         // Check if pickup can be applied
                         let can_pickup = match &effect {
                             crate::world_mechanics::items::ItemEffect::RestoreHealth { .. } => {
@@ -1877,43 +2226,57 @@ impl SimWorld {
 
     /// Query the player's position.
     pub fn player_position(&mut self) -> Option<glam::Vec3> {
-        let mut query = self.world.query_filtered::<&crate::Position, bevy_ecs::prelude::With<crate::Player>>();
+        let mut query = self
+            .world
+            .query_filtered::<&crate::Position, bevy_ecs::prelude::With<crate::Player>>();
         query.iter(&self.world).next().map(|p| p.0)
     }
 
     /// Query the player's facing angle.
     pub fn player_facing(&mut self) -> Option<f32> {
-        let mut query = self.world.query_filtered::<&crate::Facing, bevy_ecs::prelude::With<crate::Player>>();
+        let mut query = self
+            .world
+            .query_filtered::<&crate::Facing, bevy_ecs::prelude::With<crate::Player>>();
         query.iter(&self.world).next().map(|f| f.0)
     }
 
     /// Query the player's health.
     pub fn player_health(&mut self) -> Option<i16> {
-        let mut query = self.world.query_filtered::<&crate::Health, bevy_ecs::prelude::With<crate::Player>>();
+        let mut query = self
+            .world
+            .query_filtered::<&crate::Health, bevy_ecs::prelude::With<crate::Player>>();
         query.iter(&self.world).next().map(|h| h.0)
     }
 
     /// Query the player's shield.
     pub fn player_shield(&mut self) -> Option<i16> {
-        let mut query = self.world.query_filtered::<&crate::Shield, bevy_ecs::prelude::With<crate::Player>>();
+        let mut query = self
+            .world
+            .query_filtered::<&crate::Shield, bevy_ecs::prelude::With<crate::Player>>();
         query.iter(&self.world).next().map(|s| s.0)
     }
 
     /// Query the player's oxygen.
     pub fn player_oxygen(&mut self) -> Option<i16> {
-        let mut query = self.world.query_filtered::<&crate::Oxygen, bevy_ecs::prelude::With<crate::Player>>();
+        let mut query = self
+            .world
+            .query_filtered::<&crate::Oxygen, bevy_ecs::prelude::With<crate::Player>>();
         query.iter(&self.world).next().map(|o| o.0)
     }
 
     /// Query the player's vertical look angle.
     pub fn player_vertical_look(&mut self) -> Option<f32> {
-        let mut query = self.world.query_filtered::<&crate::VerticalLook, bevy_ecs::prelude::With<crate::Player>>();
+        let mut query = self
+            .world
+            .query_filtered::<&crate::VerticalLook, bevy_ecs::prelude::With<crate::Player>>();
         query.iter(&self.world).next().map(|v| v.0)
     }
 
     /// Query the player's current polygon index.
     pub fn player_polygon(&mut self) -> Option<usize> {
-        let mut query = self.world.query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Player>>();
+        let mut query = self
+            .world
+            .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Player>>();
         query.iter(&self.world).next().map(|p| p.0)
     }
 
@@ -1922,7 +2285,9 @@ impl SimWorld {
     /// Returns the shape collection, high-level shape index (based on weapon
     /// operational state), and animation frame for the currently equipped weapon.
     pub fn player_weapon_state(&mut self) -> Option<WeaponRenderState> {
-        let inv = self.world.get_resource::<crate::player::inventory::WeaponInventory>()?;
+        let inv = self
+            .world
+            .get_resource::<crate::player::inventory::WeaponInventory>()?;
         let slot = inv.current()?;
         let def_idx = slot.definition_index;
         let weapon_state = slot.state;
@@ -1938,11 +2303,19 @@ impl SimWorld {
         let shape = match weapon_state {
             crate::player::inventory::WeaponState::Idle => def.idle_shape,
             crate::player::inventory::WeaponState::Firing => {
-                if def.firing_shape >= 0 { def.firing_shape } else { def.idle_shape }
+                if def.firing_shape >= 0 {
+                    def.firing_shape
+                } else {
+                    def.idle_shape
+                }
             }
             crate::player::inventory::WeaponState::Recovering => def.idle_shape,
             crate::player::inventory::WeaponState::Reloading => {
-                if def.reloading_shape >= 0 { def.reloading_shape } else { def.idle_shape }
+                if def.reloading_shape >= 0 {
+                    def.reloading_shape
+                } else {
+                    def.idle_shape
+                }
             }
             crate::player::inventory::WeaponState::Switching => def.idle_shape,
         };
@@ -1955,6 +2328,8 @@ impl SimWorld {
             collection: def.collection as u16,
             shape: shape as u16,
             frame: 0,
+            vertical_position: def.idle_height,
+            horizontal_position: def.idle_width,
         })
     }
 
@@ -1962,9 +2337,15 @@ impl SimWorld {
     ///
     /// Returns (definition_index, primary_ammo, secondary_ammo).
     pub fn player_weapon_info(&mut self) -> Option<(usize, u16, u16)> {
-        let inv = self.world.get_resource::<crate::player::inventory::WeaponInventory>()?;
+        let inv = self
+            .world
+            .get_resource::<crate::player::inventory::WeaponInventory>()?;
         let slot = inv.current()?;
-        Some((slot.definition_index, slot.primary_magazine, slot.secondary_magazine))
+        Some((
+            slot.definition_index,
+            slot.primary_magazine,
+            slot.secondary_magazine,
+        ))
     }
 
     /// Query nearby entities for the motion sensor HUD.
@@ -1982,10 +2363,9 @@ impl SimWorld {
 
         // Monsters
         {
-            let mut query = self.world.query::<(
-                &crate::Position,
-                &crate::MonsterState,
-            )>();
+            let mut query = self
+                .world
+                .query::<(&crate::Position, &crate::MonsterState)>();
             for (pos, state) in query.iter(&self.world) {
                 if *state == crate::MonsterState::Dead {
                     continue;
@@ -2001,10 +2381,9 @@ impl SimWorld {
 
         // Items
         {
-            let mut query = self.world.query_filtered::<
-                &crate::Position,
-                bevy_ecs::prelude::With<crate::Item>,
-            >();
+            let mut query = self
+                .world
+                .query_filtered::<&crate::Position, bevy_ecs::prelude::With<crate::Item>>();
             for pos in query.iter(&self.world) {
                 let dx = pos.0.x - player_pos.x;
                 let dy = pos.0.y - player_pos.y;
@@ -2055,10 +2434,7 @@ impl SimWorld {
 
         // Projectiles
         {
-            let mut query = self.world.query::<(
-                &crate::Projectile,
-                &crate::Position,
-            )>();
+            let mut query = self.world.query::<(&crate::Projectile, &crate::Position)>();
             for (proj, pos) in query.iter(&self.world) {
                 result.push(EntityRenderState {
                     entity_type: RenderEntityType::Projectile {
@@ -2095,10 +2471,7 @@ impl SimWorld {
 
         // Effects
         {
-            let mut query = self.world.query::<(
-                &crate::Effect,
-                &crate::Position,
-            )>();
+            let mut query = self.world.query::<(&crate::Effect, &crate::Position)>();
             for (effect, pos) in query.iter(&self.world) {
                 result.push(EntityRenderState {
                     entity_type: RenderEntityType::Effect {
@@ -2144,6 +2517,10 @@ pub struct WeaponRenderState {
     pub shape: u16,
     /// Animation frame within the shape sequence.
     pub frame: u16,
+    /// Vertical position of the weapon sprite origin (normalized, from idle_height).
+    pub vertical_position: f32,
+    /// Horizontal position of the weapon sprite origin (normalized, from idle_width).
+    pub horizontal_position: f32,
 }
 
 #[cfg(test)]

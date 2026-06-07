@@ -47,11 +47,7 @@ impl ChannelPool {
 
         // Try to find a free slot
         if let Some(slot) = self.channels.iter_mut().find(|c| c.is_none()) {
-            *slot = Some(ActiveSound {
-                id,
-                state,
-                handle,
-            });
+            *slot = Some(ActiveSound { id, state, handle });
             return id;
         }
 
@@ -59,13 +55,9 @@ impl ChannelPool {
         let evict_idx = self.find_eviction_candidate();
         if let Some(idx) = evict_idx {
             if let Some(ref mut sound) = self.channels[idx] {
-                let _ = sound.handle.stop(kira::Tween::default());
+                sound.handle.stop(kira::Tween::default());
             }
-            self.channels[idx] = Some(ActiveSound {
-                id,
-                state,
-                handle,
-            });
+            self.channels[idx] = Some(ActiveSound { id, state, handle });
         }
 
         id
@@ -82,14 +74,11 @@ impl ChannelPool {
 
         for (idx, slot) in self.channels.iter().enumerate() {
             if let Some(ref sound) = slot {
-                let is_protected = sound
-                    .state
-                    .flags
-                    .contains(SoundFlags::CANNOT_BE_RESTARTED);
+                let is_protected = sound.state.flags.contains(SoundFlags::CANNOT_BE_RESTARTED);
 
                 // Prefer unprotected over protected
                 let better = match (is_protected, best_is_protected) {
-                    (false, true) => true,  // unprotected beats protected
+                    (false, true) => true,                           // unprotected beats protected
                     (true, false) => false, // protected doesn't beat unprotected
                     _ => sound.state.effective_volume < best_volume, // same class: lower volume wins
                 };
@@ -155,7 +144,7 @@ impl ChannelPool {
     pub fn clear(&mut self) {
         for slot in &mut self.channels {
             if let Some(ref mut sound) = slot {
-                let _ = sound.handle.stop(kira::Tween::default());
+                sound.handle.stop(kira::Tween::default());
             }
             *slot = None;
         }
@@ -170,7 +159,7 @@ impl ChannelPool {
                 .unwrap_or(false);
             if should_remove {
                 if let Some(ref mut sound) = slot {
-                    let _ = sound.handle.stop(kira::Tween::default());
+                    sound.handle.stop(kira::Tween::default());
                 }
                 *slot = None;
             }

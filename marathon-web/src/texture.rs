@@ -13,7 +13,7 @@ use std::collections::HashMap;
 /// This function pads the actual bitmap count to the next safe value.
 pub fn pad_layer_count_for_webgl(actual: usize) -> u32 {
     let mut n = actual.max(2) as u32;
-    if n == 6 || (n > 6 && n % 6 == 0) {
+    if n == 6 || (n > 6 && n.is_multiple_of(6)) {
         n += 1;
     }
     n
@@ -161,8 +161,18 @@ fn load_collection(collection: &Collection, clut_index: usize) -> Option<LoadedC
 
     let clut = collection.color_tables.get(clut_index)?;
 
-    let max_width = collection.bitmaps.iter().map(|b| b.width as u32).max().unwrap_or(1);
-    let max_height = collection.bitmaps.iter().map(|b| b.height as u32).max().unwrap_or(1);
+    let max_width = collection
+        .bitmaps
+        .iter()
+        .map(|b| b.width as u32)
+        .max()
+        .unwrap_or(1);
+    let max_height = collection
+        .bitmaps
+        .iter()
+        .map(|b| b.height as u32)
+        .max()
+        .unwrap_or(1);
 
     let bitmaps: Vec<Vec<u8>> = collection
         .bitmaps

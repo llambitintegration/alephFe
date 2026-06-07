@@ -69,10 +69,7 @@ impl Default for KeyBindings {
         let mut gameplay = HashMap::new();
         gameplay.insert(PhysicalInput::Key(KeyCode::W), GameplayAction::MoveForward);
         gameplay.insert(PhysicalInput::Key(KeyCode::Up), GameplayAction::MoveForward);
-        gameplay.insert(
-            PhysicalInput::Key(KeyCode::S),
-            GameplayAction::MoveBackward,
-        );
+        gameplay.insert(PhysicalInput::Key(KeyCode::S), GameplayAction::MoveBackward);
         gameplay.insert(
             PhysicalInput::Key(KeyCode::Down),
             GameplayAction::MoveBackward,
@@ -97,10 +94,7 @@ impl Default for KeyBindings {
             PhysicalInput::Key(KeyCode::Tab),
             GameplayAction::CycleWeaponForward,
         );
-        gameplay.insert(
-            PhysicalInput::Key(KeyCode::M),
-            GameplayAction::ToggleMap,
-        );
+        gameplay.insert(PhysicalInput::Key(KeyCode::M), GameplayAction::ToggleMap);
         gameplay.insert(
             PhysicalInput::Key(KeyCode::Backtick),
             GameplayAction::Microphone,
@@ -121,10 +115,7 @@ impl Default for KeyBindings {
             PhysicalInput::Key(KeyCode::Down),
             TerminalAction::ScrollDown,
         );
-        terminal.insert(
-            PhysicalInput::Key(KeyCode::PageUp),
-            TerminalAction::PageUp,
-        );
+        terminal.insert(PhysicalInput::Key(KeyCode::PageUp), TerminalAction::PageUp);
         terminal.insert(
             PhysicalInput::Key(KeyCode::PageDown),
             TerminalAction::PageDown,
@@ -220,8 +211,14 @@ mod tests {
 
     #[test]
     fn action_to_flag_mapping() {
-        assert_eq!(GameplayAction::MoveForward.to_flag(), ActionFlags::MOVE_FORWARD);
-        assert_eq!(GameplayAction::FirePrimary.to_flag(), ActionFlags::FIRE_PRIMARY);
+        assert_eq!(
+            GameplayAction::MoveForward.to_flag(),
+            ActionFlags::MOVE_FORWARD
+        );
+        assert_eq!(
+            GameplayAction::FirePrimary.to_flag(),
+            ActionFlags::FIRE_PRIMARY
+        );
         assert_eq!(GameplayAction::ToggleMap.to_flag(), ActionFlags::TOGGLE_MAP);
     }
 }

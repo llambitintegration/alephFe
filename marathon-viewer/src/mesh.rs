@@ -51,10 +51,24 @@ pub fn build_level_mesh(map: &MapData) -> LevelMesh {
         }
 
         // Floor triangulation (fan from vertex 0)
-        build_floor(&mut vertices, &mut indices, map, polygon, poly_idx, vert_count);
+        build_floor(
+            &mut vertices,
+            &mut indices,
+            map,
+            polygon,
+            poly_idx,
+            vert_count,
+        );
 
         // Ceiling triangulation (reversed winding)
-        build_ceiling(&mut vertices, &mut indices, map, polygon, poly_idx, vert_count);
+        build_ceiling(
+            &mut vertices,
+            &mut indices,
+            map,
+            polygon,
+            poly_idx,
+            vert_count,
+        );
 
         // Media surface if present
         if polygon.media_index >= 0 {
@@ -231,7 +245,14 @@ fn build_walls_for_line(
                 None
             };
             build_wall_side(
-                vertices, indices, map, line, side, poly_idx, adjacent_poly_idx, false,
+                vertices,
+                indices,
+                map,
+                line,
+                side,
+                poly_idx,
+                adjacent_poly_idx,
+                false,
             );
         }
     }
@@ -247,12 +268,20 @@ fn build_walls_for_line(
                 None
             };
             build_wall_side(
-                vertices, indices, map, line, side, poly_idx, adjacent_poly_idx, true,
+                vertices,
+                indices,
+                map,
+                line,
+                side,
+                poly_idx,
+                adjacent_poly_idx,
+                true,
             );
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_wall_side(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
@@ -315,8 +344,18 @@ fn build_wall_side(
                 if top > bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
-                        vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                        tex.texture.0 as u32, poly_idx,
+                        vertices,
+                        indices,
+                        x0,
+                        z0,
+                        x1,
+                        z1,
+                        bottom,
+                        top,
+                        wall_len,
+                        tex,
+                        tex.texture.0 as u32,
+                        poly_idx,
                     );
                 }
             }
@@ -330,8 +369,18 @@ fn build_wall_side(
                 if top > bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
-                        vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                        tex.texture.0 as u32, poly_idx,
+                        vertices,
+                        indices,
+                        x0,
+                        z0,
+                        x1,
+                        z1,
+                        bottom,
+                        top,
+                        wall_len,
+                        tex,
+                        tex.texture.0 as u32,
+                        poly_idx,
                     );
                 }
             }
@@ -347,8 +396,18 @@ fn build_wall_side(
                 if low_top > low_bottom && !side.secondary_texture.texture.is_none() {
                     let tex = &side.secondary_texture;
                     emit_wall_quad(
-                        vertices, indices, x0, z0, x1, z1, low_bottom, low_top, wall_len, tex,
-                        tex.texture.0 as u32, poly_idx,
+                        vertices,
+                        indices,
+                        x0,
+                        z0,
+                        x1,
+                        z1,
+                        low_bottom,
+                        low_top,
+                        wall_len,
+                        tex,
+                        tex.texture.0 as u32,
+                        poly_idx,
                     );
                 }
 
@@ -358,8 +417,18 @@ fn build_wall_side(
                 if trans_top > trans_bottom && !side.transparent_texture.texture.is_none() {
                     let tex = &side.transparent_texture;
                     emit_wall_quad(
-                        vertices, indices, x0, z0, x1, z1, trans_bottom, trans_top, wall_len,
-                        tex, tex.texture.0 as u32, poly_idx,
+                        vertices,
+                        indices,
+                        x0,
+                        z0,
+                        x1,
+                        z1,
+                        trans_bottom,
+                        trans_top,
+                        wall_len,
+                        tex,
+                        tex.texture.0 as u32,
+                        poly_idx,
                     );
                 }
 
@@ -369,8 +438,18 @@ fn build_wall_side(
                 if high_top > high_bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
-                        vertices, indices, x0, z0, x1, z1, high_bottom, high_top, wall_len,
-                        tex, tex.texture.0 as u32, poly_idx,
+                        vertices,
+                        indices,
+                        x0,
+                        z0,
+                        x1,
+                        z1,
+                        high_bottom,
+                        high_top,
+                        wall_len,
+                        tex,
+                        tex.texture.0 as u32,
+                        poly_idx,
                     );
                 }
             }
@@ -379,6 +458,7 @@ fn build_wall_side(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_wall_quad(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,

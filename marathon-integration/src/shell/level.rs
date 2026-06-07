@@ -27,11 +27,10 @@ pub fn load_level_map(wad: &WadFile, level_index: usize) -> Result<LoadedLevel, 
             total: entries.len(),
         })?;
 
-    let map_data =
-        MapData::from_entry(entry).map_err(|e| LevelLoadError::MapParseFailed {
-            level_index,
-            message: e.to_string(),
-        })?;
+    let map_data = MapData::from_entry(entry).map_err(|e| LevelLoadError::MapParseFailed {
+        level_index,
+        message: e.to_string(),
+    })?;
 
     Ok(LoadedLevel {
         map_data,

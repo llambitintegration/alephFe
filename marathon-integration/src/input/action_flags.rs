@@ -82,10 +82,7 @@ pub fn translate_gameplay_input(
 }
 
 /// Translate the current frame's input buffer into menu actions.
-pub fn translate_menu_input(
-    buffer: &InputBuffer,
-    bindings: &KeyBindings,
-) -> Vec<MenuAction> {
+pub fn translate_menu_input(buffer: &InputBuffer, bindings: &KeyBindings) -> Vec<MenuAction> {
     let mut actions = Vec::new();
 
     for event in &buffer.events {
@@ -232,7 +229,10 @@ mod tests {
 
     #[test]
     fn gamepad_axis_below_dead_zone_no_flags() {
-        let buffer = make_buffer(vec![RawInput::GamepadAxis(GamepadAxisType::LeftStickX, 0.10)]);
+        let buffer = make_buffer(vec![RawInput::GamepadAxis(
+            GamepadAxisType::LeftStickX,
+            0.10,
+        )]);
         let bindings = KeyBindings::default();
         let config = InputConfig {
             mouse_sensitivity: 1.0,
@@ -245,7 +245,10 @@ mod tests {
 
     #[test]
     fn gamepad_left_stick_x_positive_strafes_right() {
-        let buffer = make_buffer(vec![RawInput::GamepadAxis(GamepadAxisType::LeftStickX, 0.75)]);
+        let buffer = make_buffer(vec![RawInput::GamepadAxis(
+            GamepadAxisType::LeftStickX,
+            0.75,
+        )]);
         let bindings = KeyBindings::default();
         let config = InputConfig::default();
 
@@ -274,6 +277,9 @@ mod tests {
         let bindings = KeyBindings::default();
 
         let actions = translate_terminal_input(&buffer, &bindings);
-        assert_eq!(actions, vec![TerminalAction::PageDown, TerminalAction::Exit]);
+        assert_eq!(
+            actions,
+            vec![TerminalAction::PageDown, TerminalAction::Exit]
+        );
     }
 }
