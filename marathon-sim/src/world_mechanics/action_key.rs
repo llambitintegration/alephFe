@@ -191,6 +191,8 @@ mod tests {
             line_solid: vec![true; 4],
             line_transparent: vec![false; 4],
             polygon_media_index: vec![-1],
+            polygon_floor_light_index: vec![-1],
+            polygon_ceiling_light_index: vec![-1],
             polygon_types: vec![0],
             polygon_permutations: vec![-1],
             line_side_indices: vec![
@@ -252,6 +254,8 @@ mod tests {
             line_solid: vec![true, false, true, true, true, true, true],
             line_transparent: vec![false, true, false, false, false, false, false],
             polygon_media_index: vec![-1, -1],
+            polygon_floor_light_index: vec![-1, -1],
+            polygon_ceiling_light_index: vec![-1, -1],
             polygon_types: vec![0, 5],          // poly 1 is a platform
             polygon_permutations: vec![-1, 0],   // platform index 0
             line_side_indices: vec![
@@ -301,6 +305,8 @@ mod tests {
             line_solid: vec![true; 4],
             line_transparent: vec![false; 4],
             polygon_media_index: vec![-1],
+            polygon_floor_light_index: vec![-1],
+            polygon_ceiling_light_index: vec![-1],
             polygon_types: vec![0],
             polygon_permutations: vec![-1],
             line_side_indices: vec![

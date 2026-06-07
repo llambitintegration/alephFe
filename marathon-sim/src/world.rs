@@ -43,6 +43,10 @@ pub struct MapGeometry {
     pub line_transparent: Vec<bool>,
     /// Per-polygon media index (-1 if none).
     pub polygon_media_index: Vec<i16>,
+    /// Per-polygon floor light-source index (-1 if none).
+    pub polygon_floor_light_index: Vec<i16>,
+    /// Per-polygon ceiling light-source index (-1 if none).
+    pub polygon_ceiling_light_index: Vec<i16>,
     /// Polygon type (e.g. 5 = platform) per polygon.
     pub polygon_types: Vec<i16>,
     /// Polygon permutation (e.g. platform index) per polygon.
@@ -191,6 +195,103 @@ impl SimWorld {
     pub fn ecs_world_mut(&mut self) -> &mut bevy_ecs::world::World {
         &mut self.world
     }
+
+    /// Return current per-polygon dynamic geometry/lighting data for every
+    /// polygon in the level, indexed by polygon.
+    ///
+    /// This is the sim-side source the web renderer feeds into its per-polygon
+    /// data texture each frame (box 4.2). Heights are in render units (Marathon
+    /// world units / 1024) so they match the renderer's X/Z scale; light values
+    /// are 0.0..=1.0 intensity multipliers.
+    ///
+    /// Field sources:
+    /// - `floor_height` / `ceiling_height`: live values from `MapGeometry`,
+    ///   which `update_platforms` rewrites each tick as platforms/doors move.
+    /// - `media_height`: the current surface height of the `Media` referenced by
+    ///   the polygon's `media_index` (animated by `update_media`); `0.0` when the
+    ///   polygon has no media.
+    /// - `floor_light` / `ceiling_light`: the current intensity of the `Light`
+    ///   referenced by the polygon's floor/ceiling light-source index (animated
+    ///   by `update_lights`); `1.0` when the polygon references no valid light
+    ///   (mirrors the web `evaluate_light_intensity` fallback).
+    pub fn poly_dynamic_data(&mut self) -> Vec<PolyDynamicData> {
+        let geometry = self.world.resource::<MapGeometry>();
+        let floor_heights = geometry.floor_heights.clone();
+        let ceiling_heights = geometry.ceiling_heights.clone();
+        let polygon_media_index = geometry.polygon_media_index.clone();
+        let polygon_floor_light_index = geometry.polygon_floor_light_index.clone();
+        let polygon_ceiling_light_index = geometry.polygon_ceiling_light_index.clone();
+
+        // Media current surface height keyed by media array index.
+        let media_heights: std::collections::HashMap<usize, f32> = {
+            let mut map = std::collections::HashMap::new();
+            let mut q = self.world.query::<&crate::components::Media>();
+            for media in q.iter(&self.world) {
+                map.insert(media.index, media.current_height);
+            }
+            map
+        };
+
+        // Current light intensity keyed by light array index.
+        let light_intensities: std::collections::HashMap<usize, f32> = {
+            let mut map = std::collections::HashMap::new();
+            let mut q = self.world.query::<&crate::components::Light>();
+            for light in q.iter(&self.world) {
+                map.insert(light.light_index, light.current_intensity);
+            }
+            map
+        };
+
+        let light_for = |idx: i16| -> f32 {
+            if idx < 0 {
+                return 1.0;
+            }
+            light_intensities
+                .get(&(idx as usize))
+                .copied()
+                .unwrap_or(1.0)
+        };
+
+        let poly_count = floor_heights.len();
+        (0..poly_count)
+            .map(|p| {
+                let media_height = {
+                    let mi = polygon_media_index.get(p).copied().unwrap_or(-1);
+                    if mi >= 0 {
+                        media_heights.get(&(mi as usize)).copied().unwrap_or(0.0)
+                    } else {
+                        0.0
+                    }
+                };
+                PolyDynamicData {
+                    floor_height: floor_heights[p],
+                    ceiling_height: ceiling_heights.get(p).copied().unwrap_or(0.0),
+                    media_height,
+                    floor_light: light_for(
+                        polygon_floor_light_index.get(p).copied().unwrap_or(-1),
+                    ),
+                    ceiling_light: light_for(
+                        polygon_ceiling_light_index.get(p).copied().unwrap_or(-1),
+                    ),
+                }
+            })
+            .collect()
+    }
+}
+
+/// Current per-polygon dynamic geometry/lighting state, indexed by polygon.
+///
+/// Heights are in render units (Marathon world units / 1024); light values are
+/// 0.0..=1.0 intensity multipliers. This is the sim-side equivalent of the web
+/// renderer's `PolyDynData`; the web layer maps one to the other so the sim
+/// crate stays free of any web dependency.
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
+pub struct PolyDynamicData {
+    pub floor_height: f32,
+    pub ceiling_height: f32,
+    pub media_height: f32,
+    pub floor_light: f32,
+    pub ceiling_light: f32,
 }
 
 fn build_map_geometry(map_data: &MapData) -> MapGeometry {
@@ -270,6 +371,18 @@ fn build_map_geometry(map_data: &MapData) -> MapGeometry {
         .map(|poly| poly.media_index)
         .collect();
 
+    let polygon_floor_light_index: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.floor_lightsource_index)
+        .collect();
+
+    let polygon_ceiling_light_index: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.ceiling_lightsource_index)
+        .collect();
+
     let polygon_types: Vec<i16> = map_data
         .polygons
         .iter()
@@ -309,6 +422,8 @@ fn build_map_geometry(map_data: &MapData) -> MapGeometry {
         line_solid,
         line_transparent,
         polygon_media_index,
+        polygon_floor_light_index,
+        polygon_ceiling_light_index,
         polygon_types,
         polygon_permutations,
         line_side_indices,
@@ -908,5 +1023,238 @@ mod sim_event_tests {
             SimEvent::ItemPickedUp { item_type } => assert_eq!(item_type, 7),
             _ => panic!("expected SimEvent::ItemPickedUp variant"),
         }
+    }
+}
+
+#[cfg(test)]
+mod poly_dynamic_data_tests {
+    use super::*;
+    use marathon_formats::map::{LightData, LightingFunctionSpec, StaticLightData};
+    use marathon_formats::{
+        Endpoint, Line, MapData, Polygon, ShapeDescriptor, WorldPoint2d,
+    };
+    use marathon_formats::physics::PhysicsData;
+
+    const POLYGON_IS_PLATFORM: i16 = 5;
+
+    fn mk_endpoint(x: i16, y: i16, poly: i16) -> Endpoint {
+        Endpoint {
+            flags: 0,
+            highest_adjacent_floor_height: 0,
+            lowest_adjacent_ceiling_height: 2048,
+            vertex: WorldPoint2d { x, y },
+            transformed: WorldPoint2d { x, y },
+            supporting_polygon_index: poly,
+        }
+    }
+
+    fn mk_line(a: i16, b: i16) -> Line {
+        Line {
+            endpoint_indexes: [a, b],
+            flags: 0x4000, // SOLID
+            length: 1024,
+            highest_adjacent_floor: 0,
+            lowest_adjacent_ceiling: 2048,
+            clockwise_polygon_side_index: -1,
+            counterclockwise_polygon_side_index: -1,
+            clockwise_polygon_owner: -1,
+            counterclockwise_polygon_owner: -1,
+        }
+    }
+
+    fn mk_square_polygon(
+        polygon_type: i16,
+        endpoint_indexes: [i16; 8],
+        line_indexes: [i16; 8],
+        floor_height: i16,
+        ceiling_height: i16,
+    ) -> Polygon {
+        let wp_zero = WorldPoint2d { x: 0, y: 0 };
+        Polygon {
+            polygon_type,
+            flags: 0,
+            permutation: 0,
+            vertex_count: 4,
+            endpoint_indexes,
+            line_indexes,
+            floor_texture: ShapeDescriptor(0xFFFF),
+            ceiling_texture: ShapeDescriptor(0xFFFF),
+            floor_height,
+            ceiling_height,
+            floor_lightsource_index: 0,
+            ceiling_lightsource_index: 0,
+            area: 1024 * 1024,
+            floor_transfer_mode: 0,
+            ceiling_transfer_mode: 0,
+            adjacent_polygon_indexes: [-1; 8],
+            center: wp_zero,
+            side_indexes: [-1; 8],
+            floor_origin: wp_zero,
+            ceiling_origin: wp_zero,
+            media_index: -1,
+            media_lightsource_index: -1,
+            sound_source_indexes: -1,
+            ambient_sound_image_index: -1,
+            random_sound_image_index: -1,
+        }
+    }
+
+    fn constant_light(intensity: f32) -> StaticLightData {
+        let spec = LightingFunctionSpec {
+            function: 0, // constant
+            period: 1,
+            delta_period: 0,
+            intensity,
+            delta_intensity: 0.0,
+        };
+        StaticLightData {
+            light_type: 0,
+            flags: 0,
+            phase: 0,
+            primary_active: spec,
+            secondary_active: spec,
+            becoming_active: spec,
+            primary_inactive: spec,
+            secondary_inactive: spec,
+            becoming_inactive: spec,
+            tag: 0,
+        }
+    }
+
+    /// Map with two square polygons: poly 0 static (type 0), poly 1 a platform
+    /// (type 5). Platform polygons spawn an implicit door platform that starts
+    /// "extended" (closed) and can be activated to move.
+    fn platform_map() -> MapData {
+        // Two side-by-side 1024x1024 squares sharing endpoints 1 and 2.
+        let endpoints = vec![
+            mk_endpoint(0, 0, 0),
+            mk_endpoint(1024, 0, 0),
+            mk_endpoint(1024, 1024, 0),
+            mk_endpoint(0, 1024, 0),
+            mk_endpoint(2048, 0, 1),
+            mk_endpoint(2048, 1024, 1),
+        ];
+        let lines = vec![
+            mk_line(0, 1),
+            mk_line(1, 2),
+            mk_line(2, 3),
+            mk_line(3, 0),
+            mk_line(1, 4),
+            mk_line(4, 5),
+            mk_line(5, 2),
+        ];
+        // poly 0: static room, floor 0, ceiling 2048.
+        let poly0 = mk_square_polygon(
+            0,
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            0,
+            2048,
+        );
+        // poly 1: platform/door, floor 0, ceiling 2048.
+        let poly1 = mk_square_polygon(
+            POLYGON_IS_PLATFORM,
+            [1, 4, 5, 2, -1, -1, -1, -1],
+            [4, 5, 6, 1, -1, -1, -1, -1],
+            0,
+            2048,
+        );
+
+        MapData {
+            endpoints,
+            lines,
+            sides: vec![],
+            polygons: vec![poly0, poly1],
+            objects: vec![],
+            lights: LightData::Static(vec![constant_light(1.0)]),
+            platforms: vec![],
+            media: vec![],
+            annotations: vec![],
+            terminals: vec![],
+            ambient_sounds: vec![],
+            random_sounds: vec![],
+            map_info: None,
+            item_placement: vec![],
+            guard_paths: None,
+        }
+    }
+
+    fn empty_physics() -> PhysicsData {
+        PhysicsData {
+            monsters: None,
+            effects: None,
+            projectiles: None,
+            physics: None,
+            weapons: None,
+        }
+    }
+
+    #[test]
+    fn poly_dynamic_data_tracks_moving_platform() {
+        let map = platform_map();
+        let physics = empty_physics();
+        let config = SimConfig::default();
+        let mut world = SimWorld::new(&map, &physics, &config).expect("world construction");
+
+        // Tick once so `MapGeometry` is synced from the platform's current
+        // (closed) state — the platform writes its live heights into geometry
+        // during `update_platforms`, which is what `poly_dynamic_data` reads.
+        world.tick(crate::tick::TickInput::default());
+
+        let before = world.poly_dynamic_data();
+        assert_eq!(before.len(), 2, "one entry per polygon");
+
+        // Static polygon 0: floor 0.0, ceiling 2.0, full light, no media.
+        assert_eq!(before[0].floor_height, 0.0);
+        assert_eq!(before[0].ceiling_height, 2.0);
+        assert_eq!(before[0].media_height, 0.0);
+        assert_eq!(before[0].floor_light, 1.0);
+        assert_eq!(before[0].ceiling_light, 1.0);
+
+        // Platform polygon 1 starts extended (closed door): floor risen to
+        // ceiling height (2.0), ceiling lowered to floor height (0.0).
+        let start_floor = before[1].floor_height;
+        let start_ceiling = before[1].ceiling_height;
+        assert_eq!(start_floor, 2.0, "door starts closed (floor at ceiling)");
+        assert_eq!(start_ceiling, 0.0, "door starts closed (ceiling at floor)");
+
+        // Activate the platform (open the door) by flipping its state to
+        // Returning, mirroring what an action-key activation does.
+        {
+            let ecs = world.ecs_world_mut();
+            let mut q = ecs.query::<&mut crate::components::Platform>();
+            for mut platform in q.iter_mut(ecs) {
+                if platform.polygon_index == 1 {
+                    crate::world_mechanics::platforms::activate_platform(&mut platform);
+                }
+            }
+        }
+
+        // Tick the sim a few times; the platform should move toward its rest
+        // (open) position.
+        for _ in 0..5 {
+            world.tick(crate::tick::TickInput::default());
+        }
+
+        let after = world.poly_dynamic_data();
+        assert_eq!(after.len(), 2);
+
+        // Static polygon 0 is unchanged.
+        assert_eq!(after[0].floor_height, before[0].floor_height);
+        assert_eq!(after[0].ceiling_height, before[0].ceiling_height);
+        assert_eq!(after[0].floor_light, before[0].floor_light);
+
+        // Platform polygon 1's floor height has changed (door opening: floor
+        // dropping from 2.0 toward 0.0).
+        assert_ne!(
+            after[1].floor_height, start_floor,
+            "moving platform's floor height must change after ticking"
+        );
+        assert!(
+            after[1].floor_height < start_floor,
+            "opening door floor should drop from {} (got {})",
+            start_floor,
+            after[1].floor_height
+        );
     }
 }
