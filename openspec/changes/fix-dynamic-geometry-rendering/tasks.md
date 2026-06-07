@@ -30,9 +30,9 @@
 
 ## 6. Edge-triggered action key (marathon-sim)
 
-- [ ] 6.1 Write a failing test: holding ACTION for 5 consecutive ticks facing a door activates the platform exactly once
-- [ ] 6.2 Add previous-ACTION state to the sim and gate `process_action_key` on a clear→set transition; make 6.1 pass
-- [ ] 6.3 Write a test: release then re-press ACTION re-activates (second activation occurs); make it pass
+- [x] 6.1 Write a failing test: holding ACTION for 5 consecutive ticks facing a door activates the platform exactly once
+- [x] 6.2 Add previous-ACTION state to the sim and gate `process_action_key` on a clear→set transition; make 6.1 pass
+- [x] 6.3 Write a test: release then re-press ACTION re-activates (second activation occurs); make it pass
 
 ## 7. Verification & regression
 

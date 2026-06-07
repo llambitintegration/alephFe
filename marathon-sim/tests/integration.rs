@@ -3202,3 +3202,136 @@ fn starting_magnum_fires_projectile_and_consumes_round() {
         "firing the magnum spawns exactly one projectile entity"
     );
 }
+
+// ──────────── Boxes 6.1–6.3: action-key door activation is edge-triggered ────────────
+
+/// Build a map where the player (poly 0) faces east toward an action-key door
+/// (poly 1, polygon_type = 5 platform). The door is ONLY action-key activatable
+/// (PLATFORM_IS_PLAYER_CONTROLLABLE = 1 << 12), never activate-on-entry, so the
+/// only thing that can move it is a deliberate ACTION press. Speed is slow enough
+/// that one activation keeps the platform `Extending` for many ticks (so a single
+/// press vs. a per-tick flicker are easy to tell apart).
+fn make_action_key_door_map() -> MapData {
+    let mut map = make_test_map();
+    // Poly 1 is the door: mark it as a platform polygon so the action-key
+    // ray-cast resolves to ActionTarget::Platform(1).
+    map.polygons[1].polygon_type = 5;
+    map.platforms = vec![StaticPlatformData {
+        platform_type: 0,
+        // 0.125 WU/tick: floor_extended (1.0 WU) is reached only after 8 ticks,
+        // so the platform is still Extending across a 5-tick ACTION hold.
+        speed: 128,
+        delay: 30,
+        minimum_height: 0,
+        maximum_height: 1024, // 1 WU
+        polygon_index: 1,
+        // PLATFORM_IS_PLAYER_CONTROLLABLE (1 << 12) = action-key activatable,
+        // and NOT 0x0001 (activate-on-player-entry), so it never auto-activates.
+        static_flags: 1 << 12,
+        tag: 0,
+    }];
+    map
+}
+
+#[test]
+fn action_key_hold_activates_door_exactly_once() {
+    use marathon_sim::PlatformState;
+
+    let map = make_action_key_door_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Sanity: the door is at rest before any input.
+    let snap = world.snapshot();
+    assert_eq!(
+        snap.platforms.len(),
+        1,
+        "expected exactly one door platform"
+    );
+    assert_eq!(
+        snap.platforms[0].state,
+        PlatformState::AtRest,
+        "door should be at rest before any ACTION press"
+    );
+    let rest_floor = snap.platforms[0].current_floor;
+
+    // Hold ACTION for 5 consecutive ticks while facing the door.
+    let action = ActionFlags::new(ActionFlags::ACTION);
+    let mut prev_floor = rest_floor;
+    for tick in 0..5 {
+        world.tick(action.into());
+        let snap = world.snapshot();
+        let p = &snap.platforms[0];
+        // One press = one activation: the platform extends and the floor rises
+        // monotonically. The level-triggered bug instead flips
+        // Extending<->Returning every tick, so the floor never makes steady
+        // progress and the state is not reliably Extending.
+        assert_eq!(
+            p.state,
+            PlatformState::Extending,
+            "after tick {tick} of a single hold the door must keep Extending, \
+             not flip direction (got {:?})",
+            p.state
+        );
+        assert!(
+            p.current_floor >= prev_floor,
+            "door floor must rise monotonically under one activation; \
+             tick {tick} went {prev_floor} -> {} (a flicker/back-and-forth)",
+            p.current_floor
+        );
+        prev_floor = p.current_floor;
+    }
+
+    // After 5 ticks at 0.125 WU/tick the floor should have climbed ~0.625 WU.
+    assert!(
+        prev_floor > rest_floor + 0.4,
+        "5 ticks of one activation should have raised the floor well above rest; \
+         got {prev_floor} (rest {rest_floor}) — flicker keeps it near rest"
+    );
+}
+
+#[test]
+fn action_key_release_then_repress_reactivates_door() {
+    use marathon_sim::PlatformState;
+
+    let map = make_action_key_door_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    let action = ActionFlags::new(ActionFlags::ACTION);
+    let none = ActionFlags::default();
+
+    // First press (rising edge) activates the door -> Extending.
+    world.tick(action.into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Extending,
+        "first ACTION press should activate the door"
+    );
+
+    // Let the door finish extending and come back to rest with ACTION released.
+    // Drive it home: tick (no ACTION) until it returns to AtRest.
+    let mut returned = false;
+    for _ in 0..400 {
+        world.tick(none.into());
+        if world.snapshot().platforms[0].state == PlatformState::AtRest {
+            returned = true;
+            break;
+        }
+    }
+    assert!(
+        returned,
+        "door should cycle back to AtRest after extend/delay/return"
+    );
+
+    // Re-press ACTION: because the edge was re-armed by releasing it, this is a
+    // fresh rising edge and must produce a SECOND activation.
+    world.tick(action.into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Extending,
+        "releasing then re-pressing ACTION must re-activate the door (second activation)"
+    );
+}
