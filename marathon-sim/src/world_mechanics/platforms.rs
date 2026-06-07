@@ -19,15 +19,23 @@ fn move_toward(current: f32, target: f32, speed: f32) -> f32 {
 /// Returns the current floor and ceiling heights after this tick.
 pub fn tick_platform(platform: &mut Platform) -> (f32, f32) {
     match platform.state {
-        PlatformState::AtRest => {
-            (platform.current_floor, platform.current_ceiling)
-        }
+        PlatformState::AtRest => (platform.current_floor, platform.current_ceiling),
         PlatformState::Extending => {
-            platform.current_floor = move_toward(platform.current_floor, platform.floor_extended, platform.speed);
-            platform.current_ceiling = move_toward(platform.current_ceiling, platform.ceiling_extended, platform.speed);
+            platform.current_floor = move_toward(
+                platform.current_floor,
+                platform.floor_extended,
+                platform.speed,
+            );
+            platform.current_ceiling = move_toward(
+                platform.current_ceiling,
+                platform.ceiling_extended,
+                platform.speed,
+            );
 
-            let floor_done = (platform.current_floor - platform.floor_extended).abs() < f32::EPSILON;
-            let ceiling_done = (platform.current_ceiling - platform.ceiling_extended).abs() < f32::EPSILON;
+            let floor_done =
+                (platform.current_floor - platform.floor_extended).abs() < f32::EPSILON;
+            let ceiling_done =
+                (platform.current_ceiling - platform.ceiling_extended).abs() < f32::EPSILON;
 
             if floor_done && ceiling_done {
                 platform.state = PlatformState::AtExtended;
@@ -48,11 +56,17 @@ pub fn tick_platform(platform: &mut Platform) -> (f32, f32) {
             (platform.current_floor, platform.current_ceiling)
         }
         PlatformState::Returning => {
-            platform.current_floor = move_toward(platform.current_floor, platform.floor_rest, platform.speed);
-            platform.current_ceiling = move_toward(platform.current_ceiling, platform.ceiling_rest, platform.speed);
+            platform.current_floor =
+                move_toward(platform.current_floor, platform.floor_rest, platform.speed);
+            platform.current_ceiling = move_toward(
+                platform.current_ceiling,
+                platform.ceiling_rest,
+                platform.speed,
+            );
 
             let floor_done = (platform.current_floor - platform.floor_rest).abs() < f32::EPSILON;
-            let ceiling_done = (platform.current_ceiling - platform.ceiling_rest).abs() < f32::EPSILON;
+            let ceiling_done =
+                (platform.current_ceiling - platform.ceiling_rest).abs() < f32::EPSILON;
 
             if floor_done && ceiling_done {
                 platform.state = PlatformState::AtRest;
@@ -178,8 +192,8 @@ pub fn check_platform_triggers(
 ) -> Vec<PlatformTriggerEvent> {
     let mut events = Vec::new();
 
-    let at_destination = platform.state == PlatformState::AtExtended
-        || platform.state == PlatformState::AtRest;
+    let at_destination =
+        platform.state == PlatformState::AtExtended || platform.state == PlatformState::AtRest;
 
     if !at_destination {
         return events;
@@ -331,9 +345,15 @@ mod tests {
         p.state = PlatformState::AtExtended;
         let events = check_platform_triggers(&p, &[1, 2], &[3]);
         assert_eq!(events.len(), 3);
-        assert_eq!(events[0].trigger_type, PlatformTriggerEventType::ActivatePlatform);
+        assert_eq!(
+            events[0].trigger_type,
+            PlatformTriggerEventType::ActivatePlatform
+        );
         assert_eq!(events[0].target_index, 1);
-        assert_eq!(events[2].trigger_type, PlatformTriggerEventType::ToggleLight);
+        assert_eq!(
+            events[2].trigger_type,
+            PlatformTriggerEventType::ToggleLight
+        );
         assert_eq!(events[2].target_index, 3);
     }
 

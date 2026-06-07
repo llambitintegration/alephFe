@@ -73,7 +73,11 @@ pub enum ItemEffect {
     /// Add a weapon to inventory.
     AddWeapon { weapon_definition_index: usize },
     /// Add ammunition to reserves.
-    AddAmmo { weapon_definition_index: usize, is_primary: bool, amount: u16 },
+    AddAmmo {
+        weapon_definition_index: usize,
+        is_primary: bool,
+        amount: u16,
+    },
     /// Restore health.
     RestoreHealth { amount: i16 },
     /// Restore shield.
@@ -87,20 +91,58 @@ pub enum ItemEffect {
 /// Determine what happens when an item is picked up.
 pub fn item_effect(item_type: i16) -> Option<ItemEffect> {
     match item_type {
-        ITEM_PISTOL => Some(ItemEffect::AddWeapon { weapon_definition_index: 1 }),
-        ITEM_FUSION_PISTOL => Some(ItemEffect::AddWeapon { weapon_definition_index: 2 }),
-        ITEM_ASSAULT_RIFLE => Some(ItemEffect::AddWeapon { weapon_definition_index: 3 }),
-        ITEM_MISSILE_LAUNCHER => Some(ItemEffect::AddWeapon { weapon_definition_index: 4 }),
-        ITEM_FLAMETHROWER => Some(ItemEffect::AddWeapon { weapon_definition_index: 5 }),
-        ITEM_ALIEN_WEAPON => Some(ItemEffect::AddWeapon { weapon_definition_index: 6 }),
-        ITEM_SHOTGUN => Some(ItemEffect::AddWeapon { weapon_definition_index: 7 }),
+        ITEM_PISTOL => Some(ItemEffect::AddWeapon {
+            weapon_definition_index: 1,
+        }),
+        ITEM_FUSION_PISTOL => Some(ItemEffect::AddWeapon {
+            weapon_definition_index: 2,
+        }),
+        ITEM_ASSAULT_RIFLE => Some(ItemEffect::AddWeapon {
+            weapon_definition_index: 3,
+        }),
+        ITEM_MISSILE_LAUNCHER => Some(ItemEffect::AddWeapon {
+            weapon_definition_index: 4,
+        }),
+        ITEM_FLAMETHROWER => Some(ItemEffect::AddWeapon {
+            weapon_definition_index: 5,
+        }),
+        ITEM_ALIEN_WEAPON => Some(ItemEffect::AddWeapon {
+            weapon_definition_index: 6,
+        }),
+        ITEM_SHOTGUN => Some(ItemEffect::AddWeapon {
+            weapon_definition_index: 7,
+        }),
 
-        ITEM_PISTOL_AMMO => Some(ItemEffect::AddAmmo { weapon_definition_index: 1, is_primary: true, amount: 8 }),
-        ITEM_FUSION_AMMO => Some(ItemEffect::AddAmmo { weapon_definition_index: 2, is_primary: true, amount: 20 }),
-        ITEM_AR_AMMO => Some(ItemEffect::AddAmmo { weapon_definition_index: 3, is_primary: true, amount: 52 }),
-        ITEM_AR_GRENADES => Some(ItemEffect::AddAmmo { weapon_definition_index: 3, is_primary: false, amount: 7 }),
-        ITEM_MISSILE_AMMO => Some(ItemEffect::AddAmmo { weapon_definition_index: 4, is_primary: true, amount: 2 }),
-        ITEM_SHOTGUN_AMMO => Some(ItemEffect::AddAmmo { weapon_definition_index: 7, is_primary: true, amount: 2 }),
+        ITEM_PISTOL_AMMO => Some(ItemEffect::AddAmmo {
+            weapon_definition_index: 1,
+            is_primary: true,
+            amount: 8,
+        }),
+        ITEM_FUSION_AMMO => Some(ItemEffect::AddAmmo {
+            weapon_definition_index: 2,
+            is_primary: true,
+            amount: 20,
+        }),
+        ITEM_AR_AMMO => Some(ItemEffect::AddAmmo {
+            weapon_definition_index: 3,
+            is_primary: true,
+            amount: 52,
+        }),
+        ITEM_AR_GRENADES => Some(ItemEffect::AddAmmo {
+            weapon_definition_index: 3,
+            is_primary: false,
+            amount: 7,
+        }),
+        ITEM_MISSILE_AMMO => Some(ItemEffect::AddAmmo {
+            weapon_definition_index: 4,
+            is_primary: true,
+            amount: 2,
+        }),
+        ITEM_SHOTGUN_AMMO => Some(ItemEffect::AddAmmo {
+            weapon_definition_index: 7,
+            is_primary: true,
+            amount: 2,
+        }),
 
         ITEM_HEALTH_MINOR => Some(ItemEffect::RestoreHealth { amount: 20 }),
         ITEM_HEALTH_MAJOR => Some(ItemEffect::RestoreHealth { amount: 40 }),
@@ -125,7 +167,9 @@ mod tests {
     #[test]
     fn weapon_pickup_effect() {
         match item_effect(ITEM_SHOTGUN) {
-            Some(ItemEffect::AddWeapon { weapon_definition_index }) => {
+            Some(ItemEffect::AddWeapon {
+                weapon_definition_index,
+            }) => {
                 assert_eq!(weapon_definition_index, 7);
             }
             other => panic!("expected AddWeapon, got {other:?}"),
@@ -135,7 +179,9 @@ mod tests {
     #[test]
     fn ammo_pickup_effect() {
         match item_effect(ITEM_AR_AMMO) {
-            Some(ItemEffect::AddAmmo { amount, is_primary, .. }) => {
+            Some(ItemEffect::AddAmmo {
+                amount, is_primary, ..
+            }) => {
                 assert_eq!(amount, 52);
                 assert!(is_primary);
             }

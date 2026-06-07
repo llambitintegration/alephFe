@@ -1,5 +1,5 @@
-use super::{TerminalStyle, TerminalViewState};
 use super::pages::TerminalPage;
+use super::{TerminalStyle, TerminalViewState};
 
 /// RGBA color as [r, g, b, a] in 0.0..1.0.
 pub type Color = [f32; 4];
@@ -216,11 +216,7 @@ impl TerminalRenderer {
         let indicator_y = sh - margin + 4.0 * self.layout.scale;
         list.texts.push(TerminalText {
             position: [sw / 2.0, indicator_y],
-            text: format!(
-                "{}/{}",
-                view.current_page + 1,
-                view.total_pages
-            ),
+            text: format!("{}/{}", view.current_page + 1, view.total_pages),
             color: colors::PAGE_INDICATOR,
             font_size: self.layout.body_font_size * 0.8,
             centered: true,

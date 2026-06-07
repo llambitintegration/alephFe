@@ -154,11 +154,7 @@ mod tests {
     #[test]
     fn cycle_weapons() {
         let mut inv = WeaponInventory {
-            weapons: vec![
-                Some(make_weapon(0, 8, 0)),
-                None,
-                Some(make_weapon(2, 4, 0)),
-            ],
+            weapons: vec![Some(make_weapon(0, 8, 0)), None, Some(make_weapon(2, 4, 0))],
             current_weapon: 0,
             switch_cooldown: 0,
         };

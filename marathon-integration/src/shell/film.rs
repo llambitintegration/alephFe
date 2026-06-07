@@ -198,7 +198,8 @@ mod tests {
 
     #[test]
     fn serialize_deserialize_round_trip() {
-        let mut recorder = FilmRecorder::new(5, Difficulty::TotalCarnage, GameModeType::Campaign, 12345);
+        let mut recorder =
+            FilmRecorder::new(5, Difficulty::TotalCarnage, GameModeType::Campaign, 12345);
         recorder.record_tick(ActionFlags::STRAFE_LEFT | ActionFlags::FIRE_SECONDARY);
         recorder.record_tick(ActionFlags::ACTION);
         let film = recorder.finish();

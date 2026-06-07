@@ -177,11 +177,7 @@ pub fn data_texture_copy_layout(poly_count: usize) -> wgpu::TexelCopyBufferLayou
 ///
 /// `texture` must have been created with [`data_texture_descriptor`] for the
 /// same `data.len()`.
-pub fn write_poly_data_texture(
-    queue: &wgpu::Queue,
-    texture: &wgpu::Texture,
-    data: &[PolyDynData],
-) {
+pub fn write_poly_data_texture(queue: &wgpu::Queue, texture: &wgpu::Texture, data: &[PolyDynData]) {
     if data.is_empty() {
         return;
     }
@@ -377,7 +373,7 @@ mod tests {
         assert_eq!(packed[1], 2.0); // ceiling_h
         assert_eq!(packed[2], 3.0); // media_h
         assert_eq!(packed[3], 0.5); // floor_light
-        // Polygon 0, texel 1.
+                                    // Polygon 0, texel 1.
         assert_eq!(packed[4], 0.25); // ceiling_light
         assert_eq!(packed[5], 0.0); // reserved
         assert_eq!(packed[6], 0.0); // reserved
@@ -388,7 +384,7 @@ mod tests {
         assert_eq!(packed[9], 8.0); // ceiling_h
         assert_eq!(packed[10], 0.0); // media_h
         assert_eq!(packed[11], 1.0); // floor_light
-        // Polygon 1, texel 1.
+                                     // Polygon 1, texel 1.
         assert_eq!(packed[12], 0.75); // ceiling_light
     }
 
@@ -442,7 +438,10 @@ mod tests {
             .contains(wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT));
         match entries[0].ty {
             wgpu::BindingType::Texture { sample_type, .. } => {
-                assert_eq!(sample_type, wgpu::TextureSampleType::Float { filterable: false });
+                assert_eq!(
+                    sample_type,
+                    wgpu::TextureSampleType::Float { filterable: false }
+                );
             }
             _ => panic!("entry 0 must be a texture binding"),
         }
@@ -466,8 +465,8 @@ mod tests {
         assert_eq!(layout.rows_per_image, Some(7));
 
         let packed_bytes = packed.len() * std::mem::size_of::<f32>();
-        let expected = layout.bytes_per_row.unwrap() as usize
-            * layout.rows_per_image.unwrap() as usize;
+        let expected =
+            layout.bytes_per_row.unwrap() as usize * layout.rows_per_image.unwrap() as usize;
         assert_eq!(packed_bytes, expected);
     }
 

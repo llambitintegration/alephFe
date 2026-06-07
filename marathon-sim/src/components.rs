@@ -331,7 +331,10 @@ mod tests {
         let c = a.clone(); // Clone
         assert_eq!(a, b);
         assert_eq!(a, c);
-        assert_eq!(format!("{:?}", LightState::PrimaryInactive), "PrimaryInactive");
+        assert_eq!(
+            format!("{:?}", LightState::PrimaryInactive),
+            "PrimaryInactive"
+        );
     }
 
     #[test]

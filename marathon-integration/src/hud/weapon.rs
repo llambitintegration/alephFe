@@ -29,10 +29,7 @@ impl WeaponDisplay {
         let y = layout.screen_height as f32 - icon_size - 20.0 * layout.scale;
 
         let primary_ammo_pos = [x + icon_size + 4.0 * layout.scale, y + 10.0 * layout.scale];
-        let secondary_ammo_pos = [
-            x + icon_size + 4.0 * layout.scale,
-            y + 30.0 * layout.scale,
-        ];
+        let secondary_ammo_pos = [x + icon_size + 4.0 * layout.scale, y + 30.0 * layout.scale];
 
         Self {
             weapon_icon_index,

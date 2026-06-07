@@ -45,6 +45,12 @@ pub struct AmbientManager {
     loops: Vec<AmbientLoop>,
 }
 
+impl Default for AmbientManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AmbientManager {
     pub fn new() -> Self {
         Self { loops: Vec::new() }
@@ -166,7 +172,7 @@ impl AmbientManager {
     pub fn cleanup(&mut self) {
         for ambient_loop in &mut self.loops {
             if let Some(ref mut handle) = ambient_loop.handle {
-                let _ = handle.stop(Tween::default());
+                handle.stop(Tween::default());
             }
             ambient_loop.handle = None;
             ambient_loop.active = false;
@@ -216,6 +222,12 @@ struct RandomSource {
 /// Manages random/periodic sound sources tied to map polygons.
 pub struct RandomSoundManager {
     sources: Vec<RandomSource>,
+}
+
+impl Default for RandomSoundManager {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl RandomSoundManager {
@@ -278,21 +290,13 @@ impl RandomSoundManager {
     /// Update random sound timers and trigger sounds when ready.
     ///
     /// Returns a list of sound play requests (sound_index, x, y, volume, pitch).
-    pub fn update(
-        &mut self,
-        listener: &ListenerState,
-    ) -> Vec<RandomSoundTrigger> {
+    pub fn update(&mut self, listener: &ListenerState) -> Vec<RandomSoundTrigger> {
         let mut rng = rand::thread_rng();
         let mut triggers = Vec::new();
 
         for source in &mut self.sources {
             // Skip if out of range
-            let distance = distance_2d(
-                listener.x,
-                listener.y,
-                source.center_x,
-                source.center_y,
-            );
+            let distance = distance_2d(listener.x, listener.y, source.center_x, source.center_y);
             if !is_within_range(distance, source.behavior) {
                 continue;
             }
@@ -315,8 +319,8 @@ impl RandomSoundManager {
             let (x, y) = if source.non_directional {
                 (source.center_x, source.center_y)
             } else {
-                let dir = source.direction as f32
-                    + rng.gen::<f32>() * source.delta_direction as f32;
+                let dir =
+                    source.direction as f32 + rng.gen::<f32>() * source.delta_direction as f32;
                 // Marathon angle: 0-511 maps to 0-2pi
                 let angle = dir * std::f32::consts::TAU / 512.0;
                 // Offset a small distance from center in the direction

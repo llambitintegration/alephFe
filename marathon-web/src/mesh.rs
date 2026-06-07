@@ -90,13 +90,36 @@ pub fn build_level_mesh(map: &MapData, poly_info: &[PolygonInfo]) -> LevelMesh {
 
         let info = &poly_info[poly_idx];
 
-        build_floor(&mut vertices, &mut indices, map, polygon, info, vert_count, poly_idx);
-        build_ceiling(&mut vertices, &mut indices, map, polygon, info, vert_count, poly_idx);
+        build_floor(
+            &mut vertices,
+            &mut indices,
+            map,
+            polygon,
+            info,
+            vert_count,
+            poly_idx,
+        );
+        build_ceiling(
+            &mut vertices,
+            &mut indices,
+            map,
+            polygon,
+            info,
+            vert_count,
+            poly_idx,
+        );
 
         if polygon.media_index >= 0 {
             if let Some(media) = map.media.get(polygon.media_index as usize) {
                 build_media_surface(
-                    &mut vertices, &mut indices, map, polygon, info, vert_count, media, poly_idx,
+                    &mut vertices,
+                    &mut indices,
+                    map,
+                    polygon,
+                    info,
+                    vert_count,
+                    media,
+                    poly_idx,
                 );
             }
         }
@@ -110,7 +133,11 @@ pub fn build_level_mesh(map: &MapData, poly_info: &[PolygonInfo]) -> LevelMesh {
     // Each triangle's collection is determined by the first vertex's texture_descriptor.
     let batches = build_draw_batches(&vertices, &mut indices);
 
-    LevelMesh { vertices, indices, batches }
+    LevelMesh {
+        vertices,
+        indices,
+        batches,
+    }
 }
 
 /// Sort triangle indices by texture collection and return draw batches.
@@ -266,12 +293,13 @@ fn build_ceiling(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_media_surface(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
     map: &MapData,
     polygon: &marathon_formats::Polygon,
-    info: &PolygonInfo,
+    _info: &PolygonInfo,
     vert_count: usize,
     media: &marathon_formats::MediaData,
     poly_idx: usize,
@@ -329,7 +357,17 @@ fn build_walls_for_line(
             } else {
                 None
             };
-            build_wall_side(vertices, indices, map, line, side, poly_idx, adjacent_poly_idx, false, poly_info);
+            build_wall_side(
+                vertices,
+                indices,
+                map,
+                line,
+                side,
+                poly_idx,
+                adjacent_poly_idx,
+                false,
+                poly_info,
+            );
         }
     }
 
@@ -342,11 +380,22 @@ fn build_walls_for_line(
             } else {
                 None
             };
-            build_wall_side(vertices, indices, map, line, side, poly_idx, adjacent_poly_idx, true, poly_info);
+            build_wall_side(
+                vertices,
+                indices,
+                map,
+                line,
+                side,
+                poly_idx,
+                adjacent_poly_idx,
+                true,
+                poly_info,
+            );
         }
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_wall_side(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
@@ -384,8 +433,19 @@ fn build_wall_side(
                 let top = world_to_f32(polygon.ceiling_height);
                 let tex = &side.primary_texture;
                 emit_wall_quad(
-                    vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                    tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                    vertices,
+                    indices,
+                    x0,
+                    z0,
+                    x1,
+                    z1,
+                    bottom,
+                    top,
+                    wall_len,
+                    tex,
+                    tex.texture.0 as u32,
+                    info.floor_light,
+                    side.primary_transfer_mode as u32,
                     poly_idx,
                 );
             }
@@ -398,8 +458,19 @@ fn build_wall_side(
                 if top > bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
-                        vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                        tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                        vertices,
+                        indices,
+                        x0,
+                        z0,
+                        x1,
+                        z1,
+                        bottom,
+                        top,
+                        wall_len,
+                        tex,
+                        tex.texture.0 as u32,
+                        info.floor_light,
+                        side.primary_transfer_mode as u32,
                         poly_idx,
                     );
                 }
@@ -413,8 +484,19 @@ fn build_wall_side(
                 if top > bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
-                        vertices, indices, x0, z0, x1, z1, bottom, top, wall_len, tex,
-                        tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                        vertices,
+                        indices,
+                        x0,
+                        z0,
+                        x1,
+                        z1,
+                        bottom,
+                        top,
+                        wall_len,
+                        tex,
+                        tex.texture.0 as u32,
+                        info.floor_light,
+                        side.primary_transfer_mode as u32,
                         poly_idx,
                     );
                 }
@@ -429,8 +511,19 @@ fn build_wall_side(
                 if low_top > low_bottom && !side.secondary_texture.texture.is_none() {
                     let tex = &side.secondary_texture;
                     emit_wall_quad(
-                        vertices, indices, x0, z0, x1, z1, low_bottom, low_top, wall_len, tex,
-                        tex.texture.0 as u32, info.floor_light, side.secondary_transfer_mode as u32,
+                        vertices,
+                        indices,
+                        x0,
+                        z0,
+                        x1,
+                        z1,
+                        low_bottom,
+                        low_top,
+                        wall_len,
+                        tex,
+                        tex.texture.0 as u32,
+                        info.floor_light,
+                        side.secondary_transfer_mode as u32,
                         poly_idx,
                     );
                 }
@@ -440,8 +533,19 @@ fn build_wall_side(
                 if trans_top > trans_bottom && !side.transparent_texture.texture.is_none() {
                     let tex = &side.transparent_texture;
                     emit_wall_quad(
-                        vertices, indices, x0, z0, x1, z1, trans_bottom, trans_top, wall_len,
-                        tex, tex.texture.0 as u32, info.floor_light, side.transparent_transfer_mode as u32,
+                        vertices,
+                        indices,
+                        x0,
+                        z0,
+                        x1,
+                        z1,
+                        trans_bottom,
+                        trans_top,
+                        wall_len,
+                        tex,
+                        tex.texture.0 as u32,
+                        info.floor_light,
+                        side.transparent_transfer_mode as u32,
                         poly_idx,
                     );
                 }
@@ -451,8 +555,19 @@ fn build_wall_side(
                 if high_top > high_bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
                     emit_wall_quad(
-                        vertices, indices, x0, z0, x1, z1, high_bottom, high_top, wall_len,
-                        tex, tex.texture.0 as u32, info.floor_light, side.primary_transfer_mode as u32,
+                        vertices,
+                        indices,
+                        x0,
+                        z0,
+                        x1,
+                        z1,
+                        high_bottom,
+                        high_top,
+                        wall_len,
+                        tex,
+                        tex.texture.0 as u32,
+                        info.floor_light,
+                        side.primary_transfer_mode as u32,
                         poly_idx,
                     );
                 }
@@ -462,6 +577,7 @@ fn build_wall_side(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_wall_quad(
     vertices: &mut Vec<Vertex>,
     indices: &mut Vec<u32>,
@@ -528,8 +644,10 @@ fn emit_wall_quad(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use marathon_formats::{Endpoint, Line, Polygon, Side, WorldPoint2d, ShapeDescriptor, SideTexture};
     use marathon_formats::map::LightData;
+    use marathon_formats::{
+        Endpoint, Line, Polygon, ShapeDescriptor, Side, SideTexture, WorldPoint2d,
+    };
 
     fn make_endpoint(x: i16, y: i16) -> Endpoint {
         Endpoint {
@@ -602,7 +720,12 @@ mod tests {
         }
     }
 
-    fn make_map_data(endpoints: Vec<Endpoint>, polygons: Vec<Polygon>, lines: Vec<Line>, sides: Vec<Side>) -> MapData {
+    fn make_map_data(
+        endpoints: Vec<Endpoint>,
+        polygons: Vec<Polygon>,
+        lines: Vec<Line>,
+        sides: Vec<Side>,
+    ) -> MapData {
         MapData {
             endpoints,
             lines,
@@ -692,16 +815,38 @@ mod tests {
 
         let mut v0 = Vec::new();
         let mut i0 = Vec::new();
-        build_floor(&mut v0, &mut i0, &map, &map.polygons[0], &poly_info[0], 4, 0);
+        build_floor(
+            &mut v0,
+            &mut i0,
+            &map,
+            &map.polygons[0],
+            &poly_info[0],
+            4,
+            0,
+        );
         let mut v1 = Vec::new();
         let mut i1 = Vec::new();
-        build_floor(&mut v1, &mut i1, &map, &map.polygons[1], &poly_info[1], 4, 1);
+        build_floor(
+            &mut v1,
+            &mut i1,
+            &map,
+            &map.polygons[1],
+            &poly_info[1],
+            4,
+            1,
+        );
 
         assert_eq!(v0.len(), v1.len());
         for (a, b) in v0.iter().zip(v1.iter()) {
-            assert_eq!(a.position[1], SURFACE_FLOOR, "floor Y must be the height-zero discriminator");
+            assert_eq!(
+                a.position[1], SURFACE_FLOOR,
+                "floor Y must be the height-zero discriminator"
+            );
             assert_eq!(b.position[1], SURFACE_FLOOR);
-            assert_eq!(a.position[1], b.position[1], "Y identical despite different floor_height");
+            assert_eq!(
+                a.position[1], b.position[1],
+                "Y identical despite different floor_height"
+            );
             // Differ only by polygon_index.
             assert_eq!(a.polygon_index, 0);
             assert_eq!(b.polygon_index, 1);
@@ -723,13 +868,21 @@ mod tests {
         let polygon = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
         let map = make_map_data(endpoints, vec![polygon], vec![], vec![]);
         // info carries non-1.0 light to prove it is NOT baked in.
-        let info = PolygonInfo { floor_light: 0.3, floor_transfer_mode: 0, ceiling_light: 0.7, ceiling_transfer_mode: 0 };
+        let info = PolygonInfo {
+            floor_light: 0.3,
+            floor_transfer_mode: 0,
+            ceiling_light: 0.7,
+            ceiling_transfer_mode: 0,
+        };
 
         let mut vf = Vec::new();
         let mut idx = Vec::new();
         build_floor(&mut vf, &mut idx, &map, &map.polygons[0], &info, 4, 0);
         for v in &vf {
-            assert_eq!(v.light, UNBAKED_LIGHT, "floor light must be the unbaked sentinel, not info.floor_light");
+            assert_eq!(
+                v.light, UNBAKED_LIGHT,
+                "floor light must be the unbaked sentinel, not info.floor_light"
+            );
         }
 
         let mut vc = Vec::new();
@@ -779,7 +932,10 @@ mod tests {
                 other => panic!("unexpected polygon_index {other}"),
             }
         }
-        assert!(seen0 && seen1, "vertices from both polygons must be present");
+        assert!(
+            seen0 && seen1,
+            "vertices from both polygons must be present"
+        );
     }
 
     #[test]
@@ -796,36 +952,54 @@ mod tests {
 
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 5, 0);
+        build_floor(
+            &mut vertices,
+            &mut indices,
+            &map,
+            &map.polygons[0],
+            &info,
+            5,
+            0,
+        );
 
         assert_eq!(vertices.len(), 4, "should emit 4 vertices (skipping -1)");
-        assert_eq!(indices.len(), 6, "should emit 2 triangles (6 indices) from 4 verts");
+        assert_eq!(
+            indices.len(),
+            6,
+            "should emit 2 triangles (6 indices) from 4 verts"
+        );
     }
 
     #[test]
     fn floor_triangulation_too_few_valid_verts_produces_nothing() {
-        let endpoints = vec![
-            make_endpoint(0, 0),
-            make_endpoint(1024, 0),
-        ];
+        let endpoints = vec![make_endpoint(0, 0), make_endpoint(1024, 0)];
         let polygon = make_polygon(4, [0, -1, 1, -1, -1, -1, -1, -1]);
         let map = make_map_data(endpoints, vec![polygon], vec![], vec![]);
         let info = make_info();
 
         let mut vertices = Vec::new();
         let mut indices = Vec::new();
-        build_floor(&mut vertices, &mut indices, &map, &map.polygons[0], &info, 4, 0);
+        build_floor(
+            &mut vertices,
+            &mut indices,
+            &map,
+            &map.polygons[0],
+            &info,
+            4,
+            0,
+        );
 
         assert_eq!(vertices.len(), 2, "should emit 2 vertices");
-        assert_eq!(indices.len(), 0, "should emit 0 triangles (not enough verts)");
+        assert_eq!(
+            indices.len(),
+            0,
+            "should emit 0 triangles (not enough verts)"
+        );
     }
 
     #[test]
     fn wall_none_texture_produces_no_geometry() {
-        let endpoints = vec![
-            make_endpoint(0, 0),
-            make_endpoint(1024, 0),
-        ];
+        let endpoints = vec![make_endpoint(0, 0), make_endpoint(1024, 0)];
         let polygon = make_polygon(4, [0, 1, -1, -1, -1, -1, -1, -1]);
         let side = make_side(0, 0xFFFF);
         let line = Line {
@@ -846,16 +1020,21 @@ mod tests {
         let mut indices = Vec::new();
         build_walls_for_line(&mut vertices, &mut indices, &map, &map.lines[0], &poly_info);
 
-        assert_eq!(vertices.len(), 0, "none-texture wall should produce 0 vertices");
-        assert_eq!(indices.len(), 0, "none-texture wall should produce 0 indices");
+        assert_eq!(
+            vertices.len(),
+            0,
+            "none-texture wall should produce 0 vertices"
+        );
+        assert_eq!(
+            indices.len(),
+            0,
+            "none-texture wall should produce 0 indices"
+        );
     }
 
     #[test]
     fn wall_valid_texture_produces_quad() {
-        let endpoints = vec![
-            make_endpoint(0, 0),
-            make_endpoint(1024, 0),
-        ];
+        let endpoints = vec![make_endpoint(0, 0), make_endpoint(1024, 0)];
         let polygon = make_polygon(4, [0, 1, -1, -1, -1, -1, -1, -1]);
         let side = make_side(0, 0x0100);
         let line = Line {
@@ -876,7 +1055,15 @@ mod tests {
         let mut indices = Vec::new();
         build_walls_for_line(&mut vertices, &mut indices, &map, &map.lines[0], &poly_info);
 
-        assert_eq!(vertices.len(), 4, "valid-texture wall should produce 4 vertices");
-        assert_eq!(indices.len(), 6, "valid-texture wall should produce 6 indices");
+        assert_eq!(
+            vertices.len(),
+            4,
+            "valid-texture wall should produce 4 vertices"
+        );
+        assert_eq!(
+            indices.len(),
+            6,
+            "valid-texture wall should produce 6 indices"
+        );
     }
 }

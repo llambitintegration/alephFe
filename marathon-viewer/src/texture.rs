@@ -18,17 +18,16 @@ pub struct TextureManager {
 }
 
 pub struct GpuCollectionTexture {
+    #[allow(dead_code)]
     pub texture: wgpu::Texture,
+    #[allow(dead_code)]
     pub view: wgpu::TextureView,
     pub bind_group: wgpu::BindGroup,
 }
 
 impl TextureManager {
     /// Load all collections referenced by the given shape descriptors.
-    pub fn load_collections(
-        shapes: &ShapesFile,
-        descriptors: &[ShapeDescriptor],
-    ) -> Self {
+    pub fn load_collections(shapes: &ShapesFile, descriptors: &[ShapeDescriptor]) -> Self {
         let mut needed: Vec<u16> = descriptors
             .iter()
             .filter(|d| !d.is_none())
@@ -145,6 +144,7 @@ impl TextureManager {
 
     /// Resolve a ShapeDescriptor to (collection_index, bitmap_layer_index).
     /// Returns None if the descriptor is empty or the collection isn't loaded.
+    #[allow(dead_code)]
     pub fn resolve_descriptor(&self, desc: ShapeDescriptor) -> Option<(u16, u32)> {
         if desc.is_none() {
             return None;
@@ -172,8 +172,18 @@ fn load_collection(collection: &Collection, clut_index: usize) -> Option<LoadedC
     let clut = collection.color_tables.get(clut_index)?;
 
     // Find max dimensions
-    let max_width = collection.bitmaps.iter().map(|b| b.width as u32).max().unwrap_or(1);
-    let max_height = collection.bitmaps.iter().map(|b| b.height as u32).max().unwrap_or(1);
+    let max_width = collection
+        .bitmaps
+        .iter()
+        .map(|b| b.width as u32)
+        .max()
+        .unwrap_or(1);
+    let max_height = collection
+        .bitmaps
+        .iter()
+        .map(|b| b.height as u32)
+        .max()
+        .unwrap_or(1);
 
     let bitmaps: Vec<Vec<u8>> = collection
         .bitmaps

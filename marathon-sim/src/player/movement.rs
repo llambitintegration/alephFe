@@ -1,6 +1,9 @@
 use glam::{Vec2, Vec3};
 
-use crate::collision::{find_polygon_for_point, point_to_segment_distance, segment_intersection, slide_along_wall, wall_normal};
+use crate::collision::{
+    find_polygon_for_point, point_to_segment_distance, segment_intersection, slide_along_wall,
+    wall_normal,
+};
 use crate::tick::ActionFlags;
 use crate::world::MapGeometry;
 
@@ -291,7 +294,12 @@ pub fn apply_player_collision(
     let was_grounded = old_pos.z <= geometry.floor_heights[current_polygon] + f32::EPSILON;
 
     // Helper closure: check if a line can be passed through
-    let can_pass_line = |adj: Option<usize>, z: f32, poly: usize, params: &PlayerPhysicsParams, geometry: &MapGeometry| -> bool {
+    let can_pass_line = |adj: Option<usize>,
+                         z: f32,
+                         poly: usize,
+                         params: &PlayerPhysicsParams,
+                         geometry: &MapGeometry|
+     -> bool {
         if let Some(adj_idx) = adj {
             let adj_floor = geometry.floor_heights[adj_idx];
             let adj_ceiling = geometry.ceiling_heights[adj_idx];
@@ -300,7 +308,8 @@ pub fn apply_player_collision(
             let player_z = z.max(cur_floor);
             let clearance = adj_ceiling - adj_floor;
 
-            floor_diff <= params.step_delta && clearance >= params.height
+            floor_diff <= params.step_delta
+                && clearance >= params.height
                 && (adj_ceiling - player_z.max(adj_floor)) >= params.height
         } else {
             false
@@ -527,8 +536,14 @@ mod tests {
         let flags = ActionFlags::new(ActionFlags::MOVE_FORWARD);
         let vel = compute_player_velocity(initial, 0.0, &flags, &params, true);
         // Forward should accelerate (or stay), perpendicular should decelerate
-        assert!(vel.x >= initial.x, "forward should not decelerate when forward input held");
-        assert!(vel.y.abs() < initial.y.abs(), "perp should decelerate when no strafe input");
+        assert!(
+            vel.x >= initial.x,
+            "forward should not decelerate when forward input held"
+        );
+        assert!(
+            vel.y.abs() < initial.y.abs(),
+            "perp should decelerate when no strafe input"
+        );
     }
 
     #[test]
@@ -725,15 +740,15 @@ mod tests {
             ceiling_heights: vec![2.0, 2.0],
             polygon_adjacency: vec![
                 vec![
-                    (1, None),  // bottom wall
+                    (1, None),    // bottom wall
                     (0, Some(1)), // shared line -> poly 1
-                    (2, None),  // top wall
-                    (3, None),  // left wall
+                    (2, None),    // top wall
+                    (3, None),    // left wall
                 ],
                 vec![
-                    (4, None),  // bottom wall
-                    (5, None),  // right wall
-                    (6, None),  // top wall
+                    (4, None),    // bottom wall
+                    (5, None),    // right wall
+                    (6, None),    // top wall
                     (0, Some(0)), // shared line -> poly 0
                 ],
             ],
@@ -754,8 +769,13 @@ mod tests {
             polygon_types: vec![0, 0],
             polygon_permutations: vec![-1, -1],
             line_side_indices: vec![
-                (None, None), (None, None), (None, None), (None, None),
-                (None, None), (None, None), (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
             ],
         }
     }

@@ -8,7 +8,10 @@ mod texture;
 mod transfer;
 
 #[derive(Parser)]
-#[command(name = "marathon-viewer", about = "3D level viewer for Marathon scenarios")]
+#[command(
+    name = "marathon-viewer",
+    about = "3D level viewer for Marathon scenarios"
+)]
 struct Args {
     /// Path to the map WAD file
     #[arg(long)]

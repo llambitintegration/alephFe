@@ -206,7 +206,8 @@ impl GpuState {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            let (dt, dv) = Self::create_depth_texture(&self.device, new_size.width, new_size.height);
+            let (dt, dv) =
+                Self::create_depth_texture(&self.device, new_size.width, new_size.height);
             self.depth_texture = dt;
             self.depth_view = dv;
         }
@@ -397,20 +398,20 @@ impl App {
 
         if let Some(gpu) = &mut self.gpu {
             // Upload mesh data
-            gpu.vertex_buffer =
-                gpu.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("vertex_buffer"),
-                        contents: bytemuck::cast_slice(&level_mesh.vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-            gpu.index_buffer =
-                gpu.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("index_buffer"),
-                        contents: bytemuck::cast_slice(&level_mesh.indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    });
+            gpu.vertex_buffer = gpu
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("vertex_buffer"),
+                    contents: bytemuck::cast_slice(&level_mesh.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            gpu.index_buffer = gpu
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("index_buffer"),
+                    contents: bytemuck::cast_slice(&level_mesh.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
             gpu.num_indices = level_mesh.indices.len() as u32;
 
             // Upload polygon data
@@ -419,22 +420,21 @@ impl App {
             } else {
                 polygon_data
             };
-            gpu.polygon_buffer =
-                gpu.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("polygon_buffer"),
-                        contents: bytemuck::cast_slice(&poly_buf_data),
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    });
-            gpu.polygon_bind_group =
-                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("polygon_bind_group"),
-                    layout: &gpu.render_pipeline.get_bind_group_layout(1),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: gpu.polygon_buffer.as_entire_binding(),
-                    }],
+            gpu.polygon_buffer = gpu
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("polygon_buffer"),
+                    contents: bytemuck::cast_slice(&poly_buf_data),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 });
+            gpu.polygon_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("polygon_bind_group"),
+                layout: &gpu.render_pipeline.get_bind_group_layout(1),
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: gpu.polygon_buffer.as_entire_binding(),
+                }],
+            });
 
             // Create GPU textures
             let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
@@ -469,8 +469,8 @@ impl App {
         if self.level_count == 0 {
             return;
         }
-        let next = ((self.current_level as i32 + direction).rem_euclid(self.level_count as i32))
-            as usize;
+        let next =
+            ((self.current_level as i32 + direction).rem_euclid(self.level_count as i32)) as usize;
         self.load_level(next);
     }
 }
@@ -848,8 +848,11 @@ impl ApplicationHandler for App {
                 if !self.mouse_captured {
                     self.mouse_captured = true;
                     if let Some(w) = &self.window {
-                        let _ = w.set_cursor_grab(winit::window::CursorGrabMode::Locked)
-                            .or_else(|_| w.set_cursor_grab(winit::window::CursorGrabMode::Confined));
+                        let _ = w
+                            .set_cursor_grab(winit::window::CursorGrabMode::Locked)
+                            .or_else(|_| {
+                                w.set_cursor_grab(winit::window::CursorGrabMode::Confined)
+                            });
                         w.set_cursor_visible(false);
                     }
                 }

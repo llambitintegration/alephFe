@@ -10,8 +10,8 @@ use wasm_bindgen_test::*;
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test_configure!(run_in_browser);
 
-use marathon_formats::test_helpers::*;
 use marathon_formats::tags::WadTag;
+use marathon_formats::test_helpers::*;
 use marathon_formats::wad::WadFile;
 
 // ── Level module tests ──────────────────────────────────────────────
@@ -20,12 +20,8 @@ use marathon_formats::wad::WadFile;
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn enumerate_levels_returns_entries_from_valid_wad() {
     let endpoints = MapDataBuilder::endpoints(&[(0, 0), (1024, 0), (1024, 1024), (0, 1024)]);
-    let lines = MapDataBuilder::lines(&[
-        (0, 1, 0, -1),
-        (1, 2, 0, -1),
-        (2, 3, 0, -1),
-        (3, 0, 0, -1),
-    ]);
+    let lines =
+        MapDataBuilder::lines(&[(0, 1, 0, -1), (1, 2, 0, -1), (2, 3, 0, -1), (3, 0, 0, -1)]);
     let polygon = MapDataBuilder::polygon(4, &[0, 1, 2, 3], &[0, 1, 2, 3]);
 
     let wad_data = WadBuilder::new()
@@ -53,12 +49,8 @@ fn enumerate_levels_returns_entries_from_valid_wad() {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn load_level_success_returns_map_with_polygons() {
     let endpoints = MapDataBuilder::endpoints(&[(0, 0), (1024, 0), (1024, 1024), (0, 1024)]);
-    let lines = MapDataBuilder::lines(&[
-        (0, 1, 0, -1),
-        (1, 2, 0, -1),
-        (2, 3, 0, -1),
-        (3, 0, 0, -1),
-    ]);
+    let lines =
+        MapDataBuilder::lines(&[(0, 1, 0, -1), (1, 2, 0, -1), (2, 3, 0, -1), (3, 0, 0, -1)]);
     let polygon = MapDataBuilder::polygon(4, &[0, 1, 2, 3], &[0, 1, 2, 3]);
 
     let wad_data = WadBuilder::new()
@@ -77,7 +69,10 @@ fn load_level_success_returns_map_with_polygons() {
     let wad = WadFile::from_bytes(&wad_data).unwrap();
     let loaded = marathon_web::level::load_level(&wad, 0).expect("should load level 0");
 
-    assert!(!loaded.map.polygons.is_empty(), "loaded level should have polygons");
+    assert!(
+        !loaded.map.polygons.is_empty(),
+        "loaded level should have polygons"
+    );
 }
 
 #[test]
@@ -109,21 +104,30 @@ fn load_level_invalid_index_returns_error() {
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn pad_layer_count_avoids_d2_for_single_layer() {
     let result = marathon_web::texture::pad_layer_count_for_webgl(1);
-    assert!(result >= 2, "single layer should be padded to >= 2, got {result}");
+    assert!(
+        result >= 2,
+        "single layer should be padded to >= 2, got {result}"
+    );
 }
 
 #[test]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn pad_layer_count_avoids_cube_for_six_layers() {
     let result = marathon_web::texture::pad_layer_count_for_webgl(6);
-    assert_eq!(result, 7, "6 layers should be padded to 7 to avoid Cube target");
+    assert_eq!(
+        result, 7,
+        "6 layers should be padded to 7 to avoid Cube target"
+    );
 }
 
 #[test]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn pad_layer_count_avoids_cube_array_for_multiples_of_six() {
     let result = marathon_web::texture::pad_layer_count_for_webgl(12);
-    assert_eq!(result, 13, "12 layers should be padded to 13 to avoid CubeArray");
+    assert_eq!(
+        result, 13,
+        "12 layers should be padded to 13 to avoid CubeArray"
+    );
 }
 
 #[test]
@@ -159,7 +163,9 @@ fn shader_wgsl_compiles_and_validates() {
         "shader must declare the per-polygon data texture"
     );
     assert!(
-        src.contains("SURFACE_FLOOR") && src.contains("SURFACE_CEILING") && src.contains("SURFACE_MEDIA"),
+        src.contains("SURFACE_FLOOR")
+            && src.contains("SURFACE_CEILING")
+            && src.contains("SURFACE_MEDIA"),
         "vertex stage must select surface by the discriminator"
     );
     // Box 3.2: per-polygon light must come from the data texture (both the

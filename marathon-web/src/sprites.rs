@@ -3,6 +3,10 @@
 //! Renders entity sprites as camera-facing billboarded quads in a second
 //! render pass after level geometry, sharing the depth buffer for correct
 //! occlusion.
+//!
+//! WIP: this sprite pipeline is scaffolding that is not yet wired into the
+//! main render loop, so many items are currently unused.
+#![allow(dead_code)]
 
 use bytemuck::{Pod, Zeroable};
 use glam::Vec3;
@@ -337,7 +341,7 @@ impl SpriteRenderer {
         device: &wgpu::Device,
         render_pass: &mut wgpu::RenderPass<'_>,
         camera_bind_group: &wgpu::BindGroup,
-        camera_pos: Vec3,
+        _camera_pos: Vec3,
         camera_yaw: f32,
         draw_calls: &[SpriteDrawCall],
     ) {
@@ -351,15 +355,12 @@ impl SpriteRenderer {
 
         // Camera right and up vectors for billboarding
         let cam_right = Vec3::new(-camera_yaw.sin(), 0.0, camera_yaw.cos());
-        let cam_up = Vec3::Y;
+        let _cam_up = Vec3::Y;
 
         // Group draw calls by collection
         let mut by_collection: HashMap<u16, Vec<&SpriteDrawCall>> = HashMap::new();
         for call in draw_calls {
-            by_collection
-                .entry(call.collection)
-                .or_default()
-                .push(call);
+            by_collection.entry(call.collection).or_default().push(call);
         }
 
         render_pass.set_pipeline(&self.pipeline);
@@ -458,14 +459,13 @@ pub fn resolve_entity_sprite(
 
     let high_level = collection.high_level_shapes.get(shape_idx as usize)?;
 
-    let actual_views = marathon_formats::shapes::actual_view_count(high_level.number_of_views).max(1) as u16;
+    let actual_views =
+        marathon_formats::shapes::actual_view_count(high_level.number_of_views).max(1) as u16;
     let view = (view_angle % actual_views) as usize;
     let frame = (frame_idx as usize) % (high_level.frames_per_view.max(1) as usize);
 
     let ll_index_offset = view * (high_level.frames_per_view.max(1) as usize) + frame;
-    let ll_index = *high_level
-        .low_level_shape_indexes
-        .get(ll_index_offset)? as usize;
+    let ll_index = *high_level.low_level_shape_indexes.get(ll_index_offset)? as usize;
 
     let low_level = collection.low_level_shapes.get(ll_index)?;
 
@@ -476,7 +476,13 @@ pub fn resolve_entity_sprite(
     let world_top = low_level.world_top as f32 / 1024.0;
     let world_bottom = low_level.world_bottom as f32 / 1024.0;
 
-    Some((bitmap_index, world_left, world_right, world_top, world_bottom))
+    Some((
+        bitmap_index,
+        world_left,
+        world_right,
+        world_top,
+        world_bottom,
+    ))
 }
 
 /// Compute the viewing angle index (0-7) for a monster based on relative angle.
@@ -487,8 +493,8 @@ pub fn compute_view_angle(camera_pos: Vec3, entity_pos: Vec3, entity_facing: f32
     let relative_angle = angle_to_camera - entity_facing;
 
     // Normalize to [0, 2π)
-    let normalized = ((relative_angle % std::f32::consts::TAU) + std::f32::consts::TAU)
-        % std::f32::consts::TAU;
+    let normalized =
+        ((relative_angle % std::f32::consts::TAU) + std::f32::consts::TAU) % std::f32::consts::TAU;
 
     // Quantize to 8 views
     ((normalized / std::f32::consts::TAU * 8.0 + 0.5) as u16) % 8
@@ -559,6 +565,7 @@ impl WeaponOverlayRenderer {
     /// The weapon's vertical/horizontal position determines the sprite origin on
     /// screen, and the shape's world bounds determine how the sprite extends from
     /// that origin. Portions extending below the viewport are clipped by the GPU.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &self,
         device: &wgpu::Device,
@@ -599,10 +606,30 @@ impl WeaponOverlayRenderer {
         let ndc_bottom = 1.0 - (y1 / viewport_height) * 2.0;
 
         let vertices = [
-            SpriteVertex { position: [ndc_left, ndc_bottom, 0.0], uv: [0.0, 1.0], tex_index: bitmap_index, tint },
-            SpriteVertex { position: [ndc_left, ndc_top, 0.0], uv: [0.0, 0.0], tex_index: bitmap_index, tint },
-            SpriteVertex { position: [ndc_right, ndc_top, 0.0], uv: [1.0, 0.0], tex_index: bitmap_index, tint },
-            SpriteVertex { position: [ndc_right, ndc_bottom, 0.0], uv: [1.0, 1.0], tex_index: bitmap_index, tint },
+            SpriteVertex {
+                position: [ndc_left, ndc_bottom, 0.0],
+                uv: [0.0, 1.0],
+                tex_index: bitmap_index,
+                tint,
+            },
+            SpriteVertex {
+                position: [ndc_left, ndc_top, 0.0],
+                uv: [0.0, 0.0],
+                tex_index: bitmap_index,
+                tint,
+            },
+            SpriteVertex {
+                position: [ndc_right, ndc_top, 0.0],
+                uv: [1.0, 0.0],
+                tex_index: bitmap_index,
+                tint,
+            },
+            SpriteVertex {
+                position: [ndc_right, ndc_bottom, 0.0],
+                uv: [1.0, 1.0],
+                tex_index: bitmap_index,
+                tint,
+            },
         ];
         let indices: [u32; 6] = [0, 1, 2, 0, 2, 3];
 
@@ -626,7 +653,7 @@ impl WeaponOverlayRenderer {
     }
 
     /// Get the texture bind group layout for creating compatible bind groups.
-    pub fn texture_bgl<'a>(sprite_renderer: &'a SpriteRenderer) -> &'a wgpu::BindGroupLayout {
+    pub fn texture_bgl(sprite_renderer: &SpriteRenderer) -> &wgpu::BindGroupLayout {
         &sprite_renderer.texture_bind_group_layout
     }
 }

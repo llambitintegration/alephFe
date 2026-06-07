@@ -94,7 +94,12 @@ impl MenuRenderer {
 
         // Full-screen background
         list.quads.push(MenuQuad {
-            rect: [0.0, 0.0, self.layout.screen_width as f32, self.layout.screen_height as f32],
+            rect: [
+                0.0,
+                0.0,
+                self.layout.screen_width as f32,
+                self.layout.screen_height as f32,
+            ],
             color: colors::BACKGROUND,
         });
 

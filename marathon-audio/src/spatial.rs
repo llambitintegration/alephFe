@@ -99,6 +99,12 @@ pub struct PermutationTracker {
     last_played: HashMap<usize, usize>,
 }
 
+impl Default for PermutationTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PermutationTracker {
     pub fn new() -> Self {
         Self {
@@ -113,7 +119,12 @@ impl PermutationTracker {
     /// `rng_value`: a random f32 in [0.0, 1.0) for selection.
     ///
     /// Returns the selected permutation index.
-    pub fn select(&mut self, sound_index: usize, permutation_count: usize, rng_value: f32) -> usize {
+    pub fn select(
+        &mut self,
+        sound_index: usize,
+        permutation_count: usize,
+        rng_value: f32,
+    ) -> usize {
         if permutation_count == 0 {
             return 0;
         }
@@ -179,6 +190,12 @@ const MAX_OBSTRUCTION: f32 = 1.0;
 pub struct ObstructionCache {
     cache: HashMap<(i16, i16), f32>,
     last_listener_polygon: i16,
+}
+
+impl Default for ObstructionCache {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ObstructionCache {
@@ -352,7 +369,7 @@ pub fn check_submersion(
 /// `media_type`: the media_type field from MediaData (0=Water, 1=Lava, 2=Goo, 3=Sewage, 4=Jjaro).
 pub fn media_filter_cutoff(media_type: i16) -> f32 {
     match media_type {
-        0 | 3 => MEDIA_CUTOFF_MODERATE, // Water, Sewage
+        0 | 3 => MEDIA_CUTOFF_MODERATE,  // Water, Sewage
         1 | 2 | 4 => MEDIA_CUTOFF_HEAVY, // Lava, Goo, Jjaro
         _ => MEDIA_CUTOFF_MODERATE,
     }
@@ -388,7 +405,10 @@ mod tests {
     #[test]
     fn test_attenuation_beyond_max() {
         let max = AttenuationParams::for_behavior(SoundBehavior::Normal).max_distance;
-        assert_eq!(distance_attenuation(max + 1000.0, SoundBehavior::Normal), 0.0);
+        assert_eq!(
+            distance_attenuation(max + 1000.0, SoundBehavior::Normal),
+            0.0
+        );
     }
 
     #[test]
@@ -405,7 +425,10 @@ mod tests {
         let distance = 3.0 * 1024.0;
         let quiet_vol = distance_attenuation(distance, SoundBehavior::Quiet);
         let normal_vol = distance_attenuation(distance, SoundBehavior::Normal);
-        assert!(quiet_vol < normal_vol, "Quiet {quiet_vol} should be less than Normal {normal_vol}");
+        assert!(
+            quiet_vol < normal_vol,
+            "Quiet {quiet_vol} should be less than Normal {normal_vol}"
+        );
     }
 
     #[test]
@@ -413,7 +436,10 @@ mod tests {
         let distance = 8.0 * 1024.0;
         let normal_vol = distance_attenuation(distance, SoundBehavior::Normal);
         let loud_vol = distance_attenuation(distance, SoundBehavior::Loud);
-        assert!(loud_vol > normal_vol, "Loud {loud_vol} should be more than Normal {normal_vol}");
+        assert!(
+            loud_vol > normal_vol,
+            "Loud {loud_vol} should be more than Normal {normal_vol}"
+        );
     }
 
     // -- Distance calculation tests --
@@ -456,7 +482,10 @@ mod tests {
     fn test_pan_sound_behind() {
         let (pan, rear) = directional_pan(0.0, 0.0, 0.0, -10.0, 0.0);
         assert!(pan.abs() < 0.01, "Behind should be centered, got {pan}");
-        assert!(rear < 0.6, "Behind should have rear attenuation, got {rear}");
+        assert!(
+            rear < 0.6,
+            "Behind should have rear attenuation, got {rear}"
+        );
     }
 
     #[test]

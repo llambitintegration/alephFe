@@ -1,8 +1,8 @@
 use bevy_ecs::prelude::*;
 use glam::{Vec2, Vec3};
-use marathon_formats::MapData;
 use marathon_formats::map::LightData;
 use marathon_formats::physics::PhysicsData;
+use marathon_formats::MapData;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 
@@ -78,12 +78,27 @@ pub struct SimEvents {
 /// A simulation event.
 #[derive(Debug, Clone)]
 pub enum SimEvent {
-    LevelTeleport { target_level: usize },
-    TerminalActivation { terminal_index: usize },
-    SoundTrigger { sound_index: usize, position: Vec3 },
-    EntityDamaged { entity: Entity, amount: i16, damage_type: i16 },
-    EntityKilled { entity: Entity },
-    ItemPickedUp { item_type: i16 },
+    LevelTeleport {
+        target_level: usize,
+    },
+    TerminalActivation {
+        terminal_index: usize,
+    },
+    SoundTrigger {
+        sound_index: usize,
+        position: Vec3,
+    },
+    EntityDamaged {
+        entity: Entity,
+        amount: i16,
+        damage_type: i16,
+    },
+    EntityKilled {
+        entity: Entity,
+    },
+    ItemPickedUp {
+        item_type: i16,
+    },
 }
 
 impl SimEvents {
@@ -267,9 +282,7 @@ impl SimWorld {
                     floor_height: floor_heights[p],
                     ceiling_height: ceiling_heights.get(p).copied().unwrap_or(0.0),
                     media_height,
-                    floor_light: light_for(
-                        polygon_floor_light_index.get(p).copied().unwrap_or(-1),
-                    ),
+                    floor_light: light_for(polygon_floor_light_index.get(p).copied().unwrap_or(-1)),
                     ceiling_light: light_for(
                         polygon_ceiling_light_index.get(p).copied().unwrap_or(-1),
                     ),
@@ -451,11 +464,7 @@ fn spawn_map_objects(
         // Clamp spawn Z: at least floor height so entities don't spawn below the floor
         let floor_z = floor_heights.get(polygon).copied().unwrap_or(0.0);
         let z = raw_z.max(floor_z);
-        let pos = Vec3::new(
-            world_coord(obj.location.x),
-            world_coord(obj.location.y),
-            z,
-        );
+        let pos = Vec3::new(world_coord(obj.location.x), world_coord(obj.location.y), z);
         let facing = (obj.facing as f32) * (std::f32::consts::TAU / 512.0);
 
         match obj.object_type {
@@ -498,7 +507,9 @@ fn spawn_map_objects(
                     let is_flying = def.flags & 0x0002 != 0;
 
                     let mut entity = world.spawn((
-                        Monster { definition_index: def_index },
+                        Monster {
+                            definition_index: def_index,
+                        },
                         MonsterState::Idle,
                         Target::default(),
                         AttackCooldown::default(),
@@ -513,10 +524,7 @@ fn spawn_map_objects(
                         PolygonIndex(polygon),
                         Grounded(!is_flying),
                     ));
-                    entity.insert((
-                        SpriteShape(def.stationary_shape),
-                        AnimationFrame::default(),
-                    ));
+                    entity.insert((SpriteShape(def.stationary_shape), AnimationFrame::default()));
 
                     if is_flying {
                         entity.insert(Flying {
@@ -527,7 +535,9 @@ fn spawn_map_objects(
             }
             OBJECT_IS_ITEM => {
                 world.spawn((
-                    Item { item_type: obj.index },
+                    Item {
+                        item_type: obj.index,
+                    },
                     Position(pos),
                     CollisionRadius(0.25),
                     PolygonIndex(polygon),
@@ -610,11 +620,11 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
             world.spawn(Platform {
                 polygon_index: poly_idx,
                 floor_rest: floor,
-                floor_extended: ceiling,  // floor rises to ceiling when closed
+                floor_extended: ceiling, // floor rises to ceiling when closed
                 ceiling_rest: ceiling,
-                ceiling_extended: floor,  // ceiling lowers to floor when closed
-                current_floor: ceiling,   // starts extended (closed)
-                current_ceiling: floor,   // starts extended (closed)
+                ceiling_extended: floor, // ceiling lowers to floor when closed
+                current_floor: ceiling,  // starts extended (closed)
+                current_ceiling: floor,  // starts extended (closed)
                 speed: default_speed,
                 state: PlatformState::AtRest,
                 return_delay: default_delay,
@@ -691,10 +701,18 @@ fn build_control_panels(map_data: &MapData) -> crate::world_mechanics::panels::C
 
         let permutation = side.control_panel_permutation as usize;
         let action = match side.control_panel_type {
-            4 => PanelAction::ToggleLight { light_index: permutation },
-            5 => PanelAction::ActivatePlatform { platform_index: permutation },
-            6 => PanelAction::ActivateTaggedPlatforms { tag: side.control_panel_permutation },
-            9 => PanelAction::ActivateTerminal { terminal_index: permutation },
+            4 => PanelAction::ToggleLight {
+                light_index: permutation,
+            },
+            5 => PanelAction::ActivatePlatform {
+                platform_index: permutation,
+            },
+            6 => PanelAction::ActivateTaggedPlatforms {
+                tag: side.control_panel_permutation,
+            },
+            9 => PanelAction::ActivateTerminal {
+                terminal_index: permutation,
+            },
             _ => continue,
         };
 
@@ -783,7 +801,7 @@ pub struct ItemSnapshot {
     pub polygon_index: usize,
 }
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
 impl SimWorld {
     /// Create a serializable snapshot of the current simulation state.
@@ -791,32 +809,47 @@ impl SimWorld {
         // Player
         let player = {
             let mut q = self.world.query_filtered::<(
-                &Position, &Velocity, &Facing, &crate::components::VerticalLook,
-                &Health, &Shield, &Oxygen, &PolygonIndex, &Grounded,
+                &Position,
+                &Velocity,
+                &Facing,
+                &crate::components::VerticalLook,
+                &Health,
+                &Shield,
+                &Oxygen,
+                &PolygonIndex,
+                &Grounded,
             ), bevy_ecs::prelude::With<Player>>();
-            q.iter(&self.world).next().map(|(pos, vel, fac, vlook, hp, sh, ox, poly, gr)| {
-                PlayerSnapshot {
-                    position: pos.0,
-                    velocity: vel.0,
-                    facing: fac.0,
-                    vertical_look: vlook.0,
-                    health: hp.0,
-                    shield: sh.0,
-                    oxygen: ox.0,
-                    polygon_index: poly.0,
-                    grounded: gr.0,
-                }
-            })
+            q.iter(&self.world)
+                .next()
+                .map(
+                    |(pos, vel, fac, vlook, hp, sh, ox, poly, gr)| PlayerSnapshot {
+                        position: pos.0,
+                        velocity: vel.0,
+                        facing: fac.0,
+                        vertical_look: vlook.0,
+                        health: hp.0,
+                        shield: sh.0,
+                        oxygen: ox.0,
+                        polygon_index: poly.0,
+                        grounded: gr.0,
+                    },
+                )
         };
 
         // Monsters
         let monsters = {
             let mut q = self.world.query::<(
-                &Monster, &crate::components::MonsterState, &Position, &Velocity,
-                &Facing, &Health, &PolygonIndex, &AttackCooldown,
+                &Monster,
+                &crate::components::MonsterState,
+                &Position,
+                &Velocity,
+                &Facing,
+                &Health,
+                &PolygonIndex,
+                &AttackCooldown,
             )>();
-            q.iter(&self.world).map(|(m, state, pos, vel, fac, hp, poly, cd)| {
-                MonsterSnapshot {
+            q.iter(&self.world)
+                .map(|(m, state, pos, vel, fac, hp, poly, cd)| MonsterSnapshot {
                     definition_index: m.definition_index,
                     state: *state,
                     position: pos.0,
@@ -825,15 +858,15 @@ impl SimWorld {
                     health: hp.0,
                     polygon_index: poly.0,
                     attack_cooldown: cd.0,
-                }
-            }).collect()
+                })
+                .collect()
         };
 
         // Projectiles
         let projectiles = {
             let mut q = self.world.query::<(&Projectile, &Position, &Velocity)>();
-            q.iter(&self.world).map(|(p, pos, vel)| {
-                ProjectileSnapshot {
+            q.iter(&self.world)
+                .map(|(p, pos, vel)| ProjectileSnapshot {
                     definition_index: p.definition_index,
                     position: pos.0,
                     velocity: vel.0,
@@ -841,20 +874,20 @@ impl SimWorld {
                     ticks_alive: p.ticks_alive,
                     contrails_spawned: p.contrails_spawned,
                     current_polygon: p.current_polygon,
-                }
-            }).collect()
+                })
+                .collect()
         };
 
         // Items
         let items = {
             let mut q = self.world.query::<(&Item, &Position, &PolygonIndex)>();
-            q.iter(&self.world).map(|(item, pos, poly)| {
-                ItemSnapshot {
+            q.iter(&self.world)
+                .map(|(item, pos, poly)| ItemSnapshot {
                     item_type: item.item_type,
                     position: pos.0,
                     polygon_index: poly.0,
-                }
-            }).collect()
+                })
+                .collect()
         };
 
         // Platforms
@@ -913,7 +946,9 @@ impl SimWorld {
         // Rebuild geometry and resources
         let geometry = build_map_geometry(map_data);
         world.insert_resource(geometry);
-        world.insert_resource(PhysicsTables { data: physics_data.clone() });
+        world.insert_resource(PhysicsTables {
+            data: physics_data.clone(),
+        });
         world.insert_resource(TickCounter(snapshot.tick_count));
         world.insert_resource(SimEvents::default());
 
@@ -945,7 +980,9 @@ impl SimWorld {
         // Restore monsters
         for m in snapshot.monsters {
             world.spawn((
-                Monster { definition_index: m.definition_index },
+                Monster {
+                    definition_index: m.definition_index,
+                },
                 m.state,
                 crate::components::Target::default(),
                 AttackCooldown(m.attack_cooldown),
@@ -981,7 +1018,9 @@ impl SimWorld {
         // Restore items
         for item in snapshot.items {
             world.spawn((
-                Item { item_type: item.item_type },
+                Item {
+                    item_type: item.item_type,
+                },
                 Position(item.position),
                 PolygonIndex(item.polygon_index),
                 CollisionRadius(0.25),
@@ -1030,10 +1069,8 @@ mod sim_event_tests {
 mod poly_dynamic_data_tests {
     use super::*;
     use marathon_formats::map::{LightData, LightingFunctionSpec, StaticLightData};
-    use marathon_formats::{
-        Endpoint, Line, MapData, Polygon, ShapeDescriptor, WorldPoint2d,
-    };
     use marathon_formats::physics::PhysicsData;
+    use marathon_formats::{Endpoint, Line, MapData, Polygon, ShapeDescriptor, WorldPoint2d};
 
     const POLYGON_IS_PLATFORM: i16 = 5;
 

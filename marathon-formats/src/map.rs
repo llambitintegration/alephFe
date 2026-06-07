@@ -35,7 +35,7 @@ fn validate_tag_length(
     data_len: usize,
     struct_size: usize,
 ) -> Result<(), MapError> {
-    if struct_size == 0 || data_len % struct_size != 0 {
+    if struct_size == 0 || !data_len.is_multiple_of(struct_size) {
         return Err(MapError::InvalidTagLength {
             tag: tag_name.to_string(),
             length: data_len,
@@ -832,9 +832,9 @@ impl MapData {
 
         // Detect light format by data length divisibility
         let lights = if let Some(data) = entry.get_tag_data(WadTag::Lights) {
-            if data.len() % STATIC_LIGHT_SIZE == 0 {
+            if data.len().is_multiple_of(STATIC_LIGHT_SIZE) {
                 LightData::Static(parse_array::<StaticLightData>(data, STATIC_LIGHT_SIZE)?)
-            } else if data.len() % OLD_LIGHT_SIZE == 0 {
+            } else if data.len().is_multiple_of(OLD_LIGHT_SIZE) {
                 LightData::Old(parse_array::<OldLightData>(data, OLD_LIGHT_SIZE)?)
             } else {
                 return Err(MapError::InvalidTagLength {

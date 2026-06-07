@@ -1,6 +1,6 @@
-use glam::Vec2;
 use crate::world::MapGeometry;
 use crate::world_mechanics::panels::ControlPanels;
+use glam::Vec2;
 
 /// Maximum distance for platform/door activation (3 world units).
 const MAXIMUM_ACTIVATION_RANGE: f32 = 3.0;
@@ -35,7 +35,7 @@ pub fn find_action_key_target(
     let mut entry_line: Option<usize> = None;
 
     // Walk through polygons along the ray, always casting from player_pos
-    for step in 0..16 {
+    for _step in 0..16 {
         let adjacency = match geometry.polygon_adjacency.get(current_poly) {
             Some(adj) => adj.clone(),
             None => return ActionTarget::None,
@@ -107,12 +107,7 @@ pub fn find_action_key_target(
 /// Ray-segment intersection test. Returns parameter t along ray if intersection exists.
 /// Ray: origin + direction * t
 /// Segment: v0 to v1
-fn ray_segment_intersection(
-    origin: Vec2,
-    direction: Vec2,
-    v0: Vec2,
-    v1: Vec2,
-) -> Option<f32> {
+fn ray_segment_intersection(origin: Vec2, direction: Vec2, v0: Vec2, v1: Vec2) -> Option<f32> {
     let edge = v1 - v0;
     let denom = direction.x * edge.y - direction.y * edge.x;
 
@@ -124,7 +119,7 @@ fn ray_segment_intersection(
     let t = (to_v0.x * edge.y - to_v0.y * edge.x) / denom;
     let u = (to_v0.x * direction.y - to_v0.y * direction.x) / denom;
 
-    if t >= 0.0 && u >= 0.0 && u <= 1.0 {
+    if t >= 0.0 && (0.0..=1.0).contains(&u) {
         Some(t)
     } else {
         None
@@ -176,12 +171,7 @@ mod tests {
             ]],
             floor_heights: vec![0.0],
             ceiling_heights: vec![3.0],
-            polygon_adjacency: vec![vec![
-                (0, None),
-                (1, None),
-                (2, None),
-                (3, None),
-            ]],
+            polygon_adjacency: vec![vec![(0, None), (1, None), (2, None), (3, None)]],
             line_endpoints: vec![
                 (Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0)),
                 (Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0)),
@@ -195,21 +185,10 @@ mod tests {
             polygon_ceiling_light_index: vec![-1],
             polygon_types: vec![0],
             polygon_permutations: vec![-1],
-            line_side_indices: vec![
-                (None, None),
-                (None, None),
-                (None, None),
-                (None, None),
-            ],
+            line_side_indices: vec![(None, None), (None, None), (None, None), (None, None)],
         };
         let panels = ControlPanels::default();
-        let result = find_action_key_target(
-            Vec2::new(0.0, 0.0),
-            0.0,
-            0,
-            &geometry,
-            &panels,
-        );
+        let result = find_action_key_target(Vec2::new(0.0, 0.0), 0.0, 0, &geometry, &panels);
         assert_eq!(result, ActionTarget::None);
     }
 
@@ -243,24 +222,29 @@ mod tests {
                 vec![(4, None), (5, None), (6, None), (1, Some(0))],
             ],
             line_endpoints: vec![
-                (Vec2::new(-2.0, -1.0), Vec2::new(1.0, -1.0)),  // 0: bottom of poly0
-                (Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0)),    // 1: shared edge
-                (Vec2::new(-2.0, 1.0), Vec2::new(1.0, 1.0)),    // 2: top of poly0
-                (Vec2::new(-2.0, -1.0), Vec2::new(-2.0, 1.0)),  // 3: left of poly0
-                (Vec2::new(1.0, -1.0), Vec2::new(3.0, -1.0)),   // 4: bottom of poly1
-                (Vec2::new(3.0, -1.0), Vec2::new(3.0, 1.0)),    // 5: right of poly1
-                (Vec2::new(1.0, 1.0), Vec2::new(3.0, 1.0)),     // 6: top of poly1
+                (Vec2::new(-2.0, -1.0), Vec2::new(1.0, -1.0)), // 0: bottom of poly0
+                (Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0)),   // 1: shared edge
+                (Vec2::new(-2.0, 1.0), Vec2::new(1.0, 1.0)),   // 2: top of poly0
+                (Vec2::new(-2.0, -1.0), Vec2::new(-2.0, 1.0)), // 3: left of poly0
+                (Vec2::new(1.0, -1.0), Vec2::new(3.0, -1.0)),  // 4: bottom of poly1
+                (Vec2::new(3.0, -1.0), Vec2::new(3.0, 1.0)),   // 5: right of poly1
+                (Vec2::new(1.0, 1.0), Vec2::new(3.0, 1.0)),    // 6: top of poly1
             ],
             line_solid: vec![true, false, true, true, true, true, true],
             line_transparent: vec![false, true, false, false, false, false, false],
             polygon_media_index: vec![-1, -1],
             polygon_floor_light_index: vec![-1, -1],
             polygon_ceiling_light_index: vec![-1, -1],
-            polygon_types: vec![0, 5],          // poly 1 is a platform
-            polygon_permutations: vec![-1, 0],   // platform index 0
+            polygon_types: vec![0, 5],         // poly 1 is a platform
+            polygon_permutations: vec![-1, 0], // platform index 0
             line_side_indices: vec![
-                (None, None), (None, None), (None, None), (None, None),
-                (None, None), (None, None), (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
             ],
         };
         let panels = ControlPanels::default();
@@ -298,7 +282,7 @@ mod tests {
             ]],
             line_endpoints: vec![
                 (Vec2::new(-2.0, -1.0), Vec2::new(1.0, -1.0)),
-                (Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0)),  // line 1: right wall
+                (Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0)), // line 1: right wall
                 (Vec2::new(-2.0, 1.0), Vec2::new(1.0, 1.0)),
                 (Vec2::new(-2.0, -1.0), Vec2::new(-2.0, 1.0)),
             ],
@@ -309,28 +293,18 @@ mod tests {
             polygon_ceiling_light_index: vec![-1],
             polygon_types: vec![0],
             polygon_permutations: vec![-1],
-            line_side_indices: vec![
-                (None, None), (Some(0), None), (None, None), (None, None),
-            ],
+            line_side_indices: vec![(None, None), (Some(0), None), (None, None), (None, None)],
         };
 
-        let panels = ControlPanels(vec![
-            ControlPanel {
-                line_index: 1, // right wall
-                side: 0,
-                action: PanelAction::ToggleLight { light_index: 0 },
-                max_distance: 1.5,
-            },
-        ]);
+        let panels = ControlPanels(vec![ControlPanel {
+            line_index: 1, // right wall
+            side: 0,
+            action: PanelAction::ToggleLight { light_index: 0 },
+            max_distance: 1.5,
+        }]);
 
         // Player at origin facing east, wall at x=1 (distance 1.0 < 1.5)
-        let result = find_action_key_target(
-            Vec2::new(0.0, 0.0),
-            0.0,
-            0,
-            &geometry,
-            &panels,
-        );
+        let result = find_action_key_target(Vec2::new(0.0, 0.0), 0.0, 0, &geometry, &panels);
         assert_eq!(result, ActionTarget::Panel(0));
     }
 }

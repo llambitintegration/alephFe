@@ -42,9 +42,12 @@ pub struct SpriteCollection {
     /// Texture array bind group for this collection.
     pub bind_group: wgpu::BindGroup,
     /// Number of bitmaps (layers) in the texture array.
+    #[allow(dead_code)]
     pub bitmap_count: u32,
     /// Max width/height of bitmaps in this collection.
+    #[allow(dead_code)]
     pub max_width: u32,
+    #[allow(dead_code)]
     pub max_height: u32,
 }
 
@@ -334,7 +337,7 @@ impl SpriteRenderer {
         device: &wgpu::Device,
         render_pass: &mut wgpu::RenderPass<'_>,
         camera_bind_group: &wgpu::BindGroup,
-        camera_pos: Vec3,
+        _camera_pos: Vec3,
         camera_yaw: f32,
         draw_calls: &[SpriteDrawCall],
     ) {
@@ -353,10 +356,7 @@ impl SpriteRenderer {
         // Group draw calls by collection
         let mut by_collection: HashMap<u16, Vec<&SpriteDrawCall>> = HashMap::new();
         for call in draw_calls {
-            by_collection
-                .entry(call.collection)
-                .or_default()
-                .push(call);
+            by_collection.entry(call.collection).or_default().push(call);
         }
 
         render_pass.set_pipeline(&self.pipeline);
@@ -377,7 +377,7 @@ impl SpriteRenderer {
             for call in calls {
                 let base = vertices.len() as u32;
                 let half_w = call.width * 0.5;
-                let half_h = call.height * 0.5;
+                let _half_h = call.height * 0.5;
 
                 let center = call.position;
 
@@ -456,21 +456,20 @@ pub fn resolve_entity_sprite(
 
     let high_level = collection.high_level_shapes.get(shape_idx as usize)?;
 
-    let actual_views = marathon_formats::shapes::actual_view_count(high_level.number_of_views).max(1) as u16;
+    let actual_views =
+        marathon_formats::shapes::actual_view_count(high_level.number_of_views).max(1) as u16;
     let view = (view_angle % actual_views) as usize;
     let frame = (frame_idx as usize) % (high_level.frames_per_view.max(1) as usize);
 
     let ll_index_offset = view * (high_level.frames_per_view.max(1) as usize) + frame;
-    let ll_index = *high_level
-        .low_level_shape_indexes
-        .get(ll_index_offset)? as usize;
+    let ll_index = *high_level.low_level_shape_indexes.get(ll_index_offset)? as usize;
 
     let low_level = collection.low_level_shapes.get(ll_index)?;
 
     let bitmap_index = low_level.bitmap_index as u32;
 
     // World dimensions from LowLevelShape, scaled by pixels_to_world
-    let pixels_to_world = if high_level.pixels_to_world > 0 {
+    let _pixels_to_world = if high_level.pixels_to_world > 0 {
         high_level.pixels_to_world as f32 / 1024.0
     } else {
         1.0 / 1024.0
@@ -494,8 +493,8 @@ pub fn compute_view_angle(camera_pos: Vec3, entity_pos: Vec3, entity_facing: f32
     let relative_angle = angle_to_camera - entity_facing;
 
     // Normalize to [0, 2π)
-    let normalized = ((relative_angle % std::f32::consts::TAU) + std::f32::consts::TAU)
-        % std::f32::consts::TAU;
+    let normalized =
+        ((relative_angle % std::f32::consts::TAU) + std::f32::consts::TAU) % std::f32::consts::TAU;
 
     // Quantize to 8 views
     ((normalized / std::f32::consts::TAU * 8.0 + 0.5) as u16) % 8

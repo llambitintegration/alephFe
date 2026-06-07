@@ -16,12 +16,7 @@ pub struct HealthBar {
 
 impl HealthBar {
     /// Compute health bar rendering data from sim state and layout.
-    pub fn compute(
-        health: i16,
-        max_health: i16,
-        shield: i16,
-        layout: &HudLayout,
-    ) -> Self {
+    pub fn compute(health: i16, max_health: i16, shield: i16, layout: &HudLayout) -> Self {
         let health_fraction = if max_health > 0 {
             (health as f32 / max_health as f32).clamp(0.0, 1.0)
         } else {
