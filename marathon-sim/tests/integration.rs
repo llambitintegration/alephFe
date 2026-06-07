@@ -3016,3 +3016,189 @@ fn snapshot_preserves_projectile_state() {
         );
     }
 }
+
+// ──────────────────── Boxes 5.1–5.3: Starting weapon loadout (fists + magnum) ────────────────────
+
+/// Build a WeaponDefinition with the given primary-trigger projectile_type,
+/// rounds_per_magazine, and firing timing. All other fields are inert defaults.
+fn make_weapon_def(
+    projectile_type: i16,
+    rounds_per_magazine: i16,
+    ticks_per_round: i16,
+    recovery_ticks: i16,
+) -> marathon_formats::physics::WeaponDefinition {
+    use marathon_formats::physics::{TriggerDefinition, WeaponDefinition};
+    let trigger = |proj: i16, rounds: i16, tpr: i16, rec: i16| TriggerDefinition {
+        rounds_per_magazine: rounds,
+        ammunition_type: 0,
+        ticks_per_round: tpr,
+        recovery_ticks: rec,
+        charging_ticks: 0,
+        recoil_magnitude: 0,
+        firing_sound: -1,
+        click_sound: -1,
+        charging_sound: -1,
+        shell_casing_sound: -1,
+        reloading_sound: -1,
+        charged_sound: -1,
+        projectile_type: proj,
+        theta_error: 0,
+        dx: 0,
+        dz: 0,
+        shell_casing_type: -1,
+        burst_count: 0,
+    };
+    WeaponDefinition {
+        item_type: -1,
+        powerup_type: -1,
+        weapon_class: 0,
+        flags: 0,
+        firing_light_intensity: 0.0,
+        firing_intensity_decay_ticks: 0,
+        idle_height: 0.0,
+        bob_amplitude: 0.0,
+        kick_height: 0.0,
+        reload_height: 0.0,
+        idle_width: 0.0,
+        horizontal_amplitude: 0.0,
+        collection: 0,
+        idle_shape: 0,
+        firing_shape: 0,
+        reloading_shape: 0,
+        charging_shape: 0,
+        charged_shape: 0,
+        ready_ticks: 0,
+        await_reload_ticks: 0,
+        loading_ticks: 0,
+        finish_loading_ticks: 0,
+        powerup_ticks: 0,
+        primary_trigger: trigger(
+            projectile_type,
+            rounds_per_magazine,
+            ticks_per_round,
+            recovery_ticks,
+        ),
+        secondary_trigger: trigger(-1, 0, 0, 0),
+    }
+}
+
+/// Physics fixture with a fists weapon at index 0 (melee, projectile_type < 0)
+/// and a magnum at index 1 (projectile_type 0, 8 rounds/magazine, fires
+/// immediately on the first FIRE_PRIMARY tick). A matching projectile sits at
+/// index 0 so the firing path can resolve the magnum's projectile.
+fn make_weapon_test_physics() -> PhysicsData {
+    let mut p = make_test_physics();
+    // Fists: melee (projectile_type -1), index 0.
+    let fists = make_weapon_def(-1, 0, 1, 1);
+    // Magnum: projectile_type 0, 8 rounds/mag, ticks_per_round 1 so first tick fires.
+    let magnum = make_weapon_def(0, 8, 1, 1);
+    p.weapons = Some(vec![fists, magnum]);
+    // make_test_physics already provides a valid projectile at index 0.
+    p
+}
+
+// Box 5.1 / 5.2: Player starts with fists AND magnum, magnum equipped.
+#[test]
+fn starting_loadout_has_fists_and_magnum_equipped() {
+    use marathon_sim::player::inventory::WeaponInventory;
+
+    let map = make_test_map();
+    let physics = make_weapon_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    let rounds_per_magazine = physics.weapons.as_ref().unwrap()[1]
+        .primary_trigger
+        .rounds_per_magazine as u16;
+
+    let inv = world.ecs_world_mut().resource::<WeaponInventory>();
+
+    // Fists at index 0, magnum at index 1, both present.
+    let fists = inv.weapons.get(0).and_then(|s| s.as_ref());
+    let magnum = inv.weapons.get(1).and_then(|s| s.as_ref());
+    assert!(fists.is_some(), "fists should occupy index 0");
+    assert!(magnum.is_some(), "magnum should occupy index 1");
+    assert_eq!(fists.unwrap().definition_index, 0);
+    assert_eq!(magnum.unwrap().definition_index, 1);
+
+    let magnum = magnum.unwrap();
+    assert_eq!(
+        magnum.primary_magazine, rounds_per_magazine,
+        "magnum starts with a full magazine"
+    );
+    assert!(
+        magnum.primary_reserve > 0,
+        "magnum starts with reserve ammo"
+    );
+
+    // Magnum is the equipped weapon.
+    assert_eq!(inv.current_weapon, 1, "magnum should be equipped");
+    let current = inv.current().expect("current() resolves to the magnum");
+    let proj_type = physics.weapons.as_ref().unwrap()[current.definition_index]
+        .primary_trigger
+        .projectile_type;
+    assert!(
+        proj_type >= 0,
+        "equipped weapon must fire a real projectile (proj_type >= 0), got {proj_type}"
+    );
+}
+
+// Box 5.3: Firing the starting magnum spawns one projectile and consumes one round.
+#[test]
+fn starting_magnum_fires_projectile_and_consumes_round() {
+    use marathon_sim::player::inventory::WeaponInventory;
+
+    let map = make_test_map();
+    let physics = make_weapon_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    let full = world
+        .ecs_world_mut()
+        .resource::<WeaponInventory>()
+        .current()
+        .unwrap()
+        .primary_magazine;
+
+    let before = world.snapshot().projectiles.len();
+
+    // Fire primary. ticks_per_round=1 so the magnum fires on the first tick.
+    let mut fired_tick = None;
+    for t in 0..4 {
+        world.tick(ActionFlags::new(ActionFlags::FIRE_PRIMARY).into());
+        let mag = world
+            .ecs_world_mut()
+            .resource::<WeaponInventory>()
+            .current()
+            .unwrap()
+            .primary_magazine;
+        if mag < full {
+            fired_tick = Some(t);
+            break;
+        }
+    }
+
+    assert!(
+        fired_tick.is_some(),
+        "magnum should have fired within a few FIRE_PRIMARY ticks"
+    );
+
+    let after_mag = world
+        .ecs_world_mut()
+        .resource::<WeaponInventory>()
+        .current()
+        .unwrap()
+        .primary_magazine;
+    assert_eq!(
+        after_mag,
+        full - 1,
+        "exactly one round consumed from the magnum magazine"
+    );
+
+    let after = world.snapshot().projectiles.len();
+    assert_eq!(
+        after,
+        before + 1,
+        "firing the magnum spawns exactly one projectile entity"
+    );
+}

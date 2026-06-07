@@ -23,10 +23,10 @@
 
 ## 5. Starting weapon loadout (marathon-sim)
 
-- [ ] 5.1 Write a failing test: a freshly created `SimWorld` has a weapon inventory containing fists and the magnum, magnum equipped with full primary magazine and positive reserve, `current()` resolves to a weapon with `projectile_type >= 0`
-- [ ] 5.2 Extend the starting `WeaponInventory` build in `SimWorld::new` (`world.rs:158`) to insert the magnum slot with magazine/reserve sourced from physics `WeaponDefinition`/`TriggerDefinition`; make 5.1 pass
-- [ ] 5.3 Write a test: with the starting loadout, a `FIRE_PRIMARY` tick spawns a projectile entity and decrements the magnum primary magazine by 1; make it pass
-- [ ] 5.4 Update any existing tests that assumed a fists-only starting inventory (combat-system delta is now authoritative)
+- [x] 5.1 Write a failing test: a freshly created `SimWorld` has a weapon inventory containing fists and the magnum, magnum equipped with full primary magazine and positive reserve, `current()` resolves to a weapon with `projectile_type >= 0`
+- [x] 5.2 Extend the starting `WeaponInventory` build in `SimWorld::new` (`world.rs:158`) to insert the magnum slot with magazine/reserve sourced from physics `WeaponDefinition`/`TriggerDefinition`; make 5.1 pass
+- [x] 5.3 Write a test: with the starting loadout, a `FIRE_PRIMARY` tick spawns a projectile entity and decrements the magnum primary magazine by 1; make it pass
+- [x] 5.4 Update any existing tests that assumed a fists-only starting inventory (combat-system delta is now authoritative)
 
 ## 6. Edge-triggered action key (marathon-sim)
 

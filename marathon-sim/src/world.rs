@@ -174,22 +174,57 @@ impl SimWorld {
         let control_panels = build_control_panels(map_data);
         world.insert_resource(control_panels);
 
-        // Initialize player weapon inventory (start with fists)
+        // Initialize player weapon inventory (start with fists + magnum).
+        //
+        // Marathon's canonical starting loadout is fists (weapon definition
+        // index 0, melee/infinite ammo) plus the .44 magnum pistol (definition
+        // index 1), with the magnum equipped. Ammo counts are sourced from the
+        // scenario's physics data so the loadout stays scenario-correct rather
+        // than hard-coded. If a scenario provides no index-1 weapon we fall back
+        // gracefully to a fists-only, fists-equipped inventory.
         let mut weapon_inventory = crate::player::inventory::WeaponInventory::default();
         {
+            use crate::player::inventory::{WeaponSlot, WeaponState};
+
             let num_weapon_slots = physics_data.weapons.as_ref().map_or(0, |w| w.len());
             weapon_inventory.weapons = vec![None; num_weapon_slots.max(1)];
-            // Player starts with fists (weapon index 0, infinite ammo)
-            weapon_inventory.weapons[0] = Some(crate::player::inventory::WeaponSlot {
+
+            // Fists: weapon definition index 0, infinite ammo (melee).
+            weapon_inventory.weapons[0] = Some(WeaponSlot {
                 definition_index: 0,
                 primary_magazine: u16::MAX,
                 primary_reserve: 0,
                 secondary_magazine: 0,
                 secondary_reserve: 0,
-                state: crate::player::inventory::WeaponState::Idle,
+                state: WeaponState::Idle,
                 cooldown_ticks: 0,
             });
             weapon_inventory.current_weapon = 0;
+
+            // Magnum: weapon definition index 1. Insert and equip it when the
+            // scenario actually defines it. Magazine is a full magazine and the
+            // reserve is two spare magazines, both derived from the weapon's
+            // own primary-trigger `rounds_per_magazine` (no magic literals).
+            const MAGNUM_INDEX: usize = 1;
+            if let Some(magnum_def) = physics_data
+                .weapons
+                .as_ref()
+                .and_then(|w| w.get(MAGNUM_INDEX))
+            {
+                let rounds_per_magazine =
+                    magnum_def.primary_trigger.rounds_per_magazine.max(0) as u16;
+                weapon_inventory.weapons[MAGNUM_INDEX] = Some(WeaponSlot {
+                    definition_index: MAGNUM_INDEX,
+                    primary_magazine: rounds_per_magazine,
+                    // Two spare magazines of reserve ammo.
+                    primary_reserve: rounds_per_magazine.saturating_mul(2),
+                    secondary_magazine: 0,
+                    secondary_reserve: 0,
+                    state: WeaponState::Idle,
+                    cooldown_ticks: 0,
+                });
+                weapon_inventory.current_weapon = MAGNUM_INDEX;
+            }
         }
         world.insert_resource(weapon_inventory);
 
