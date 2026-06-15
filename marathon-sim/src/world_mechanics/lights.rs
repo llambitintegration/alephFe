@@ -1,40 +1,62 @@
-use crate::components::{Light, LightFunction};
+use crate::components::LightFunction;
 use rand::Rng;
 
-/// Compute a light's intensity for the current tick.
-pub fn compute_light_intensity(light: &Light, tick: u64, rng: &mut impl Rng) -> f32 {
-    let range = light.intensity_max - light.intensity_min;
+/// Smooth (cosine-eased) interpolation from `initial` to `final` across the
+/// `[0, period]` phase window: `initial + (final - initial) * (cos(phase * PI /
+/// period + PI) + 1) / 2`. At `phase == 0` it returns `initial`; at
+/// `phase == period` it returns `final`. Used directly by `Smooth` and as the
+/// deterministic base of `Flicker`.
+fn smooth_intensity(initial: f32, final_intensity: f32, phase: u32, period: u32) -> f32 {
+    let period = period.max(1) as f32;
+    let eased = ((phase as f32 * std::f32::consts::PI / period + std::f32::consts::PI).cos() + 1.0)
+        / 2.0;
+    initial + (final_intensity - initial) * eased
+}
 
-    match light.function {
-        LightFunction::Constant => light.intensity_max,
+/// Compute a light's intensity for a given phase within its current state,
+/// using Alephone's `map.h` / `lightsource.cpp` lighting-function semantics.
+///
+/// * `initial_intensity` / `final_intensity` — the endpoints of the current
+///   state's intensity ramp (0.0..=1.0).
+/// * `phase` — ticks elapsed within the current period (0..=`period`).
+/// * `period` — duration of the current state in ticks.
+/// * `function` — the animation function to evaluate.
+/// * `rng` — randomness source for the stochastic functions.
+pub fn compute_light_intensity(
+    initial_intensity: f32,
+    final_intensity: f32,
+    phase: u32,
+    period: u32,
+    function: LightFunction,
+    rng: &mut impl Rng,
+) -> f32 {
+    match function {
+        // Holds at the final intensity regardless of phase.
+        LightFunction::Constant => final_intensity,
+        // Straight ramp from initial to final across the period.
         LightFunction::Linear => {
-            let t =
-                ((tick + light.phase as u64) % light.period as u64) as f32 / light.period as f32;
-            // Triangle wave: 0->1->0 over one period
-            let wave = if t < 0.5 { t * 2.0 } else { 2.0 - t * 2.0 };
-            light.intensity_min + range * wave
+            let period = period.max(1) as f32;
+            initial_intensity + (final_intensity - initial_intensity) * phase as f32 / period
         }
+        // Cosine-eased ramp from initial to final across the period.
         LightFunction::Smooth => {
-            let t =
-                ((tick + light.phase as u64) % light.period as u64) as f32 / light.period as f32;
-            // Cosine wave: smooth oscillation
-            let wave = (1.0 - (t * std::f32::consts::TAU).cos()) * 0.5;
-            light.intensity_min + range * wave
+            smooth_intensity(initial_intensity, final_intensity, phase, period)
         }
+        // Smooth base perturbed toward `final` by a random fraction.
         LightFunction::Flicker => {
-            // Random value each tick
-            light.intensity_min + range * rng.gen::<f32>()
+            let base = smooth_intensity(initial_intensity, final_intensity, phase, period);
+            base + rng.gen::<f32>() * (final_intensity - base)
         }
+        // Uniform random value across the [initial, final] range.
         LightFunction::Random => {
-            // Uniformly random value across the intensity range each tick.
-            light.intensity_min + range * rng.gen::<f32>()
+            initial_intensity + rng.gen::<f32>() * (final_intensity - initial_intensity)
         }
+        // Snaps to one of the two endpoints each evaluation.
         LightFunction::Fluorescent => {
-            // Snaps to either extreme of the range each tick.
             if rng.gen::<f32>() > 0.5 {
-                light.intensity_max
+                final_intensity
             } else {
-                light.intensity_min
+                initial_intensity
             }
         }
     }
@@ -46,76 +68,106 @@ mod tests {
     use rand::rngs::StdRng;
     use rand::SeedableRng;
 
-    fn make_light(function: LightFunction, period: u32) -> Light {
-        Light {
-            light_index: 0,
-            function,
-            period,
-            phase: 0,
-            intensity_min: 0.0,
-            intensity_max: 1.0,
-            current_intensity: 1.0,
+    fn rng() -> StdRng {
+        StdRng::seed_from_u64(42)
+    }
+
+    // ── box 2.8: each of the 6 functions with known initial/final values ──
+
+    #[test]
+    fn constant_returns_final() {
+        let mut r = rng();
+        let v = compute_light_intensity(0.2, 0.8, 30, 60, LightFunction::Constant, &mut r);
+        assert!((v - 0.8).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn linear_midpoint() {
+        let mut r = rng();
+        // initial + (final-initial)*phase/period = 0.0 + 1.0*50/100 = 0.5
+        let v = compute_light_intensity(0.0, 1.0, 50, 100, LightFunction::Linear, &mut r);
+        assert!((v - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn smooth_midpoint() {
+        let mut r = rng();
+        // cos(50*PI/100 + PI) = cos(1.5*PI) = 0 -> (0+1)/2 = 0.5
+        let v = compute_light_intensity(0.0, 1.0, 50, 100, LightFunction::Smooth, &mut r);
+        assert!((v - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn flicker_bounded_by_smooth_and_final() {
+        // Flicker = smooth_base + rng*(final - smooth_base); for final>=smooth
+        // base it stays within [smooth_base, final].
+        let mut r = rng();
+        let base = smooth_intensity(0.2, 0.9, 25, 100);
+        for _ in 0..200 {
+            let v = compute_light_intensity(0.2, 0.9, 25, 100, LightFunction::Flicker, &mut r);
+            assert!(v >= base - 1e-4 && v <= 0.9 + 1e-4, "flicker {v} out of [{base},0.9]");
         }
     }
 
     #[test]
-    fn constant_light() {
-        let light = make_light(LightFunction::Constant, 60);
-        let mut rng = StdRng::seed_from_u64(42);
-        assert_eq!(compute_light_intensity(&light, 0, &mut rng), 1.0);
-        assert_eq!(compute_light_intensity(&light, 100, &mut rng), 1.0);
-    }
-
-    #[test]
-    fn linear_light_oscillates() {
-        let light = make_light(LightFunction::Linear, 100);
-        let mut rng = StdRng::seed_from_u64(42);
-
-        let at_0 = compute_light_intensity(&light, 0, &mut rng);
-        let at_25 = compute_light_intensity(&light, 25, &mut rng);
-        let at_50 = compute_light_intensity(&light, 50, &mut rng);
-
-        assert!((at_0 - 0.0).abs() < 0.01); // start of period
-        assert!((at_25 - 0.5).abs() < 0.01); // quarter period
-        assert!((at_50 - 1.0).abs() < 0.01); // half period = peak
-    }
-
-    #[test]
-    fn smooth_light_oscillates() {
-        let light = make_light(LightFunction::Smooth, 60);
-        let mut rng = StdRng::seed_from_u64(42);
-
-        let at_0 = compute_light_intensity(&light, 0, &mut rng);
-        let at_30 = compute_light_intensity(&light, 30, &mut rng);
-
-        // Cosine: at t=0 wave=0 (min), at t=0.5 wave=1 (max)
-        assert!((at_0 - 0.0).abs() < 0.01);
-        assert!((at_30 - 1.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn flicker_in_range() {
-        let light = make_light(LightFunction::Flicker, 60);
-        let mut rng = StdRng::seed_from_u64(42);
-
-        for tick in 0..100 {
-            let intensity = compute_light_intensity(&light, tick, &mut rng);
-            assert!(intensity >= 0.0 && intensity <= 1.0);
+    fn random_within_range() {
+        let mut r = rng();
+        for _ in 0..200 {
+            let v = compute_light_intensity(0.3, 0.7, 0, 60, LightFunction::Random, &mut r);
+            assert!((0.3..=0.7).contains(&v), "random {v} out of [0.3,0.7]");
         }
     }
 
     #[test]
-    fn phase_offset() {
-        let light_a = make_light(LightFunction::Linear, 100);
-        let mut light_b = make_light(LightFunction::Linear, 100);
-        light_b.phase = 25;
-        let mut rng = StdRng::seed_from_u64(42);
+    fn fluorescent_snaps_to_endpoints() {
+        let mut r = rng();
+        for _ in 0..200 {
+            let v = compute_light_intensity(0.1, 0.95, 13, 60, LightFunction::Fluorescent, &mut r);
+            assert!(
+                (v - 0.1).abs() < f32::EPSILON || (v - 0.95).abs() < f32::EPSILON,
+                "fluorescent {v} not an endpoint"
+            );
+        }
+    }
 
-        let _a_at_0 = compute_light_intensity(&light_a, 0, &mut rng);
-        let b_at_0 = compute_light_intensity(&light_b, 0, &mut rng);
+    // ── box 2.9: constant returns final regardless of phase ──
 
-        // light_b at tick 0 should equal light_a at tick 25
-        let a_at_25 = compute_light_intensity(&light_a, 25, &mut rng);
-        assert!((b_at_0 - a_at_25).abs() < 0.01);
+    #[test]
+    fn constant_independent_of_phase() {
+        let mut r = rng();
+        for phase in [0, 1, 30, 59, 60, 1000] {
+            let v = compute_light_intensity(0.2, 0.8, phase, 60, LightFunction::Constant, &mut r);
+            assert!((v - 0.8).abs() < f32::EPSILON);
+        }
+    }
+
+    // ── box 2.10: linear at phase=0 -> initial, at phase=period -> final ──
+
+    #[test]
+    fn linear_endpoints() {
+        let mut r = rng();
+        let at_0 = compute_light_intensity(0.25, 0.75, 0, 100, LightFunction::Linear, &mut r);
+        let at_period = compute_light_intensity(0.25, 0.75, 100, 100, LightFunction::Linear, &mut r);
+        assert!((at_0 - 0.25).abs() < 0.001, "linear@0 = {at_0}");
+        assert!((at_period - 0.75).abs() < 0.001, "linear@period = {at_period}");
+    }
+
+    // ── box 2.11: smooth at phase=0 -> initial, at phase=period -> final ──
+
+    #[test]
+    fn smooth_endpoints() {
+        let mut r = rng();
+        let at_0 = compute_light_intensity(0.25, 0.75, 0, 100, LightFunction::Smooth, &mut r);
+        let at_period = compute_light_intensity(0.25, 0.75, 100, 100, LightFunction::Smooth, &mut r);
+        assert!((at_0 - 0.25).abs() < 0.001, "smooth@0 = {at_0}");
+        assert!((at_period - 0.75).abs() < 0.001, "smooth@period = {at_period}");
+    }
+
+    #[test]
+    fn zero_period_is_safe() {
+        // period=0 must not divide-by-zero; degenerates without panicking.
+        let mut r = rng();
+        let _ = compute_light_intensity(0.0, 1.0, 0, 0, LightFunction::Linear, &mut r);
+        let _ = compute_light_intensity(0.0, 1.0, 0, 0, LightFunction::Smooth, &mut r);
     }
 }

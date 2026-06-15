@@ -1374,7 +1374,15 @@ fn light_animation_patterns() {
         current_intensity: 0.9,
     };
     for tick in 0..100 {
-        let i = compute_light_intensity(&light, tick, &mut rng);
+        let phase = (tick % light.period as u64) as u32;
+        let i = compute_light_intensity(
+            light.intensity_min,
+            light.intensity_max,
+            phase,
+            light.period,
+            light.function,
+            &mut rng,
+        );
         assert!((i - 0.9).abs() < f32::EPSILON);
     }
 
@@ -1389,7 +1397,15 @@ fn light_animation_patterns() {
     let mut min_seen = 1.0f32;
     let mut max_seen = 0.0f32;
     for tick in 0..100 {
-        let i = compute_light_intensity(&smooth, tick, &mut rng);
+        let phase = (tick % smooth.period as u64) as u32;
+        let i = compute_light_intensity(
+            smooth.intensity_min,
+            smooth.intensity_max,
+            phase,
+            smooth.period,
+            smooth.function,
+            &mut rng,
+        );
         min_seen = min_seen.min(i);
         max_seen = max_seen.max(i);
     }
@@ -1766,19 +1782,19 @@ fn tick_loop_lights_update_intensity() {
     let config = SimConfig::default();
     let mut world = SimWorld::new(&map, &physics, &config).unwrap();
 
-    // Smooth light: at tick 0 intensity should be at minimum (cosine starts at 0)
-    // After 30 ticks (half period), should reach maximum (1.0)
-    for _ in 0..30 {
+    // Smooth light: a per-state cosine ramp from initial (phase 0) to final
+    // (phase == period). At a full period (60 ticks) the ramp reaches near max.
+    for _ in 0..60 {
         world.tick(ActionFlags::default().into());
     }
 
     let snapshot = world.snapshot();
     assert!(!snapshot.lights.is_empty(), "should have lights");
     let light = &snapshot.lights[0];
-    // At half-period, cosine wave = 1.0 (maximum)
+    // Near the end of the period the cosine ramp approaches final (max).
     assert!(
         light.current_intensity > 0.9,
-        "light should be near max at half period, got {}",
+        "light should be near max at end of period, got {}",
         light.current_intensity
     );
 }
@@ -1885,16 +1901,16 @@ fn tick_loop_media_tracks_light() {
     let config = SimConfig::default();
     let mut world = SimWorld::new(&map, &physics, &config).unwrap();
 
-    // After 30 ticks (half period of smooth light), light intensity ~1.0
-    // Media height should interpolate to high (2.0 WU)
-    for _ in 0..30 {
+    // After a full period (60 ticks) the smooth light ramp reaches near max,
+    // so media height should interpolate toward high (2.0 WU).
+    for _ in 0..60 {
         world.tick(ActionFlags::default().into());
     }
 
     let snapshot = world.snapshot();
     assert!(!snapshot.media.is_empty(), "should have media");
     let media = &snapshot.media[0];
-    // Media height should be near high value (2.0) when light intensity ~1.0
+    // Media height should be near high value (2.0) when light intensity ~max.
     assert!(
         media.current_height > 1.5,
         "media height should track light intensity upward, got {}",

@@ -11,20 +11,20 @@
 
 ## 2. Implement Lighting Functions
 
-- [ ] 2.1 Refactor `compute_light_intensity()` in `marathon-sim/src/world_mechanics/lights.rs` to accept `initial_intensity: f32`, `final_intensity: f32`, `phase: u32`, `period: u32`, `function: LightFunction`, and `rng`
-- [ ] 2.2 Update `Constant` function: return `final_intensity`
-- [ ] 2.3 Update `Linear` function: `initial + (final - initial) * phase / period`
-- [ ] 2.4 Update `Smooth` function: `initial + (final - initial) * (cos(phase * PI / period + PI) + 1) / 2`
-- [ ] 2.5 Correct `Flicker` function to Alephone semantics: compute smooth base, add `rng * (final - smooth_value)`
-- [ ] 2.6 Implement `Random` function: `initial + rng * (final - initial)`
-- [ ] 2.7 Implement `Fluorescent` function: `if rng > 0.5 { final } else { initial }`
-- [ ] 2.8 Add unit tests for all 6 functions with known initial/final values
-- [ ] 2.9 Add unit test: constant returns final_intensity regardless of phase
-- [ ] 2.10 Add unit test: linear at phase=0 returns initial, at phase=period returns final
-- [ ] 2.11 Add unit test: smooth at phase=0 returns initial, at phase=period returns final
-- [ ] 2.12 Add unit test: flicker values stay within [initial, final] range over 100 ticks
-- [ ] 2.13 Add unit test: random values stay within [initial, final] range over 100 ticks
-- [ ] 2.14 Add unit test: fluorescent returns only initial or final (no intermediate values)
+- [x] 2.1 Refactor `compute_light_intensity()` in `marathon-sim/src/world_mechanics/lights.rs` to accept `initial_intensity: f32`, `final_intensity: f32`, `phase: u32`, `period: u32`, `function: LightFunction`, and `rng`
+- [x] 2.2 Update `Constant` function: return `final_intensity`
+- [x] 2.3 Update `Linear` function: `initial + (final - initial) * phase / period`
+- [x] 2.4 Update `Smooth` function: `initial + (final - initial) * (cos(phase * PI / period + PI) + 1) / 2`
+- [x] 2.5 Correct `Flicker` function to Alephone semantics: compute smooth base, add `rng * (final - smooth_value)`
+- [x] 2.6 Implement `Random` function: `initial + rng * (final - initial)`
+- [x] 2.7 Implement `Fluorescent` function: `if rng > 0.5 { final } else { initial }`
+- [x] 2.8 Add unit tests for all 6 functions with known initial/final values
+- [x] 2.9 Add unit test: constant returns final_intensity regardless of phase
+- [x] 2.10 Add unit test: linear at phase=0 returns initial, at phase=period returns final
+- [x] 2.11 Add unit test: smooth at phase=0 returns initial, at phase=period returns final
+- [x] 2.12 Add unit test: flicker values stay within [initial, final] range over 100 ticks
+- [x] 2.13 Add unit test: random values stay within [initial, final] range over 100 ticks
+- [x] 2.14 Add unit test: fluorescent returns only initial or final (no intermediate values)
 
 ## 3. Implement State Machine Transitions
 

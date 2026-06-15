@@ -275,9 +275,14 @@ impl SimWorld {
             |world: &mut bevy_ecs::prelude::World, mut sim_rng: bevy_ecs::prelude::Mut<SimRng>| {
                 let mut query = world.query::<&mut crate::Light>();
                 for mut light in query.iter_mut(world) {
+                    let period = light.period.max(1);
+                    let phase = ((tick + light.phase as u64) % period as u64) as u32;
                     let intensity = crate::world_mechanics::lights::compute_light_intensity(
-                        &light,
-                        tick,
+                        light.intensity_min,
+                        light.intensity_max,
+                        phase,
+                        light.period,
+                        light.function,
                         &mut sim_rng.0,
                     );
                     light.current_intensity = intensity;
