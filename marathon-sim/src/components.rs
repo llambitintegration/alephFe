@@ -207,26 +207,57 @@ pub enum PlatformState {
 
 // ─── Light Components ──────────────────────────────────────────────────────
 
-/// Light animation parameters.
+/// A light's full activation state machine, mirroring Alephone's `light_data`.
+///
+/// The light cycles through six [`LightState`]s; each state carries its own
+/// [`LightFunctionSpec`] in `functions` (indexed by [`LightState::as_index`]).
+/// On each state transition the engine rolls a fresh `period` and
+/// `final_intensity` (with delta randomization) and ramps `current_intensity`
+/// from `initial_intensity` to `final_intensity` across the state.
 #[derive(Component, Debug, Clone, Serialize, Deserialize)]
 pub struct Light {
     /// Light index in the map data.
     pub light_index: usize,
-    /// Animation function type.
-    pub function: LightFunction,
-    /// Period in ticks.
-    pub period: u32,
-    /// Phase offset in ticks.
+    /// High-level light category.
+    pub light_type: LightType,
+    /// Current activation-cycle state.
+    pub state: LightState,
+    /// Light behavior flags (see the `LIGHT_*` constants).
+    pub flags: u16,
+    /// Ticks elapsed within the current state.
     pub phase: u32,
-    /// Minimum intensity (0.0 to 1.0).
-    pub intensity_min: f32,
-    /// Maximum intensity (0.0 to 1.0).
-    pub intensity_max: f32,
-    /// Current computed intensity.
+    /// Duration of the current state in ticks.
+    pub period: u32,
+    /// Current computed intensity (0.0..=1.0).
     pub current_intensity: f32,
+    /// Intensity at the start of the current state's ramp.
+    pub initial_intensity: f32,
+    /// Target intensity at the end of the current state's ramp.
+    pub final_intensity: f32,
+    /// Per-state lighting function parameters, indexed by [`LightState::as_index`].
+    pub functions: [LightFunctionSpec; 6],
+    /// Tag linking this light to control-panel switches.
+    pub tag: i16,
 }
 
-/// Light state-machine phase (Marathon light definition state field).
+/// Light animation function types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LightFunction {
+    Constant,
+    Linear,
+    Smooth,
+    Flicker,
+    Random,
+    Fluorescent,
+}
+
+/// The phase of a light's activation state machine.
+///
+/// Lights cycle through six states. The activation half
+/// (`BecomingActive`, `PrimaryActive`, `SecondaryActive`) ramps a light up and
+/// holds it lit; the deactivation half (`BecomingInactive`, `PrimaryInactive`,
+/// `SecondaryInactive`) ramps it down and holds it dark. The cycle wraps from
+/// `SecondaryInactive` back to `BecomingActive`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LightState {
     BecomingActive,
@@ -237,14 +268,69 @@ pub enum LightState {
     SecondaryInactive,
 }
 
-/// Light animation function types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LightFunction {
-    Constant,
-    Linear,
-    Smooth,
-    Flicker,
+impl LightState {
+    /// Returns the next state in the activation cycle.
+    ///
+    /// `BecomingActive → PrimaryActive → SecondaryActive → BecomingInactive →
+    /// PrimaryInactive → SecondaryInactive → BecomingActive`.
+    pub fn next_state(self) -> LightState {
+        match self {
+            LightState::BecomingActive => LightState::PrimaryActive,
+            LightState::PrimaryActive => LightState::SecondaryActive,
+            LightState::SecondaryActive => LightState::BecomingInactive,
+            LightState::BecomingInactive => LightState::PrimaryInactive,
+            LightState::PrimaryInactive => LightState::SecondaryInactive,
+            LightState::SecondaryInactive => LightState::BecomingActive,
+        }
+    }
+
+    /// Index of this state in a `Light`'s `functions` array (0..6), in cycle
+    /// order: BecomingActive, PrimaryActive, SecondaryActive, BecomingInactive,
+    /// PrimaryInactive, SecondaryInactive.
+    pub fn as_index(self) -> usize {
+        match self {
+            LightState::BecomingActive => 0,
+            LightState::PrimaryActive => 1,
+            LightState::SecondaryActive => 2,
+            LightState::BecomingInactive => 3,
+            LightState::PrimaryInactive => 4,
+            LightState::SecondaryInactive => 5,
+        }
+    }
 }
+
+/// High-level category of a light, mirroring Alephone's light kinds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LightType {
+    Normal,
+    Strobe,
+    Media,
+}
+
+/// Per-state lighting function parameters.
+///
+/// Each of a light's six states carries one of these specs describing how the
+/// intensity behaves while the light is in that state.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LightFunctionSpec {
+    /// The animation function used while in this state.
+    pub function: LightFunction,
+    /// Base duration of this state in ticks.
+    pub period: u16,
+    /// Random additional duration (0..=delta_period) applied per transition.
+    pub delta_period: u16,
+    /// Base target intensity (0.0 to 1.0).
+    pub intensity: f32,
+    /// Random additional intensity applied per transition.
+    pub delta_intensity: f32,
+}
+
+/// Light flag: the light starts in the active half of the cycle.
+pub const LIGHT_IS_INITIALLY_ACTIVE: u16 = 0x0001;
+/// Light flag: secondary states reuse the primary states' intensity values.
+pub const LIGHT_HAS_SLAVED_INTENSITIES: u16 = 0x0002;
+/// Light flag: the light does not run the activation state machine.
+pub const LIGHT_IS_STATELESS: u16 = 0x0004;
 
 // ─── Media Components ──────────────────────────────────────────────────────
 
@@ -297,6 +383,73 @@ mod tests {
     #[test]
     fn light_function_variants() {
         assert_ne!(LightFunction::Constant, LightFunction::Flicker);
+        // New variants (box 1.4 / 1.8).
+        assert_ne!(LightFunction::Random, LightFunction::Fluorescent);
+        assert_ne!(LightFunction::Random, LightFunction::Flicker);
+        assert_ne!(LightFunction::Fluorescent, LightFunction::Constant);
+    }
+
+    #[test]
+    fn light_state_variants() {
+        assert_ne!(LightState::BecomingActive, LightState::PrimaryActive);
+        assert_ne!(LightState::PrimaryInactive, LightState::SecondaryInactive);
+        assert_eq!(LightState::BecomingActive, LightState::BecomingActive);
+    }
+
+    #[test]
+    fn light_state_next_state_cycle() {
+        // The cycle must visit all six states and wrap back to the start.
+        let mut state = LightState::BecomingActive;
+        let expected = [
+            LightState::PrimaryActive,
+            LightState::SecondaryActive,
+            LightState::BecomingInactive,
+            LightState::PrimaryInactive,
+            LightState::SecondaryInactive,
+            LightState::BecomingActive,
+        ];
+        for want in expected {
+            state = state.next_state();
+            assert_eq!(state, want);
+        }
+        // After six transitions we are back where we started.
+        assert_eq!(state, LightState::BecomingActive);
+    }
+
+    #[test]
+    fn light_type_variants() {
+        assert_ne!(LightType::Normal, LightType::Strobe);
+        assert_ne!(LightType::Strobe, LightType::Media);
+        assert_eq!(LightType::Media, LightType::Media);
+    }
+
+    #[test]
+    fn light_function_spec_construction() {
+        let spec = LightFunctionSpec {
+            function: LightFunction::Smooth,
+            period: 30,
+            delta_period: 5,
+            intensity: 0.75,
+            delta_intensity: 0.25,
+        };
+        assert_eq!(spec.function, LightFunction::Smooth);
+        assert_eq!(spec.period, 30);
+        assert_eq!(spec.delta_period, 5);
+        assert_eq!(spec.intensity, 0.75);
+        assert_eq!(spec.delta_intensity, 0.25);
+
+        let copied = spec; // Copy
+        assert_eq!(copied, spec);
+    }
+
+    #[test]
+    fn light_flag_constants() {
+        assert_eq!(LIGHT_IS_INITIALLY_ACTIVE, 0x0001);
+        assert_eq!(LIGHT_HAS_SLAVED_INTENSITIES, 0x0002);
+        assert_eq!(LIGHT_IS_STATELESS, 0x0004);
+        // Flags are independent bits.
+        assert_eq!(LIGHT_IS_INITIALLY_ACTIVE & LIGHT_HAS_SLAVED_INTENSITIES, 0);
+        assert_eq!(LIGHT_HAS_SLAVED_INTENSITIES & LIGHT_IS_STATELESS, 0);
     }
 
     #[test]

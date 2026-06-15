@@ -4,6 +4,7 @@ use marathon_formats::map::LightData;
 use marathon_formats::physics::PhysicsData;
 use marathon_formats::MapData;
 use rand::rngs::StdRng;
+use rand::Rng;
 use rand::SeedableRng;
 
 use crate::components::*;
@@ -674,35 +675,78 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
 
 fn spawn_lights(world: &mut World, map_data: &MapData) {
     let lights = match &map_data.lights {
-        LightData::Static(lights) => lights,
+        LightData::Static(lights) => lights.clone(),
         _ => return,
     };
 
-    for (idx, light) in lights.iter().enumerate() {
-        let spec = &light.primary_active;
-        let function = match spec.function {
-            0 => LightFunction::Constant,
+    fn map_function(f: i16) -> LightFunction {
+        match f {
             1 => LightFunction::Linear,
             2 => LightFunction::Smooth,
             3 => LightFunction::Flicker,
+            4 => LightFunction::Random,
+            5 => LightFunction::Fluorescent,
             _ => LightFunction::Constant,
-        };
-
-        let intensity_min = spec.intensity;
-        let intensity_max = spec.intensity + spec.delta_intensity;
-        let period = spec.period as u32;
-        let phase = light.phase as u32;
-
-        world.spawn(Light {
-            light_index: idx,
-            function,
-            period: period.max(1),
-            phase,
-            intensity_min,
-            intensity_max,
-            current_intensity: intensity_max,
-        });
+        }
     }
+    fn to_spec(s: &marathon_formats::map::LightingFunctionSpec) -> LightFunctionSpec {
+        LightFunctionSpec {
+            function: map_function(s.function),
+            period: s.period.max(0) as u16,
+            delta_period: s.delta_period.max(0) as u16,
+            intensity: s.intensity,
+            delta_intensity: s.delta_intensity,
+        }
+    }
+    fn map_light_type(t: i16) -> LightType {
+        match t {
+            1 => LightType::Strobe,
+            2 => LightType::Media,
+            _ => LightType::Normal,
+        }
+    }
+
+    world.resource_scope(|world: &mut World, mut sim_rng: Mut<SimRng>| {
+        for (idx, light) in lights.iter().enumerate() {
+            // functions[] is indexed by LightState::as_index (cycle order).
+            let functions = [
+                to_spec(&light.becoming_active),
+                to_spec(&light.primary_active),
+                to_spec(&light.secondary_active),
+                to_spec(&light.becoming_inactive),
+                to_spec(&light.primary_inactive),
+                to_spec(&light.secondary_inactive),
+            ];
+            let initially_active = light.flags & LIGHT_IS_INITIALLY_ACTIVE != 0;
+            let state = if initially_active {
+                LightState::BecomingActive
+            } else {
+                LightState::BecomingInactive
+            };
+            // Alephone defaults: the activation ramp starts dark (0.0), the
+            // deactivation ramp starts lit (1.0).
+            let initial_intensity = if initially_active { 0.0 } else { 1.0 };
+            // Roll the starting state's period + target intensity (delta randomized).
+            let start = functions[state.as_index()];
+            let span = start.delta_period as u32 + 1;
+            let period = (start.period as u32 + sim_rng.0.gen_range(0..span)).max(1);
+            let final_intensity = start.intensity + sim_rng.0.gen::<f32>() * start.delta_intensity;
+
+            world.spawn(Light {
+                light_index: idx,
+                light_type: map_light_type(light.light_type),
+                state,
+                flags: light.flags,
+                phase: light.phase.max(0) as u32,
+                period,
+                current_intensity: initial_intensity,
+                initial_intensity,
+                final_intensity,
+                functions,
+                tag: light.tag,
+            });
+        }
+    });
 }
 
 fn spawn_media(world: &mut World, map_data: &MapData) {
