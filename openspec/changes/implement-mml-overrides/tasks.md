@@ -18,13 +18,13 @@
 
 ## 2. Element-Level Merge Logic
 
-- [ ] 2.1 Add `MmlSection::find_element(&self, name: &str, index: &str) -> Option<&MmlElement>` method for index-based element lookup
-- [ ] 2.2 Add `MmlElement::merge_attributes(&mut self, overlay: &MmlElement)` method that copies overlay attributes into self (overlay wins on conflict, base-only attributes preserved)
-- [ ] 2.3 Add `MmlElement::merge_children(&mut self, overlay: &MmlElement)` method that recursively merges child elements by name+index
-- [ ] 2.4 Implement `MmlSection::merge(base: Self, overlay: Self) -> Self` that matches elements by name+index, merges matched pairs, preserves unmatched elements from both sides, and appends non-indexed overlay elements
-- [ ] 2.5 Update `MmlDocument::layer()` to call `MmlSection::merge()` when both base and overlay have the same section, instead of `Option::or`
-- [ ] 2.6 Update existing `layer()` tests to verify element-level merge behavior (monster index preservation, attribute-level merge)
-- [ ] 2.7 Add new tests: overlay modifies one element among many, overlay adds new indexed element, attribute-level merge preserves unmentioned attributes, recursive child merge, three-layer cascade
+- [x] 2.1 Add `MmlSection::find_element(&self, name: &str, index: &str) -> Option<&MmlElement>` method for index-based element lookup
+- [x] 2.2 Add `MmlElement::merge_attributes(&mut self, overlay: &MmlElement)` method that copies overlay attributes into self (overlay wins on conflict, base-only attributes preserved)
+- [x] 2.3 Add `MmlElement::merge_children(&mut self, overlay: &MmlElement)` method that recursively merges child elements by name+index
+- [x] 2.4 Implement `MmlSection::merge(base: Self, overlay: Self) -> Self` that matches elements by name+index, merges matched pairs, preserves unmatched elements from both sides, and appends non-indexed overlay elements
+- [x] 2.5 Update `MmlDocument::layer()` to call `MmlSection::merge()` when both base and overlay have the same section, instead of `Option::or`
+- [x] 2.6 Update existing `layer()` tests to verify element-level merge behavior (monster index preservation, attribute-level merge)
+- [x] 2.7 Add new tests: overlay modifies one element among many, overlay adds new indexed element, attribute-level merge preserves unmentioned attributes, recursive child merge, three-layer cascade
 
 ## 3. Override Cascade Assembly
 
