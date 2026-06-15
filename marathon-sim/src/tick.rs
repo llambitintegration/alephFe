@@ -105,7 +105,7 @@ impl SimWorld {
 
         // Systems execute in alephone's update_world() order:
         // 1. Update lights
-        self.update_lights();
+        self.run_light_updates();
         // 2. Update media (depends on light intensities)
         self.update_media();
         // 3. Update platforms (before player physics so collision uses new heights)
@@ -269,23 +269,12 @@ impl SimWorld {
 
     // ─── Simulation Systems ─────────────────────────────────────────────────
 
-    fn update_lights(&mut self) {
-        let tick = self.world.resource::<TickCounter>().0;
+    fn run_light_updates(&mut self) {
         self.world.resource_scope(
             |world: &mut bevy_ecs::prelude::World, mut sim_rng: bevy_ecs::prelude::Mut<SimRng>| {
                 let mut query = world.query::<&mut crate::Light>();
                 for mut light in query.iter_mut(world) {
-                    let period = light.period.max(1);
-                    let phase = ((tick + light.phase as u64) % period as u64) as u32;
-                    let intensity = crate::world_mechanics::lights::compute_light_intensity(
-                        light.intensity_min,
-                        light.intensity_max,
-                        phase,
-                        light.period,
-                        light.function,
-                        &mut sim_rng.0,
-                    );
-                    light.current_intensity = intensity;
+                    crate::world_mechanics::lights::update_single_light(&mut light, &mut sim_rng.0);
                 }
             },
         );
@@ -410,13 +399,20 @@ impl SimWorld {
                 let mut query = self.world.query::<&mut crate::Light>();
                 for mut light in query.iter_mut(&mut self.world) {
                     if light.light_index == target_idx {
-                        if light.current_intensity > 0.5 {
-                            light.current_intensity = 0.0;
-                            light.intensity_max = 0.0;
+                        // Flip the activation ramp: lit -> begin deactivating,
+                        // dark -> begin activating. Snap to the target extreme so
+                        // the toggle reads immediately; the state machine carries
+                        // on from the new state on subsequent ticks.
+                        let lit = light.current_intensity > 0.5;
+                        light.state = if lit {
+                            crate::components::LightState::BecomingInactive
                         } else {
-                            light.current_intensity = 1.0;
-                            light.intensity_max = 1.0;
-                        }
+                            crate::components::LightState::BecomingActive
+                        };
+                        light.initial_intensity = light.current_intensity;
+                        light.final_intensity = if lit { 0.0 } else { 1.0 };
+                        light.current_intensity = light.final_intensity;
+                        light.phase = 0;
                         break;
                     }
                 }

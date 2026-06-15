@@ -1363,49 +1363,19 @@ fn light_animation_patterns() {
 
     let mut rng = StdRng::seed_from_u64(42);
 
-    // Constant light stays at max
-    let light = Light {
-        light_index: 0,
-        function: LightFunction::Constant,
-        period: 60,
-        phase: 0,
-        intensity_min: 0.3,
-        intensity_max: 0.9,
-        current_intensity: 0.9,
-    };
-    for tick in 0..100 {
-        let phase = (tick % light.period as u64) as u32;
-        let i = compute_light_intensity(
-            light.intensity_min,
-            light.intensity_max,
-            phase,
-            light.period,
-            light.function,
-            &mut rng,
-        );
+    // Constant function holds at its final intensity regardless of phase.
+    for tick in 0..100u64 {
+        let phase = (tick % 60) as u32;
+        let i = compute_light_intensity(0.3, 0.9, phase, 60, LightFunction::Constant, &mut rng);
         assert!((i - 0.9).abs() < f32::EPSILON);
     }
 
-    // Smooth light oscillates between min and max
-    let smooth = Light {
-        function: LightFunction::Smooth,
-        period: 100,
-        intensity_min: 0.0,
-        intensity_max: 1.0,
-        ..light.clone()
-    };
+    // Smooth function ramps initial -> final across the period.
     let mut min_seen = 1.0f32;
     let mut max_seen = 0.0f32;
-    for tick in 0..100 {
-        let phase = (tick % smooth.period as u64) as u32;
-        let i = compute_light_intensity(
-            smooth.intensity_min,
-            smooth.intensity_max,
-            phase,
-            smooth.period,
-            smooth.function,
-            &mut rng,
-        );
+    for tick in 0..100u64 {
+        let phase = (tick % 100) as u32;
+        let i = compute_light_intensity(0.0, 1.0, phase, 100, LightFunction::Smooth, &mut rng);
         min_seen = min_seen.min(i);
         max_seen = max_seen.max(i);
     }
@@ -1726,23 +1696,25 @@ fn make_light_test_map() -> MapData {
     let mut map = make_test_map();
     map.lights = LightData::Static(vec![StaticLightData {
         light_type: 0,
-        flags: 0,
+        flags: 1, // LIGHT_IS_INITIALLY_ACTIVE -> starts in BecomingActive
         phase: 0,
-        primary_active: LightingFunctionSpec {
+        // becoming_active: a deterministic Smooth ramp 0.0 -> 1.0 over 60 ticks.
+        becoming_active: LightingFunctionSpec {
             function: 2, // Smooth (cosine)
             period: 60,
-            delta_period: 0,
-            intensity: 0.0,
-            delta_intensity: 1.0,
-        },
-        secondary_active: LightingFunctionSpec {
-            function: 0,
-            period: 1,
             delta_period: 0,
             intensity: 1.0,
             delta_intensity: 0.0,
         },
-        becoming_active: LightingFunctionSpec {
+        // primary_active: hold at max.
+        primary_active: LightingFunctionSpec {
+            function: 0, // Constant
+            period: 30,
+            delta_period: 0,
+            intensity: 1.0,
+            delta_intensity: 0.0,
+        },
+        secondary_active: LightingFunctionSpec {
             function: 0,
             period: 1,
             delta_period: 0,
