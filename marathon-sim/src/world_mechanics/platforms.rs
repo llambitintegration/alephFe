@@ -219,6 +219,7 @@ pub fn check_platform_triggers(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::components::PlatformType;
 
     fn make_platform() -> Platform {
         Platform {
@@ -235,6 +236,9 @@ mod tests {
             delay_remaining: 0,
             activation_flags: 0,
             crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
         }
     }
 

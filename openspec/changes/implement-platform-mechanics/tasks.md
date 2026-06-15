@@ -1,9 +1,9 @@
 ## 1. Platform Type Enum and Component Extension
 
 - [x] 1.1 Add `PlatformType` enum to `marathon-sim/src/components.rs` with variants: `ExtendsFloorToCeiling` (0), `ExtendsCeilingToFloor` (1), `ExtendsFloorAndCeiling` (2), `FromFloor` (3), `FromCeiling` (4), `Teleporter` (5). Derive `Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize`.
-- [ ] 1.2 Add `platform_type: PlatformType` field to the `Platform` component struct.
-- [ ] 1.3 Add `linked_platforms: Vec<usize>` and `linked_lights: Vec<usize>` fields to the `Platform` component struct.
-- [ ] 1.4 Update all existing `Platform` construction sites (unit tests in `platforms.rs`, `make_platform()` helper) to include the new fields with default values (`platform_type: PlatformType::FromFloor`, empty vecs).
+- [x] 1.2 Add `platform_type: PlatformType` field to the `Platform` component struct.
+- [x] 1.3 Add `linked_platforms: Vec<usize>` and `linked_lights: Vec<usize>` fields to the `Platform` component struct.
+- [x] 1.4 Update all existing `Platform` construction sites (unit tests in `platforms.rs`, `make_platform()` helper) to include the new fields with default values (`platform_type: PlatformType::FromFloor`, empty vecs).
 
 ## 2. Platform Type-Aware Height Initialization
 

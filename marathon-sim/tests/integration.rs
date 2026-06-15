@@ -592,6 +592,9 @@ fn platform_moves_over_ticks() {
         delay_remaining: 0,
         activation_flags: 0,
         crushes: false,
+        platform_type: marathon_sim::PlatformType::FromFloor,
+        linked_platforms: Vec::new(),
+        linked_lights: Vec::new(),
     };
 
     activate_platform(&mut platform);
@@ -1304,6 +1307,9 @@ fn platform_activation_by_trigger_type() {
         delay_remaining: 0,
         activation_flags: PLATFORM_ACTIVATE_ON_ACTION_KEY | PLATFORM_ACTIVATE_ON_PROJECTILE,
         crushes: false,
+        platform_type: PlatformType::FromFloor,
+        linked_platforms: Vec::new(),
+        linked_lights: Vec::new(),
     };
 
     assert!(!should_activate(&platform, PlatformTrigger::PlayerEntry));
@@ -1339,6 +1345,9 @@ fn platform_crush_vs_reverse() {
         delay_remaining: 0,
         activation_flags: 0,
         crushes: true,
+        platform_type: PlatformType::FromFloor,
+        linked_platforms: Vec::new(),
+        linked_lights: Vec::new(),
     };
 
     // Entity height 0.8, clearance = 3.0 - 2.5 = 0.5 < 0.8
