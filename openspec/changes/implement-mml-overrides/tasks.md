@@ -1,30 +1,30 @@
 ## 1. MML Interpretation Layer
 
-- [ ] 1.1 Create `marathon-formats/src/mml_interpret.rs` module with attribute parsing helpers: `parse_mml_i16`, `parse_mml_i32`, `parse_mml_u32`, `parse_mml_f32`, `parse_mml_bool` with AlephOne-compatible rules (decimal, hex 0x prefix, boolean 1/t/true/0/f/false), returning `Option<T>` and logging warnings for malformed values
+- [x] 1.1 Create `marathon-formats/src/mml_interpret.rs` module with attribute parsing helpers: `parse_mml_i16`, `parse_mml_i32`, `parse_mml_u32`, `parse_mml_f32`, `parse_mml_bool` with AlephOne-compatible rules (decimal, hex 0x prefix, boolean 1/t/true/0/f/false), returning `Option<T>` and logging warnings for malformed values
 - [ ] 1.2 Define `MonsterOverride` struct with `index: usize` and `Option<T>` fields for all `MonsterDefinition` fields (vitality, immunities, weaknesses, flags, class, friends, enemies, sound_pitch, speed, radius, height, visual_range, etc.) plus `must_be_exterminated: Option<bool>`
 - [ ] 1.3 Implement `interpret_monsters(section: &MmlSection) -> Vec<MonsterOverride>` that iterates `<monster>` elements, parses `index` attribute, and maps each recognized attribute to the corresponding `MonsterOverride` field
 - [ ] 1.4 Define `ShellCasingOverride`, `WeaponOrderEntry`, and implement `interpret_weapons(section: &MmlSection)` producing shell casing overrides and weapon order data
 - [ ] 1.5 Define `ProjectileOverride` struct and implement `interpret_projectiles(section: &MmlSection) -> Vec<ProjectileOverride>` for all `ProjectileDefinition` fields
 - [ ] 1.6 Define `EffectOverride` struct and implement `interpret_effects(section: &MmlSection) -> Vec<EffectOverride>` for all `EffectDefinition` fields
 - [ ] 1.7 Define `PlayerOverride` struct and implement `interpret_player(section: &MmlSection) -> PlayerOverride` for player attributes (energy, oxygen, light, visual arcs, swim, powerup durations, starting items)
-- [ ] 1.8 Define `DynamicLimitsOverride` struct and implement `interpret_dynamic_limits(section: &MmlSection) -> DynamicLimitsOverride` parsing child element text content as integers
-- [ ] 1.9 Define `ItemOverride` struct and implement `interpret_items(section: &MmlSection) -> Vec<ItemOverride>` for item type, names, maximum, invalid flag
-- [ ] 1.10 Define `LandscapeOverride` struct and implement `interpret_landscapes(section: &MmlSection)` producing landscape overrides and clear directives
-- [ ] 1.11 Define `TextureLoadingOverride` struct and implement `interpret_texture_loading(section: &MmlSection)` for the landscapes flag and texture_env entries
-- [ ] 1.12 Define `StringSetOverride` as a collection of `(resource_id, string_index) -> String` entries and implement `interpret_stringset(section: &MmlSection)` parsing resource ID from stringset `index` and string entries from child `<string>` elements
-- [ ] 1.13 Define `ScenarioIdOverride` struct and implement `interpret_scenario(section: &MmlSection)` for scenario name, version, id attributes
+- [x] 1.8 Define `DynamicLimitsOverride` struct and implement `interpret_dynamic_limits(section: &MmlSection) -> DynamicLimitsOverride` parsing child element text content as integers
+- [x] 1.9 Define `ItemOverride` struct and implement `interpret_items(section: &MmlSection) -> Vec<ItemOverride>` for item type, names, maximum, invalid flag
+- [x] 1.10 Define `LandscapeOverride` struct and implement `interpret_landscapes(section: &MmlSection)` producing landscape overrides and clear directives
+- [x] 1.11 Define `TextureLoadingOverride` struct and implement `interpret_texture_loading(section: &MmlSection)` for the landscapes flag and texture_env entries
+- [x] 1.12 Define `StringSetOverride` as a collection of `(resource_id, string_index) -> String` entries and implement `interpret_stringset(section: &MmlSection)` parsing resource ID from stringset `index` and string entries from child `<string>` elements
+- [x] 1.13 Define `ScenarioIdOverride` struct and implement `interpret_scenario(section: &MmlSection)` for scenario name, version, id attributes
 - [ ] 1.14 Add stub interpreters for remaining sections (interface, motion_sensor, overhead_map, infravision, animated_textures, control_panels, platforms, liquids, sounds, faders, view, scenery, opengl, software, console, logging) that log "not yet implemented" and return empty/default overrides
-- [ ] 1.15 Register `mml_interpret` module in `marathon-formats/src/lib.rs`
+- [x] 1.15 Register `mml_interpret` module in `marathon-formats/src/lib.rs`
 
 ## 2. Element-Level Merge Logic
 
-- [ ] 2.1 Add `MmlSection::find_element(&self, name: &str, index: &str) -> Option<&MmlElement>` method for index-based element lookup
-- [ ] 2.2 Add `MmlElement::merge_attributes(&mut self, overlay: &MmlElement)` method that copies overlay attributes into self (overlay wins on conflict, base-only attributes preserved)
-- [ ] 2.3 Add `MmlElement::merge_children(&mut self, overlay: &MmlElement)` method that recursively merges child elements by name+index
-- [ ] 2.4 Implement `MmlSection::merge(base: Self, overlay: Self) -> Self` that matches elements by name+index, merges matched pairs, preserves unmatched elements from both sides, and appends non-indexed overlay elements
-- [ ] 2.5 Update `MmlDocument::layer()` to call `MmlSection::merge()` when both base and overlay have the same section, instead of `Option::or`
-- [ ] 2.6 Update existing `layer()` tests to verify element-level merge behavior (monster index preservation, attribute-level merge)
-- [ ] 2.7 Add new tests: overlay modifies one element among many, overlay adds new indexed element, attribute-level merge preserves unmentioned attributes, recursive child merge, three-layer cascade
+- [x] 2.1 Add `MmlSection::find_element(&self, name: &str, index: &str) -> Option<&MmlElement>` method for index-based element lookup
+- [x] 2.2 Add `MmlElement::merge_attributes(&mut self, overlay: &MmlElement)` method that copies overlay attributes into self (overlay wins on conflict, base-only attributes preserved)
+- [x] 2.3 Add `MmlElement::merge_children(&mut self, overlay: &MmlElement)` method that recursively merges child elements by name+index
+- [x] 2.4 Implement `MmlSection::merge(base: Self, overlay: Self) -> Self` that matches elements by name+index, merges matched pairs, preserves unmatched elements from both sides, and appends non-indexed overlay elements
+- [x] 2.5 Update `MmlDocument::layer()` to call `MmlSection::merge()` when both base and overlay have the same section, instead of `Option::or`
+- [x] 2.6 Update existing `layer()` tests to verify element-level merge behavior (monster index preservation, attribute-level merge)
+- [x] 2.7 Add new tests: overlay modifies one element among many, overlay adds new indexed element, attribute-level merge preserves unmentioned attributes, recursive child merge, three-layer cascade
 
 ## 3. Override Cascade Assembly
 

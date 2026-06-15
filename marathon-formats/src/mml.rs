@@ -19,8 +19,13 @@ pub struct MmlElement {
 
 /// A section within an MML document, containing the child elements
 /// found under a recognized `<marathon>` child element.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MmlSection {
+    /// Attributes on the section element itself — e.g. `name`/`id` on
+    /// `<scenario name="..." id="...">` or `landscapes` on
+    /// `<texture_loading landscapes="true">`. Section interpreters read these;
+    /// child elements live in `elements`.
+    pub attributes: HashMap<String, String>,
     pub elements: Vec<MmlElement>,
 }
 
@@ -56,6 +61,86 @@ pub struct MmlDocument {
     pub scenario: Option<MmlSection>,
     pub console: Option<MmlSection>,
     pub logging: Option<MmlSection>,
+}
+
+impl MmlElement {
+    /// Copy `overlay`'s attributes into `self`. Overlay values win on conflict;
+    /// attributes present only on the base element are preserved.
+    pub fn merge_attributes(&mut self, overlay: &MmlElement) {
+        for (k, v) in &overlay.attributes {
+            self.attributes.insert(k.clone(), v.clone());
+        }
+    }
+
+    /// Recursively merge `overlay`'s children into `self`. A child is matched to
+    /// an existing child by `(name, index attribute)`: matched pairs merge their
+    /// attributes and children recursively; unmatched overlay children — those
+    /// with a new `index`, or with no `index` attribute at all — are appended.
+    pub fn merge_children(&mut self, overlay: &MmlElement) {
+        for oc in &overlay.children {
+            match oc.attributes.get("index") {
+                Some(idx) => {
+                    match self
+                        .children
+                        .iter()
+                        .position(|c| c.name == oc.name && c.attributes.get("index") == Some(idx))
+                    {
+                        Some(pos) => {
+                            self.children[pos].merge_attributes(oc);
+                            self.children[pos].merge_children(oc);
+                        }
+                        None => self.children.push(oc.clone()),
+                    }
+                }
+                None => self.children.push(oc.clone()),
+            }
+        }
+    }
+}
+
+impl MmlSection {
+    /// Find the first element matching `name` and the given `index` attribute.
+    pub fn find_element(&self, name: &str, index: &str) -> Option<&MmlElement> {
+        self.elements.iter().find(|e| {
+            e.name == name && e.attributes.get("index").map(String::as_str) == Some(index)
+        })
+    }
+
+    /// Merge `overlay` into `base` at element granularity. Elements are matched
+    /// by `(name, index attribute)`: matched pairs merge their attributes and
+    /// children recursively; unmatched base elements are preserved; unmatched
+    /// overlay elements (new `index`) and non-indexed overlay elements are
+    /// appended. This lets an overlay tweak one element without dropping the
+    /// base's siblings — the property `Option::or` could not provide.
+    pub fn merge(base: Self, overlay: Self) -> Self {
+        // Section-level attributes merge overlay-wins, base-only preserved.
+        let mut attributes = base.attributes;
+        for (k, v) in overlay.attributes {
+            attributes.insert(k, v);
+        }
+        let mut elements = base.elements;
+        for oe in overlay.elements {
+            match oe.attributes.get("index") {
+                Some(idx) => {
+                    match elements
+                        .iter()
+                        .position(|e| e.name == oe.name && e.attributes.get("index") == Some(idx))
+                    {
+                        Some(pos) => {
+                            elements[pos].merge_attributes(&oe);
+                            elements[pos].merge_children(&oe);
+                        }
+                        None => elements.push(oe),
+                    }
+                }
+                None => elements.push(oe),
+            }
+        }
+        Self {
+            attributes,
+            elements,
+        }
+    }
 }
 
 impl MmlDocument {
@@ -111,34 +196,44 @@ impl MmlDocument {
         }
     }
 
-    /// Layer two MML documents. Sections present in `overlay` replace those in `base`.
-    /// Sections absent in `overlay` are preserved from `base`.
+    /// Layer two MML documents. Sections present in both are merged at element
+    /// granularity (see [`MmlSection::merge`]); sections present in only one
+    /// document are carried through unchanged.
     pub fn layer(base: Self, overlay: Self) -> Self {
+        // When a section is present in both documents, merge it at element
+        // granularity (overlay tweaks individual elements without dropping the
+        // base's siblings); otherwise take whichever side has it.
+        fn merge_opt(base: Option<MmlSection>, overlay: Option<MmlSection>) -> Option<MmlSection> {
+            match (base, overlay) {
+                (Some(b), Some(o)) => Some(MmlSection::merge(b, o)),
+                (b, o) => o.or(b),
+            }
+        }
         Self {
-            stringset: overlay.stringset.or(base.stringset),
-            interface: overlay.interface.or(base.interface),
-            motion_sensor: overlay.motion_sensor.or(base.motion_sensor),
-            overhead_map: overlay.overhead_map.or(base.overhead_map),
-            infravision: overlay.infravision.or(base.infravision),
-            animated_textures: overlay.animated_textures.or(base.animated_textures),
-            control_panels: overlay.control_panels.or(base.control_panels),
-            platforms: overlay.platforms.or(base.platforms),
-            liquids: overlay.liquids.or(base.liquids),
-            sounds: overlay.sounds.or(base.sounds),
-            faders: overlay.faders.or(base.faders),
-            player: overlay.player.or(base.player),
-            weapons: overlay.weapons.or(base.weapons),
-            items: overlay.items.or(base.items),
-            monsters: overlay.monsters.or(base.monsters),
-            scenery: overlay.scenery.or(base.scenery),
-            landscapes: overlay.landscapes.or(base.landscapes),
-            texture_loading: overlay.texture_loading.or(base.texture_loading),
-            opengl: overlay.opengl.or(base.opengl),
-            software: overlay.software.or(base.software),
-            dynamic_limits: overlay.dynamic_limits.or(base.dynamic_limits),
-            scenario: overlay.scenario.or(base.scenario),
-            console: overlay.console.or(base.console),
-            logging: overlay.logging.or(base.logging),
+            stringset: merge_opt(base.stringset, overlay.stringset),
+            interface: merge_opt(base.interface, overlay.interface),
+            motion_sensor: merge_opt(base.motion_sensor, overlay.motion_sensor),
+            overhead_map: merge_opt(base.overhead_map, overlay.overhead_map),
+            infravision: merge_opt(base.infravision, overlay.infravision),
+            animated_textures: merge_opt(base.animated_textures, overlay.animated_textures),
+            control_panels: merge_opt(base.control_panels, overlay.control_panels),
+            platforms: merge_opt(base.platforms, overlay.platforms),
+            liquids: merge_opt(base.liquids, overlay.liquids),
+            sounds: merge_opt(base.sounds, overlay.sounds),
+            faders: merge_opt(base.faders, overlay.faders),
+            player: merge_opt(base.player, overlay.player),
+            weapons: merge_opt(base.weapons, overlay.weapons),
+            items: merge_opt(base.items, overlay.items),
+            monsters: merge_opt(base.monsters, overlay.monsters),
+            scenery: merge_opt(base.scenery, overlay.scenery),
+            landscapes: merge_opt(base.landscapes, overlay.landscapes),
+            texture_loading: merge_opt(base.texture_loading, overlay.texture_loading),
+            opengl: merge_opt(base.opengl, overlay.opengl),
+            software: merge_opt(base.software, overlay.software),
+            dynamic_limits: merge_opt(base.dynamic_limits, overlay.dynamic_limits),
+            scenario: merge_opt(base.scenario, overlay.scenario),
+            console: merge_opt(base.console, overlay.console),
+            logging: merge_opt(base.logging, overlay.logging),
         }
     }
 
@@ -198,7 +293,8 @@ fn parse_marathon_body(reader: &mut Reader<&[u8]>) -> Result<MmlDocument, MmlErr
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let name = element_name(&e);
-                let section = parse_section(reader)?;
+                let attributes = parse_attributes(&e)?;
+                let section = parse_section(reader, attributes)?;
                 set_section(&mut doc, &name, section);
             }
             Ok(Event::Empty(e)) => {
@@ -207,6 +303,7 @@ fn parse_marathon_body(reader: &mut Reader<&[u8]>) -> Result<MmlDocument, MmlErr
                     &mut doc,
                     &name,
                     MmlSection {
+                        attributes: parse_attributes(&e)?,
                         elements: Vec::new(),
                     },
                 );
@@ -220,7 +317,10 @@ fn parse_marathon_body(reader: &mut Reader<&[u8]>) -> Result<MmlDocument, MmlErr
     Ok(doc)
 }
 
-fn parse_section(reader: &mut Reader<&[u8]>) -> Result<MmlSection, MmlError> {
+fn parse_section(
+    reader: &mut Reader<&[u8]>,
+    attributes: HashMap<String, String>,
+) -> Result<MmlSection, MmlError> {
     let mut elements = Vec::new();
 
     loop {
@@ -250,7 +350,10 @@ fn parse_section(reader: &mut Reader<&[u8]>) -> Result<MmlSection, MmlError> {
         }
     }
 
-    Ok(MmlSection { elements })
+    Ok(MmlSection {
+        attributes,
+        elements,
+    })
 }
 
 fn parse_element_children(
@@ -437,8 +540,19 @@ mod tests {
         .unwrap();
 
         let result = MmlDocument::layer(base, overlay);
+        // Element-level merge: the overlay adds weapon index="1" without
+        // dropping the base's weapon index="0" — both are present now.
         let weapons = result.weapons.unwrap();
-        assert_eq!(weapons.elements[0].attributes.get("index").unwrap(), "1");
+        assert!(
+            weapons.find_element("weapon", "0").is_some(),
+            "base weapon index=0 should be preserved"
+        );
+        assert!(
+            weapons.find_element("weapon", "1").is_some(),
+            "overlay weapon index=1 should be added"
+        );
+        assert_eq!(weapons.elements.len(), 2);
+        // The base's monsters section (absent from the overlay) is carried over.
         let monsters = result.monsters.unwrap();
         assert_eq!(monsters.elements[0].attributes.get("index").unwrap(), "0");
     }
@@ -482,6 +596,116 @@ mod tests {
         assert!(result.monsters.is_some());
         assert!(result.weapons.is_some());
         assert!(result.sounds.is_some());
+    }
+
+    #[test]
+    fn test_merge_modifies_one_element_among_many() {
+        let base = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"0\" vitality=\"10\"/><monster index=\"1\" vitality=\"20\"/><monster index=\"2\" vitality=\"30\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let overlay = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"1\" vitality=\"99\"/></monsters></marathon>",
+        )
+        .unwrap();
+
+        let monsters = MmlDocument::layer(base, overlay).monsters.unwrap();
+        assert_eq!(monsters.elements.len(), 3, "siblings preserved");
+        assert_eq!(
+            monsters.find_element("monster", "0").unwrap().attributes["vitality"],
+            "10"
+        );
+        assert_eq!(
+            monsters.find_element("monster", "1").unwrap().attributes["vitality"],
+            "99"
+        );
+        assert_eq!(
+            monsters.find_element("monster", "2").unwrap().attributes["vitality"],
+            "30"
+        );
+    }
+
+    #[test]
+    fn test_merge_adds_new_indexed_element() {
+        let base = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"0\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let overlay = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"5\"/></monsters></marathon>",
+        )
+        .unwrap();
+
+        let monsters = MmlDocument::layer(base, overlay).monsters.unwrap();
+        assert_eq!(monsters.elements.len(), 2);
+        assert!(monsters.find_element("monster", "0").is_some());
+        assert!(monsters.find_element("monster", "5").is_some());
+    }
+
+    #[test]
+    fn test_merge_attribute_level_preserves_unmentioned() {
+        let base = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"0\" vitality=\"100\" speed=\"5\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let overlay = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"0\" vitality=\"200\"/></monsters></marathon>",
+        )
+        .unwrap();
+
+        let monsters = MmlDocument::layer(base, overlay).monsters.unwrap();
+        let m = monsters.find_element("monster", "0").unwrap();
+        assert_eq!(m.attributes["vitality"], "200", "overlay wins");
+        assert_eq!(m.attributes["speed"], "5", "base-only attribute preserved");
+    }
+
+    #[test]
+    fn test_merge_recursive_child_merge() {
+        let base = MmlDocument::from_bytes(
+            b"<marathon><weapons><weapon index=\"0\"><trigger index=\"0\" rounds=\"10\"/></weapon></weapons></marathon>",
+        )
+        .unwrap();
+        let overlay = MmlDocument::from_bytes(
+            b"<marathon><weapons><weapon index=\"0\"><trigger index=\"0\" rounds=\"20\"/><trigger index=\"1\" rounds=\"5\"/></weapon></weapons></marathon>",
+        )
+        .unwrap();
+
+        let weapons = MmlDocument::layer(base, overlay).weapons.unwrap();
+        let weapon = weapons.find_element("weapon", "0").unwrap();
+        assert_eq!(weapon.children.len(), 2, "child trigger index=1 appended");
+        let t0 = weapon
+            .children
+            .iter()
+            .find(|c| c.attributes.get("index").map(String::as_str) == Some("0"))
+            .unwrap();
+        assert_eq!(
+            t0.attributes["rounds"], "20",
+            "matched child merged recursively"
+        );
+    }
+
+    #[test]
+    fn test_merge_three_layer_cascade_accumulates_attributes() {
+        let base = MmlDocument::from_bytes(
+            b"<marathon><player><item index=\"0\" amount=\"1\"/></player></marathon>",
+        )
+        .unwrap();
+        let o1 = MmlDocument::from_bytes(
+            b"<marathon><player><item index=\"0\" kind=\"pistol\"/></player></marathon>",
+        )
+        .unwrap();
+        let o2 = MmlDocument::from_bytes(
+            b"<marathon><player><item index=\"0\" count=\"3\"/></player></marathon>",
+        )
+        .unwrap();
+
+        let player = MmlDocument::layer(MmlDocument::layer(base, o1), o2)
+            .player
+            .unwrap();
+        let item = player.find_element("item", "0").unwrap();
+        assert_eq!(item.attributes["amount"], "1");
+        assert_eq!(item.attributes["kind"], "pistol");
+        assert_eq!(item.attributes["count"], "3");
     }
 
     #[test]
