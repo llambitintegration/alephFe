@@ -19,8 +19,13 @@ pub struct MmlElement {
 
 /// A section within an MML document, containing the child elements
 /// found under a recognized `<marathon>` child element.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MmlSection {
+    /// Attributes on the section element itself — e.g. `name`/`id` on
+    /// `<scenario name="..." id="...">` or `landscapes` on
+    /// `<texture_loading landscapes="true">`. Section interpreters read these;
+    /// child elements live in `elements`.
+    pub attributes: HashMap<String, String>,
     pub elements: Vec<MmlElement>,
 }
 
@@ -108,6 +113,11 @@ impl MmlSection {
     /// appended. This lets an overlay tweak one element without dropping the
     /// base's siblings — the property `Option::or` could not provide.
     pub fn merge(base: Self, overlay: Self) -> Self {
+        // Section-level attributes merge overlay-wins, base-only preserved.
+        let mut attributes = base.attributes;
+        for (k, v) in overlay.attributes {
+            attributes.insert(k, v);
+        }
         let mut elements = base.elements;
         for oe in overlay.elements {
             match oe.attributes.get("index") {
@@ -126,7 +136,10 @@ impl MmlSection {
                 None => elements.push(oe),
             }
         }
-        Self { elements }
+        Self {
+            attributes,
+            elements,
+        }
     }
 }
 
@@ -280,7 +293,8 @@ fn parse_marathon_body(reader: &mut Reader<&[u8]>) -> Result<MmlDocument, MmlErr
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 let name = element_name(&e);
-                let section = parse_section(reader)?;
+                let attributes = parse_attributes(&e)?;
+                let section = parse_section(reader, attributes)?;
                 set_section(&mut doc, &name, section);
             }
             Ok(Event::Empty(e)) => {
@@ -289,6 +303,7 @@ fn parse_marathon_body(reader: &mut Reader<&[u8]>) -> Result<MmlDocument, MmlErr
                     &mut doc,
                     &name,
                     MmlSection {
+                        attributes: parse_attributes(&e)?,
                         elements: Vec::new(),
                     },
                 );
@@ -302,7 +317,10 @@ fn parse_marathon_body(reader: &mut Reader<&[u8]>) -> Result<MmlDocument, MmlErr
     Ok(doc)
 }
 
-fn parse_section(reader: &mut Reader<&[u8]>) -> Result<MmlSection, MmlError> {
+fn parse_section(
+    reader: &mut Reader<&[u8]>,
+    attributes: HashMap<String, String>,
+) -> Result<MmlSection, MmlError> {
     let mut elements = Vec::new();
 
     loop {
@@ -332,7 +350,10 @@ fn parse_section(reader: &mut Reader<&[u8]>) -> Result<MmlSection, MmlError> {
         }
     }
 
-    Ok(MmlSection { elements })
+    Ok(MmlSection {
+        attributes,
+        elements,
+    })
 }
 
 fn parse_element_children(

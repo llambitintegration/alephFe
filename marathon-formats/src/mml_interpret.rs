@@ -246,6 +246,71 @@ pub fn interpret_landscapes(section: &MmlSection) -> LandscapesOverride {
     out
 }
 
+/// One `<texture_env index="N" which="W" coll="C"/>` entry under
+/// `<texture_loading>`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextureEnvOverride {
+    pub index: Option<i32>,
+    pub which: Option<i32>,
+    pub coll: Option<i32>,
+}
+
+/// Overrides for the `<texture_loading>` section: the section-level
+/// `landscapes` boolean plus the list of `<texture_env>` entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TextureLoadingOverride {
+    pub landscapes: Option<bool>,
+    pub texture_envs: Vec<TextureEnvOverride>,
+}
+
+/// Interpret a merged `<texture_loading>` section. The `landscapes` flag is read
+/// from the section element's own attributes; each `<texture_env>` child becomes
+/// a [`TextureEnvOverride`].
+pub fn interpret_texture_loading(section: &MmlSection) -> TextureLoadingOverride {
+    let landscapes = section
+        .attributes
+        .get("landscapes")
+        .and_then(|s| parse_mml_bool(s));
+    let mut texture_envs = Vec::new();
+    for el in &section.elements {
+        if el.name != "texture_env" {
+            continue;
+        }
+        texture_envs.push(TextureEnvOverride {
+            index: el.attributes.get("index").and_then(|s| parse_mml_i32(s)),
+            which: el.attributes.get("which").and_then(|s| parse_mml_i32(s)),
+            coll: el.attributes.get("coll").and_then(|s| parse_mml_i32(s)),
+        });
+    }
+    TextureLoadingOverride {
+        landscapes,
+        texture_envs,
+    }
+}
+
+/// Overrides for the `<scenario>` section identity. `name`/`id` are free-form
+/// strings (AlephOne treats the scenario id as an opaque identifier); `version`
+/// is an integer. `None` leaves the engine default.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScenarioIdOverride {
+    pub name: Option<String>,
+    pub version: Option<i32>,
+    pub id: Option<String>,
+}
+
+/// Interpret a `<scenario name="..." version="..." id="...">` section. All three
+/// values live on the section element's own attributes.
+pub fn interpret_scenario(section: &MmlSection) -> ScenarioIdOverride {
+    ScenarioIdOverride {
+        name: section.attributes.get("name").cloned(),
+        version: section
+            .attributes
+            .get("version")
+            .and_then(|s| parse_mml_i32(s)),
+        id: section.attributes.get("id").cloned(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -422,5 +487,63 @@ mod tests {
         let out = interpret_landscapes(&doc.landscapes.unwrap());
         assert_eq!(out.landscapes[0].vert_repeat, Some(true));
         assert_eq!(out.landscapes[0].azimuth, Some(90.0));
+    }
+
+    // ── box 1.11: texture_loading interpreter (reads section attribute) ──
+
+    #[test]
+    fn texture_environment_override() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><texture_loading landscapes=\"true\"><texture_env index=\"0\" which=\"1\" coll=\"17\"/></texture_loading></marathon>",
+        )
+        .unwrap();
+        let out = interpret_texture_loading(&doc.texture_loading.unwrap());
+        assert_eq!(
+            out.landscapes,
+            Some(true),
+            "section-level attribute captured"
+        );
+        assert_eq!(out.texture_envs.len(), 1);
+        assert_eq!(
+            out.texture_envs[0],
+            TextureEnvOverride {
+                index: Some(0),
+                which: Some(1),
+                coll: Some(17)
+            }
+        );
+    }
+
+    // ── box 1.13: scenario interpreter (reads section attributes) ──
+
+    #[test]
+    fn scenario_identity_override() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><scenario name=\"Marathon 2\" version=\"1\" id=\"M2\"/></marathon>",
+        )
+        .unwrap();
+        let out = interpret_scenario(&doc.scenario.unwrap());
+        assert_eq!(out.name.as_deref(), Some("Marathon 2"));
+        assert_eq!(out.version, Some(1));
+        assert_eq!(out.id.as_deref(), Some("M2"));
+    }
+
+    #[test]
+    fn scenario_section_attributes_survive_layering() {
+        // Confirms the parser now captures section-element attributes and that
+        // layering merges them (overlay wins, base-only preserved).
+        let base =
+            MmlDocument::from_bytes(b"<marathon><scenario name=\"Base\" id=\"B\"/></marathon>")
+                .unwrap();
+        let overlay =
+            MmlDocument::from_bytes(b"<marathon><scenario name=\"Override\"/></marathon>").unwrap();
+        let merged = MmlDocument::layer(base, overlay);
+        let out = interpret_scenario(&merged.scenario.unwrap());
+        assert_eq!(out.name.as_deref(), Some("Override"), "overlay wins");
+        assert_eq!(
+            out.id.as_deref(),
+            Some("B"),
+            "base-only attribute preserved"
+        );
     }
 }
