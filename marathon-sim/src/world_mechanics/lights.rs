@@ -25,6 +25,18 @@ pub fn compute_light_intensity(light: &Light, tick: u64, rng: &mut impl Rng) -> 
             // Random value each tick
             light.intensity_min + range * rng.gen::<f32>()
         }
+        LightFunction::Random => {
+            // Uniformly random value across the intensity range each tick.
+            light.intensity_min + range * rng.gen::<f32>()
+        }
+        LightFunction::Fluorescent => {
+            // Snaps to either extreme of the range each tick.
+            if rng.gen::<f32>() > 0.5 {
+                light.intensity_max
+            } else {
+                light.intensity_min
+            }
+        }
     }
 }
 

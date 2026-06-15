@@ -1,13 +1,13 @@
 ## 1. Expand Light Component and Enums
 
-- [ ] 1.1 Add `LightState` enum with 6 variants: `BecomingActive`, `PrimaryActive`, `SecondaryActive`, `BecomingInactive`, `PrimaryInactive`, `SecondaryInactive` to `marathon-sim/src/components.rs`
-- [ ] 1.2 Add `LightType` enum with 3 variants: `Normal`, `Strobe`, `Media` to `marathon-sim/src/components.rs`
-- [ ] 1.3 Add `LightFunctionSpec` struct with fields: `function: LightFunction`, `period: u16`, `delta_period: u16`, `intensity: f32`, `delta_intensity: f32` to `marathon-sim/src/components.rs`
-- [ ] 1.4 Add `Random` and `Fluorescent` variants to `LightFunction` enum
+- [x] 1.1 Add `LightState` enum with 6 variants: `BecomingActive`, `PrimaryActive`, `SecondaryActive`, `BecomingInactive`, `PrimaryInactive`, `SecondaryInactive` to `marathon-sim/src/components.rs`
+- [x] 1.2 Add `LightType` enum with 3 variants: `Normal`, `Strobe`, `Media` to `marathon-sim/src/components.rs`
+- [x] 1.3 Add `LightFunctionSpec` struct with fields: `function: LightFunction`, `period: u16`, `delta_period: u16`, `intensity: f32`, `delta_intensity: f32` to `marathon-sim/src/components.rs`
+- [x] 1.4 Add `Random` and `Fluorescent` variants to `LightFunction` enum
 - [ ] 1.5 Replace the flat `Light` struct fields with state machine fields: `light_index`, `light_type: LightType`, `state: LightState`, `flags: u16`, `phase: u32`, `period: u32`, `current_intensity: f32`, `initial_intensity: f32`, `final_intensity: f32`, `functions: [LightFunctionSpec; 6]`, `tag: i16`
-- [ ] 1.6 Add constants for light flags: `LIGHT_IS_INITIALLY_ACTIVE: u16 = 0x0001`, `LIGHT_HAS_SLAVED_INTENSITIES: u16 = 0x0002`, `LIGHT_IS_STATELESS: u16 = 0x0004`
-- [ ] 1.7 Add `next_state()` method on `LightState` that returns the next state in the cycle
-- [ ] 1.8 Update existing tests in `components.rs` for new `LightFunction` variants
+- [x] 1.6 Add constants for light flags: `LIGHT_IS_INITIALLY_ACTIVE: u16 = 0x0001`, `LIGHT_HAS_SLAVED_INTENSITIES: u16 = 0x0002`, `LIGHT_IS_STATELESS: u16 = 0x0004`
+- [x] 1.7 Add `next_state()` method on `LightState` that returns the next state in the cycle
+- [x] 1.8 Update existing tests in `components.rs` for new `LightFunction` variants
 
 ## 2. Implement Lighting Functions
 
