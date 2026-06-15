@@ -11,7 +11,7 @@
 - [x] 1.9 Define `ItemOverride` struct and implement `interpret_items(section: &MmlSection) -> Vec<ItemOverride>` for item type, names, maximum, invalid flag
 - [x] 1.10 Define `LandscapeOverride` struct and implement `interpret_landscapes(section: &MmlSection)` producing landscape overrides and clear directives
 - [x] 1.11 Define `TextureLoadingOverride` struct and implement `interpret_texture_loading(section: &MmlSection)` for the landscapes flag and texture_env entries
-- [ ] 1.12 Define `StringSetOverride` as a collection of `(resource_id, string_index) -> String` entries and implement `interpret_stringset(section: &MmlSection)` parsing resource ID from stringset `index` and string entries from child `<string>` elements
+- [x] 1.12 Define `StringSetOverride` as a collection of `(resource_id, string_index) -> String` entries and implement `interpret_stringset(section: &MmlSection)` parsing resource ID from stringset `index` and string entries from child `<string>` elements
 - [x] 1.13 Define `ScenarioIdOverride` struct and implement `interpret_scenario(section: &MmlSection)` for scenario name, version, id attributes
 - [ ] 1.14 Add stub interpreters for remaining sections (interface, motion_sensor, overhead_map, infravision, animated_textures, control_panels, platforms, liquids, sounds, faders, view, scenery, opengl, software, console, logging) that log "not yet implemented" and return empty/default overrides
 - [x] 1.15 Register `mml_interpret` module in `marathon-formats/src/lib.rs`

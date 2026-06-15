@@ -311,6 +311,46 @@ pub fn interpret_scenario(section: &MmlSection) -> ScenarioIdOverride {
     }
 }
 
+/// A `<stringset index="R">` override: each entry maps a
+/// `(resource_id, string_index)` pair to its replacement text. One
+/// [`StringSetOverride`] corresponds to a single `<stringset>` section (one
+/// resource id, conventionally 128–149).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StringSetOverride {
+    pub entries: Vec<((i32, i32), String)>,
+}
+
+/// Interpret a merged `<stringset>` section. The resource id is read from the
+/// section element's own `index` attribute; each child `<string index="N">text
+/// </string>` contributes a `((resource_id, N), text)` entry. A section without
+/// a parseable `index` yields no entries (warned). Interpreting multiple
+/// `<stringset>` sections from one document is cascade-level work handled
+/// elsewhere; this operates on a single section per its signature.
+pub fn interpret_stringset(section: &MmlSection) -> StringSetOverride {
+    let resource_id = match section.attributes.get("index") {
+        Some(raw) => match parse_mml_i32(raw) {
+            Some(id) => id,
+            None => return StringSetOverride::default(), // parse_mml_i32 warned
+        },
+        None => {
+            eprintln!("[mml] warning: <stringset> without an index attribute, skipping");
+            return StringSetOverride::default();
+        }
+    };
+    let mut entries = Vec::new();
+    for el in &section.elements {
+        if el.name != "string" {
+            continue;
+        }
+        let Some(idx) = el.attributes.get("index").and_then(|s| parse_mml_i32(s)) else {
+            continue;
+        };
+        let text = el.text.clone().unwrap_or_default();
+        entries.push(((resource_id, idx), text));
+    }
+    StringSetOverride { entries }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -545,5 +585,43 @@ mod tests {
             Some("B"),
             "base-only attribute preserved"
         );
+    }
+
+    // ── box 1.12: stringset interpreter (resource id from section attr) ──
+
+    #[test]
+    fn stringset_override_maps_resource_and_index() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><stringset index=\"128\"><string index=\"0\">Custom error</string></stringset></marathon>",
+        )
+        .unwrap();
+        let out = interpret_stringset(&doc.stringset.unwrap());
+        assert_eq!(out.entries, vec![((128, 0), "Custom error".to_string())]);
+    }
+
+    #[test]
+    fn stringset_multiple_strings_share_resource_id() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><stringset index=\"131\"><string index=\"0\">Zero</string><string index=\"5\">Five</string></stringset></marathon>",
+        )
+        .unwrap();
+        let out = interpret_stringset(&doc.stringset.unwrap());
+        assert_eq!(
+            out.entries,
+            vec![
+                ((131, 0), "Zero".to_string()),
+                ((131, 5), "Five".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn stringset_without_resource_id_is_empty() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><stringset><string index=\"0\">orphan</string></stringset></marathon>",
+        )
+        .unwrap();
+        let out = interpret_stringset(&doc.stringset.unwrap());
+        assert!(out.entries.is_empty(), "no resource id -> no entries");
     }
 }
