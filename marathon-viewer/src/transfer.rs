@@ -1,6 +1,8 @@
-/// Marathon transfer mode constants.
-///
-/// Values mirror Alephone's `map.h` transfer-mode enum (all 28 modes).
+//! Marathon transfer mode constants.
+//!
+//! Values mirror Alephone's `map.h` transfer-mode enum (all 28 modes).
+#![allow(dead_code)]
+
 pub const TRANSFER_NORMAL: u32 = 0;
 pub const TRANSFER_FADE_OUT_TO_BLACK: u32 = 1;
 pub const TRANSFER_INVISIBILITY: u32 = 2;

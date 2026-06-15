@@ -105,6 +105,7 @@ pub enum WallHitResult {
 /// Check if a projectile's movement crosses any solid wall in the current polygon.
 ///
 /// Returns the closest wall hit, if any.
+#[allow(clippy::too_many_arguments)]
 pub fn check_projectile_wall_collision(
     old_pos: Vec2,
     new_pos: Vec2,
@@ -305,10 +306,8 @@ mod tests {
 
     #[test]
     fn advance_straight_line() {
-        let (new_pos, dist) = advance_projectile(
-            Vec3::new(0.0, 0.0, 0.0),
-            Vec3::new(1.0, 0.0, 0.0),
-        );
+        let (new_pos, dist) =
+            advance_projectile(Vec3::new(0.0, 0.0, 0.0), Vec3::new(1.0, 0.0, 0.0));
         assert_eq!(new_pos, Vec3::new(1.0, 0.0, 0.0));
         assert!((dist - 1.0).abs() < f32::EPSILON);
     }
@@ -336,16 +335,15 @@ mod tests {
     #[test]
     fn projectile_hits_wall() {
         // Polygon 0 has a solid wall (line 0) at x=1
-        let adjacency = vec![
-            vec![(0, None)],
-        ];
+        let adjacency = vec![vec![(0, None)]];
         let endpoints = vec![(Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0))];
         let solid = vec![true];
 
         let result = check_projectile_wall_collision(
             Vec2::new(0.5, 0.5),
             Vec2::new(1.5, 0.5),
-            0.5, 0.5,
+            0.5,
+            0.5,
             0,
             &adjacency,
             &endpoints,
@@ -362,16 +360,15 @@ mod tests {
 
     #[test]
     fn projectile_passes_through_passable() {
-        let adjacency = vec![
-            vec![(0, Some(1))],
-        ];
+        let adjacency = vec![vec![(0, Some(1))]];
         let endpoints = vec![(Vec2::new(1.0, 0.0), Vec2::new(1.0, 1.0))];
         let solid = vec![false];
 
         let result = check_projectile_wall_collision(
             Vec2::new(0.5, 0.5),
             Vec2::new(1.5, 0.5),
-            0.5, 0.5,
+            0.5,
+            0.5,
             0,
             &adjacency,
             &endpoints,
@@ -456,7 +453,10 @@ mod tests {
         let vel = Vec3::new(1.0, 0.0, -4.0);
         let reflected = reflect_velocity_floor(vel, 0.5);
         assert_eq!(reflected.x, 1.0);
-        assert!((reflected.z - 2.0).abs() < 0.01, "Z should be halved after 50% energy loss");
+        assert!(
+            (reflected.z - 2.0).abs() < 0.01,
+            "Z should be halved after 50% energy loss"
+        );
     }
 
     fn make_projectile_def(
@@ -531,7 +531,7 @@ mod tests {
 
         let result = compute_detonation(hit_point, &def, None, &entities, false, &mut rng);
         assert_eq!(result.aoe_damages.len(), 2); // center + half radius
-        // Center entity gets full damage
+                                                 // Center entity gets full damage
         assert_eq!(result.aoe_damages[0].0, 0);
         assert_eq!(result.aoe_damages[0].1, 100);
         // Half radius entity gets ~50% damage

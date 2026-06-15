@@ -78,10 +78,7 @@ mod tests {
     #[test]
     fn path_adjacent_polygons() {
         // 0 <-> 1
-        let adjacency = vec![
-            vec![(0, Some(1))],
-            vec![(0, Some(0))],
-        ];
+        let adjacency = vec![vec![(0, Some(1))], vec![(0, Some(0))]];
         let path = find_polygon_path(0, 1, &adjacency, 2);
         assert_eq!(path, Some(vec![0, 1]));
     }
@@ -101,10 +98,7 @@ mod tests {
     #[test]
     fn path_no_connection() {
         // 0 and 1 not connected
-        let adjacency = vec![
-            vec![],
-            vec![],
-        ];
+        let adjacency = vec![vec![], vec![]];
         let path = find_polygon_path(0, 1, &adjacency, 2);
         assert_eq!(path, None);
     }

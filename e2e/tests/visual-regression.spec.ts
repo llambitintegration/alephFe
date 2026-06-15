@@ -1,20 +1,36 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Sample canvas pixels by drawing the WebGL canvas onto a temporary 2D canvas
- * and reading the ImageData. Returns RGBA pixel data.
+ * Sample canvas pixels from the actual composited frame.
+ *
+ * The marathon canvas is driven by wgpu (WebGL2 backend), whose drawing buffer
+ * is NOT preserved after compositing. Reading it in-page via
+ * `ctx2d.drawImage(canvas)` + `getImageData` therefore returns an all-zero
+ * (false-black) buffer regardless of what is on screen. Instead we capture the
+ * element with Playwright's screenshot (the real composited pixels) and decode
+ * the PNG back in the browser through an `<img>` — no extra dependencies.
+ *
+ * Returns RGBA pixel data sampled every 4th pixel (to bound serialization),
+ * preserving the {data, width, height} contract the assertions rely on.
  */
 async function sampleCanvasPixels(
   canvas: import('@playwright/test').Locator,
 ): Promise<{ data: number[]; width: number; height: number }> {
-  return canvas.evaluate((el: HTMLCanvasElement) => {
+  const shot = await canvas.screenshot({ type: 'png' });
+  const dataUrl = `data:image/png;base64,${shot.toString('base64')}`;
+  return canvas.page().evaluate(async (url) => {
+    const img = new Image();
+    await new Promise<void>((resolve, reject) => {
+      img.onload = () => resolve();
+      img.onerror = () => reject(new Error('failed to decode canvas screenshot'));
+      img.src = url;
+    });
     const tmp = document.createElement('canvas');
-    tmp.width = el.width;
-    tmp.height = el.height;
+    tmp.width = img.naturalWidth;
+    tmp.height = img.naturalHeight;
     const ctx = tmp.getContext('2d')!;
-    ctx.drawImage(el, 0, 0);
+    ctx.drawImage(img, 0, 0);
     const imageData = ctx.getImageData(0, 0, tmp.width, tmp.height);
-    // Transfer a sampled subset to avoid serializing millions of bytes.
     // Sample every 4th pixel for performance.
     const sampled: number[] = [];
     for (let i = 0; i < imageData.data.length; i += 16) {
@@ -26,7 +42,7 @@ async function sampleCanvasPixels(
       );
     }
     return { data: sampled, width: tmp.width, height: tmp.height };
-  });
+  }, dataUrl);
 }
 
 test.describe('Visual regression baseline', () => {

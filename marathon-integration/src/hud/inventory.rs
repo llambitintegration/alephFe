@@ -68,8 +68,14 @@ mod tests {
     #[test]
     fn items_produce_visible_slots() {
         let items = vec![
-            InventoryItem { icon_index: 1, count: 3 },
-            InventoryItem { icon_index: 2, count: 1 },
+            InventoryItem {
+                icon_index: 1,
+                count: 3,
+            },
+            InventoryItem {
+                icon_index: 2,
+                count: 1,
+            },
         ];
         let layout = HudLayout::for_resolution(640, 480);
         let panel = InventoryPanel::compute(&items, &layout);

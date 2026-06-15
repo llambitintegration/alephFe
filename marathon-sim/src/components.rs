@@ -185,6 +185,17 @@ pub struct Platform {
     pub crushes: bool,
 }
 
+/// Platform behavior type (Marathon platform definition type field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PlatformType {
+    ExtendsFloorToCeiling = 0,
+    ExtendsCeilingToFloor = 1,
+    ExtendsFloorAndCeiling = 2,
+    FromFloor = 3,
+    FromCeiling = 4,
+    Teleporter = 5,
+}
+
 /// Platform movement state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlatformState {
@@ -213,6 +224,17 @@ pub struct Light {
     pub intensity_max: f32,
     /// Current computed intensity.
     pub current_intensity: f32,
+}
+
+/// Light state-machine phase (Marathon light definition state field).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LightState {
+    BecomingActive,
+    PrimaryActive,
+    SecondaryActive,
+    BecomingInactive,
+    PrimaryInactive,
+    SecondaryInactive,
 }
 
 /// Light animation function types.
@@ -275,5 +297,68 @@ mod tests {
     #[test]
     fn light_function_variants() {
         assert_ne!(LightFunction::Constant, LightFunction::Flicker);
+    }
+
+    #[test]
+    fn light_state_variants_distinct_and_copy_debug() {
+        // All 6 variants exist.
+        let all = [
+            LightState::BecomingActive,
+            LightState::PrimaryActive,
+            LightState::SecondaryActive,
+            LightState::BecomingInactive,
+            LightState::PrimaryInactive,
+            LightState::SecondaryInactive,
+        ];
+
+        // Pairwise distinct.
+        for (i, a) in all.iter().enumerate() {
+            for (j, b) in all.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
+
+        // Explicit spot-check on a key transition pair.
+        assert_ne!(LightState::BecomingActive, LightState::PrimaryActive);
+
+        // Copy + Clone + Debug smoke check.
+        let a = LightState::SecondaryInactive;
+        let b = a; // Copy
+        let c = a.clone(); // Clone
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_eq!(
+            format!("{:?}", LightState::PrimaryInactive),
+            "PrimaryInactive"
+        );
+    }
+
+    #[test]
+    fn platform_type_discriminants_clone_copy_eq_and_serde() {
+        // Explicit discriminants.
+        assert_eq!(PlatformType::ExtendsFloorToCeiling as i32, 0);
+        assert_eq!(PlatformType::ExtendsCeilingToFloor as i32, 1);
+        assert_eq!(PlatformType::ExtendsFloorAndCeiling as i32, 2);
+        assert_eq!(PlatformType::FromFloor as i32, 3);
+        assert_eq!(PlatformType::FromCeiling as i32, 4);
+        assert_eq!(PlatformType::Teleporter as i32, 5);
+
+        // Copy + Clone + PartialEq behavior.
+        let a = PlatformType::Teleporter;
+        let b = a; // Copy
+        let c = a.clone(); // Clone
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(PlatformType::FromFloor, PlatformType::FromCeiling);
+
+        // Serde round-trip (bincode is the serde codec available in this crate;
+        // serde_json is not a dependency and may not be added by this box).
+        let bytes = bincode::serialize(&PlatformType::FromCeiling).unwrap();
+        let back: PlatformType = bincode::deserialize(&bytes).unwrap();
+        assert_eq!(back, PlatformType::FromCeiling);
     }
 }

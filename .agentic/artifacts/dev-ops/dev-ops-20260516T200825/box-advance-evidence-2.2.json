@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "changeId": "fix-dynamic-geometry-rendering",
+  "boxId": "fix-dynamic-geometry-rendering#L10",
+  "testFilePath": "marathon-web/src/mesh.rs",
+  "testStatus": "passed",
+  "filesModified": [
+    "marathon-web/src/mesh.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "writtenPaths": [
+    "marathon-web/src/mesh.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "tasksMdBefore": "619eca9914863e7fa9f31aabe56cbc397b9906ff423178901e1ee10cdf981e35",
+  "tasksMdAfter": "43bf5d8548e3391691343353255dfea1531a3c1d2fb365fc98247931dd1694ed",
+  "generatedAt": "2026-05-16T20:31:55Z",
+  "notes": "Un-baked height and light from build_floor/build_ceiling/build_media_surface. position.y now carries a surface discriminator (SURFACE_FLOOR=0.0, SURFACE_CEILING=1.0, SURFACE_MEDIA=2.0) for the shader (box 3.1) to pick the per-polygon height; light set to UNBAKED_LIGHT=1.0 sentinel for box 3.2. Walls intentionally left baked (span two polygons' heights; outside this box's scope). Tests: floor_height_no_longer_baked_into_vertex_y (two polys, different floor_height -> identical Y, differ only by polygon_index), floor_ceiling_media_light_is_unbaked_sentinel. 28 lib + 8 integration tests pass; wasm32 cargo check green."
+}

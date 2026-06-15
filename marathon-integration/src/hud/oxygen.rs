@@ -14,12 +14,7 @@ pub struct OxygenMeter {
 
 impl OxygenMeter {
     /// Compute oxygen meter rendering data.
-    pub fn compute(
-        oxygen: i16,
-        max_oxygen: i16,
-        in_vacuum: bool,
-        layout: &HudLayout,
-    ) -> Self {
+    pub fn compute(oxygen: i16, max_oxygen: i16, in_vacuum: bool, layout: &HudLayout) -> Self {
         let oxygen_fraction = if max_oxygen > 0 {
             (oxygen as f32 / max_oxygen as f32).clamp(0.0, 1.0)
         } else {

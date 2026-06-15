@@ -2,6 +2,7 @@ use marathon_formats::map::LightData;
 use marathon_formats::{MapData, StaticLightData, WadFile};
 
 /// Metadata about an available level in a map WAD.
+#[allow(dead_code)]
 pub struct LevelInfo {
     pub index: usize,
     pub name: String,
@@ -96,6 +97,6 @@ pub fn evaluate_light_intensity(lights: &LightData, light_index: i16) -> f32 {
 }
 
 fn evaluate_static_light(light: &StaticLightData) -> f32 {
-    let intensity = light.primary_active.intensity as f32 / 65536.0;
+    let intensity = light.primary_active.intensity / 65536.0;
     intensity.clamp(0.0, 1.0)
 }

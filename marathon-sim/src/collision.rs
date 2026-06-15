@@ -52,12 +52,7 @@ pub struct IntersectionResult {
 /// Segment 2: p3 -> p4
 ///
 /// Returns the intersection parameters if segments cross (both t and u in [0, 1]).
-pub fn segment_intersection(
-    p1: Vec2,
-    p2: Vec2,
-    p3: Vec2,
-    p4: Vec2,
-) -> Option<IntersectionResult> {
+pub fn segment_intersection(p1: Vec2, p2: Vec2, p3: Vec2, p4: Vec2) -> Option<IntersectionResult> {
     let d1 = p2 - p1;
     let d2 = p4 - p3;
     let denom = d1.x * d2.y - d1.y * d2.x;
@@ -119,12 +114,7 @@ pub fn point_to_segment_distance(point: Vec2, seg_a: Vec2, seg_b: Vec2) -> (f32,
 }
 
 /// Check if two circles (entities with radii) overlap.
-pub fn circles_overlap(
-    center_a: Vec2,
-    radius_a: f32,
-    center_b: Vec2,
-    radius_b: f32,
-) -> bool {
+pub fn circles_overlap(center_a: Vec2, radius_a: f32, center_b: Vec2, radius_b: f32) -> bool {
     let dist_sq = center_a.distance_squared(center_b);
     let radii_sum = radius_a + radius_b;
     dist_sq <= radii_sum * radii_sum
@@ -237,7 +227,10 @@ mod tests {
 
     #[test]
     fn degenerate_polygon_rejected() {
-        assert!(!point_in_polygon(Vec2::new(0.0, 0.0), &[Vec2::ZERO, Vec2::X]));
+        assert!(!point_in_polygon(
+            Vec2::new(0.0, 0.0),
+            &[Vec2::ZERO, Vec2::X]
+        ));
     }
 
     #[test]
@@ -356,12 +349,16 @@ mod tests {
     #[test]
     fn circles_overlap_test() {
         assert!(circles_overlap(
-            Vec2::new(0.0, 0.0), 1.0,
-            Vec2::new(1.5, 0.0), 1.0,
+            Vec2::new(0.0, 0.0),
+            1.0,
+            Vec2::new(1.5, 0.0),
+            1.0,
         ));
         assert!(!circles_overlap(
-            Vec2::new(0.0, 0.0), 1.0,
-            Vec2::new(3.0, 0.0), 1.0,
+            Vec2::new(0.0, 0.0),
+            1.0,
+            Vec2::new(3.0, 0.0),
+            1.0,
         ));
     }
 

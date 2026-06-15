@@ -1,9 +1,9 @@
-use super::{HudLayout, HudState};
 use super::health::HealthBar;
 use super::inventory::InventoryPanel;
 use super::motion_sensor::MotionSensor;
 use super::oxygen::OxygenMeter;
 use super::weapon::WeaponDisplay;
+use super::{HudLayout, HudState};
 
 /// RGBA color represented as [r, g, b, a] with values in 0.0..1.0.
 pub type Color = [f32; 4];
@@ -186,10 +186,7 @@ impl HudPipeline {
         } else {
             colors::OXYGEN_NORMAL
         };
-        list.quads.push(HudQuad {
-            rect: fill,
-            color,
-        });
+        list.quads.push(HudQuad { rect: fill, color });
     }
 
     fn build_weapon_display(&self, state: &HudState, list: &mut HudDrawList) {
@@ -313,15 +310,18 @@ mod tests {
             weapon_icon_index: Some(5),
             primary_ammo: Some(42),
             secondary_ammo: Some(3),
-            inventory_items: vec![
-                InventoryItem { icon_index: 1, count: 2 },
-            ],
+            inventory_items: vec![InventoryItem {
+                icon_index: 1,
+                count: 2,
+            }],
             player_x: 0,
             player_y: 0,
             player_facing: 0,
-            nearby_entities: vec![
-                RadarEntity { x: 10, y: 0, entity_type: RadarEntityType::Enemy },
-            ],
+            nearby_entities: vec![RadarEntity {
+                x: 10,
+                y: 0,
+                entity_type: RadarEntityType::Enemy,
+            }],
         }
     }
 

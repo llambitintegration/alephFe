@@ -60,8 +60,8 @@ pub enum AudioError {
 impl AudioEngine {
     /// Create a new audio engine with the given configuration.
     pub fn new(config: AudioConfig) -> Result<Self, AudioError> {
-        let audio_manager =
-            AudioManager::new(AudioManagerSettings::default()).map_err(|_| AudioError::InitFailed)?;
+        let audio_manager = AudioManager::new(AudioManagerSettings::default())
+            .map_err(|_| AudioError::InitFailed)?;
 
         Ok(Self {
             audio_manager,
@@ -112,22 +112,20 @@ impl AudioEngine {
         }
 
         // Extract media data for submersion checks
-        self.media_heights = map_data
-            .media
-            .iter()
-            .map(|m| m.height)
-            .collect();
-        self.media_types = map_data
-            .media
-            .iter()
-            .map(|m| m.media_type)
-            .collect();
+        self.media_heights = map_data.media.iter().map(|m| m.height).collect();
+        self.media_types = map_data.media.iter().map(|m| m.media_type).collect();
 
         // Initialize ambient and random sound managers
-        self.ambient_manager
-            .init_level(&map_data.polygons, &map_data.ambient_sounds, &self.sound_defs);
-        self.random_manager
-            .init_level(&map_data.polygons, &map_data.random_sounds, &self.sound_defs);
+        self.ambient_manager.init_level(
+            &map_data.polygons,
+            &map_data.ambient_sounds,
+            &self.sound_defs,
+        );
+        self.random_manager.init_level(
+            &map_data.polygons,
+            &map_data.random_sounds,
+            &self.sound_defs,
+        );
 
         // Start level music
         let song_index = map_data
@@ -357,8 +355,7 @@ impl AudioEngine {
         };
 
         // Compute spatial params
-        let distance =
-            spatial::distance_2d(self.listener.x, self.listener.y, trigger.x, trigger.y);
+        let distance = spatial::distance_2d(self.listener.x, self.listener.y, trigger.x, trigger.y);
         let def_behavior = if trigger.sound_index < self.sound_defs.len() {
             self.sound_defs[trigger.sound_index].behavior()
         } else {
@@ -373,8 +370,7 @@ impl AudioEngine {
             trigger.y,
         );
 
-        let effective_volume =
-            trigger.volume * distance_vol * rear_atten * self.sfx_volume;
+        let effective_volume = trigger.volume * distance_vol * rear_atten * self.sfx_volume;
 
         let playback_rate = if trigger.pitch > 0.0 {
             trigger.pitch as f64
@@ -433,8 +429,7 @@ impl AudioEngine {
                     sound.state.x,
                     sound.state.y,
                 );
-                let distance_vol =
-                    spatial::distance_attenuation(distance, sound.state.behavior);
+                let distance_vol = spatial::distance_attenuation(distance, sound.state.behavior);
                 let (pan, rear_atten) = spatial::directional_pan(
                     self.listener.facing_angle,
                     self.listener.x,
@@ -443,23 +438,18 @@ impl AudioEngine {
                     sound.state.y,
                 );
 
-                let wall_obstruction = if sound
-                    .state
-                    .flags
-                    .contains(SoundFlags::CANNOT_BE_OBSTRUCTED)
-                {
-                    0.0
-                } else {
-                    // Can't use obstruction cache here due to borrow — use 0.0 for now
-                    // Obstruction is computed at play time and doesn't change unless
-                    // the listener or source changes polygon.
-                    0.0
-                };
+                let wall_obstruction =
+                    if sound.state.flags.contains(SoundFlags::CANNOT_BE_OBSTRUCTED) {
+                        0.0
+                    } else {
+                        // Can't use obstruction cache here due to borrow — use 0.0 for now
+                        // Obstruction is computed at play time and doesn't change unless
+                        // the listener or source changes polygon.
+                        0.0
+                    };
 
-                let effective_volume = distance_vol
-                    * rear_atten
-                    * (1.0 - wall_obstruction)
-                    * self.sfx_volume;
+                let effective_volume =
+                    distance_vol * rear_atten * (1.0 - wall_obstruction) * self.sfx_volume;
 
                 (sound.id, effective_volume, pan)
             })
@@ -468,13 +458,10 @@ impl AudioEngine {
         for (id, effective_volume, pan) in updates {
             if let Some(sound) = self.channel_pool.get_mut(id) {
                 sound.state.effective_volume = effective_volume;
-                sound.handle.set_volume(
-                    amplitude_to_db(effective_volume),
-                    Tween::default(),
-                );
                 sound
                     .handle
-                    .set_panning(Panning(pan), Tween::default());
+                    .set_volume(amplitude_to_db(effective_volume), Tween::default());
+                sound.handle.set_panning(Panning(pan), Tween::default());
             }
         }
     }

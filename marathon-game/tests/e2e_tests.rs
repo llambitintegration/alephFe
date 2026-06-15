@@ -67,7 +67,10 @@ fn game_load_level_returns_valid_map() {
     assert!(!map.polygons.is_empty());
     assert!(!map.lines.is_empty());
     assert!(!map.endpoints.is_empty());
-    assert!(map.objects.iter().any(|o| o.object_type == 3), "should have a player start");
+    assert!(
+        map.objects.iter().any(|o| o.object_type == 3),
+        "should have a player start"
+    );
 }
 
 // ── Mesh generation ──────────────────────────────────────────────────
@@ -201,10 +204,14 @@ fn game_light_evaluation_all_polygons() {
     let map = marathon_formats::MapData::from_entry(entry).expect("parse level");
 
     for (i, polygon) in map.polygons.iter().enumerate() {
-        let floor_light =
-            marathon_game_level::evaluate_light_intensity(&map.lights, polygon.floor_lightsource_index);
-        let ceiling_light =
-            marathon_game_level::evaluate_light_intensity(&map.lights, polygon.ceiling_lightsource_index);
+        let floor_light = marathon_game_level::evaluate_light_intensity(
+            &map.lights,
+            polygon.floor_lightsource_index,
+        );
+        let ceiling_light = marathon_game_level::evaluate_light_intensity(
+            &map.lights,
+            polygon.ceiling_lightsource_index,
+        );
 
         assert!(
             (0.0..=1.0).contains(&floor_light),
@@ -221,7 +228,10 @@ fn game_light_evaluation_all_polygons() {
 fn game_light_evaluation_negative_index_returns_full() {
     use marathon_formats::map::LightData;
     let intensity = marathon_game_level::evaluate_light_intensity(&LightData::None, -1);
-    assert!((intensity - 1.0).abs() < 0.001, "negative light index should return 1.0");
+    assert!(
+        (intensity - 1.0).abs() < 0.001,
+        "negative light index should return 1.0"
+    );
 }
 
 // ── Simulation initialization with real data ─────────────────────────
@@ -232,7 +242,8 @@ fn game_sim_init_from_real_level() {
     let wad = marathon_formats::WadFile::open(&paths[0]).expect("open Map WAD");
     let physics = {
         let phys_wad = marathon_formats::WadFile::open(&paths[1]).expect("open physics WAD");
-        marathon_formats::PhysicsData::from_entry(phys_wad.entry(0).unwrap()).expect("parse physics")
+        marathon_formats::PhysicsData::from_entry(phys_wad.entry(0).unwrap())
+            .expect("parse physics")
     };
 
     let entry = wad.entry(0).unwrap();
@@ -242,10 +253,12 @@ fn game_sim_init_from_real_level() {
         random_seed: 42,
         difficulty: 2,
     };
-    let mut world =
-        marathon_sim::world::SimWorld::new(&map, &physics, &config).expect("sim init");
+    let mut world = marathon_sim::world::SimWorld::new(&map, &physics, &config).expect("sim init");
 
-    assert!(world.player_position().is_some(), "player should be spawned");
+    assert!(
+        world.player_position().is_some(),
+        "player should be spawned"
+    );
     assert_eq!(world.tick_count(), 0);
 }
 
@@ -255,7 +268,8 @@ fn game_sim_tick_with_real_data() {
     let wad = marathon_formats::WadFile::open(&paths[0]).expect("open Map WAD");
     let physics = {
         let phys_wad = marathon_formats::WadFile::open(&paths[1]).expect("open physics WAD");
-        marathon_formats::PhysicsData::from_entry(phys_wad.entry(0).unwrap()).expect("parse physics")
+        marathon_formats::PhysicsData::from_entry(phys_wad.entry(0).unwrap())
+            .expect("parse physics")
     };
 
     let entry = wad.entry(0).unwrap();
@@ -266,7 +280,8 @@ fn game_sim_tick_with_real_data() {
 
     // Run 60 ticks (2 seconds) with various inputs — verifies sim processes
     // real physics data without crashing
-    let forward = marathon_sim::tick::ActionFlags::new(marathon_sim::tick::ActionFlags::MOVE_FORWARD);
+    let forward =
+        marathon_sim::tick::ActionFlags::new(marathon_sim::tick::ActionFlags::MOVE_FORWARD);
     let empty = marathon_sim::tick::ActionFlags::new(0);
     let turn_and_move = marathon_sim::tick::ActionFlags::new(
         marathon_sim::tick::ActionFlags::MOVE_FORWARD | marathon_sim::tick::ActionFlags::TURN_RIGHT,
@@ -293,7 +308,8 @@ fn game_sim_entities_from_real_level() {
     let wad = marathon_formats::WadFile::open(&paths[0]).expect("open Map WAD");
     let physics = {
         let phys_wad = marathon_formats::WadFile::open(&paths[1]).expect("open physics WAD");
-        marathon_formats::PhysicsData::from_entry(phys_wad.entry(0).unwrap()).expect("parse physics")
+        marathon_formats::PhysicsData::from_entry(phys_wad.entry(0).unwrap())
+            .expect("parse physics")
     };
 
     let entry = wad.entry(0).unwrap();
@@ -327,7 +343,8 @@ fn game_sim_snapshot_from_real_level() {
     let wad = marathon_formats::WadFile::open(&paths[0]).expect("open Map WAD");
     let physics = {
         let phys_wad = marathon_formats::WadFile::open(&paths[1]).expect("open physics WAD");
-        marathon_formats::PhysicsData::from_entry(phys_wad.entry(0).unwrap()).expect("parse physics")
+        marathon_formats::PhysicsData::from_entry(phys_wad.entry(0).unwrap())
+            .expect("parse physics")
     };
 
     let entry = wad.entry(0).unwrap();
@@ -363,7 +380,8 @@ fn game_full_pipeline_integration() {
     let shapes = marathon_formats::ShapesFile::open(&paths[1]).expect("open Shapes");
     let physics = {
         let phys_wad = marathon_formats::WadFile::open(&paths[2]).expect("open physics WAD");
-        marathon_formats::PhysicsData::from_entry(phys_wad.entry(0).unwrap()).expect("parse physics")
+        marathon_formats::PhysicsData::from_entry(phys_wad.entry(0).unwrap())
+            .expect("parse physics")
     };
 
     let entry = wad.entry(0).unwrap();
@@ -383,7 +401,8 @@ fn game_full_pipeline_integration() {
     let mut world = marathon_sim::world::SimWorld::new(&map, &physics, &config).unwrap();
 
     // 4. Run simulation
-    let forward = marathon_sim::tick::ActionFlags::new(marathon_sim::tick::ActionFlags::MOVE_FORWARD);
+    let forward =
+        marathon_sim::tick::ActionFlags::new(marathon_sim::tick::ActionFlags::MOVE_FORWARD);
     for _ in 0..60 {
         world.tick(forward.into());
     }
@@ -447,10 +466,16 @@ mod marathon_game_mesh {
             let floor_y = world_to_f32(polygon.floor_height);
             for i in 0..vert_count {
                 let ep_idx = polygon.endpoint_indexes[i];
-                if ep_idx < 0 { continue; }
+                if ep_idx < 0 {
+                    continue;
+                }
                 let ep = &map.endpoints[ep_idx as usize];
                 vertices.push(Vertex {
-                    position: [world_to_f32(ep.vertex.x), floor_y, world_to_f32(ep.vertex.y)],
+                    position: [
+                        world_to_f32(ep.vertex.x),
+                        floor_y,
+                        world_to_f32(ep.vertex.y),
+                    ],
                     uv: [0.0, 0.0],
                     polygon_index: poly_idx as u32,
                     texture_descriptor: polygon.floor_texture.0 as u32,
@@ -467,7 +492,9 @@ mod marathon_game_mesh {
             let ceil_y = world_to_f32(polygon.ceiling_height);
             for i in 0..vert_count {
                 let ep_idx = polygon.endpoint_indexes[i];
-                if ep_idx < 0 { continue; }
+                if ep_idx < 0 {
+                    continue;
+                }
                 let ep = &map.endpoints[ep_idx as usize];
                 vertices.push(Vertex {
                     position: [world_to_f32(ep.vertex.x), ceil_y, world_to_f32(ep.vertex.y)],
@@ -486,10 +513,20 @@ mod marathon_game_mesh {
         // Walls from sides
         for line in &map.lines {
             for &(side_idx, poly_owner, reverse) in &[
-                (line.clockwise_polygon_side_index, line.clockwise_polygon_owner, false),
-                (line.counterclockwise_polygon_side_index, line.counterclockwise_polygon_owner, true),
+                (
+                    line.clockwise_polygon_side_index,
+                    line.clockwise_polygon_owner,
+                    false,
+                ),
+                (
+                    line.counterclockwise_polygon_side_index,
+                    line.counterclockwise_polygon_owner,
+                    true,
+                ),
             ] {
-                if side_idx < 0 || poly_owner < 0 { continue; }
+                if side_idx < 0 || poly_owner < 0 {
+                    continue;
+                }
                 if let Some(side) = map.sides.get(side_idx as usize) {
                     let polygon = &map.polygons[poly_owner as usize];
                     let (ep0_idx, ep1_idx) = if reverse {
@@ -511,10 +548,30 @@ mod marathon_game_mesh {
                         let top = world_to_f32(polygon.ceiling_height);
                         if top > bottom {
                             let base = vertices.len() as u32;
-                            vertices.push(Vertex { position: [x0, bottom, z0], uv: [0.0, 0.0], polygon_index: poly_owner as u32, texture_descriptor: 0 });
-                            vertices.push(Vertex { position: [x0, top, z0], uv: [0.0, 0.0], polygon_index: poly_owner as u32, texture_descriptor: 0 });
-                            vertices.push(Vertex { position: [x1, top, z1], uv: [0.0, 0.0], polygon_index: poly_owner as u32, texture_descriptor: 0 });
-                            vertices.push(Vertex { position: [x1, bottom, z1], uv: [0.0, 0.0], polygon_index: poly_owner as u32, texture_descriptor: 0 });
+                            vertices.push(Vertex {
+                                position: [x0, bottom, z0],
+                                uv: [0.0, 0.0],
+                                polygon_index: poly_owner as u32,
+                                texture_descriptor: 0,
+                            });
+                            vertices.push(Vertex {
+                                position: [x0, top, z0],
+                                uv: [0.0, 0.0],
+                                polygon_index: poly_owner as u32,
+                                texture_descriptor: 0,
+                            });
+                            vertices.push(Vertex {
+                                position: [x1, top, z1],
+                                uv: [0.0, 0.0],
+                                polygon_index: poly_owner as u32,
+                                texture_descriptor: 0,
+                            });
+                            vertices.push(Vertex {
+                                position: [x1, bottom, z1],
+                                uv: [0.0, 0.0],
+                                polygon_index: poly_owner as u32,
+                                texture_descriptor: 0,
+                            });
                             indices.push(base);
                             indices.push(base + 1);
                             indices.push(base + 2);
@@ -609,8 +666,18 @@ mod marathon_game_texture {
                         continue;
                     }
                     let clut = &collection.color_tables[0];
-                    let max_width = collection.bitmaps.iter().map(|b| b.width as u32).max().unwrap_or(1);
-                    let max_height = collection.bitmaps.iter().map(|b| b.height as u32).max().unwrap_or(1);
+                    let max_width = collection
+                        .bitmaps
+                        .iter()
+                        .map(|b| b.width as u32)
+                        .max()
+                        .unwrap_or(1);
+                    let max_height = collection
+                        .bitmaps
+                        .iter()
+                        .map(|b| b.height as u32)
+                        .max()
+                        .unwrap_or(1);
 
                     let bitmaps: Vec<Vec<u8>> = collection
                         .bitmaps
@@ -632,7 +699,11 @@ mod marathon_game_texture {
                                         rgba[dst_idx] = (color.red >> 8) as u8;
                                         rgba[dst_idx + 1] = (color.green >> 8) as u8;
                                         rgba[dst_idx + 2] = (color.blue >> 8) as u8;
-                                        rgba[dst_idx + 3] = if bitmap.transparent && pixel == 0 { 0 } else { 255 };
+                                        rgba[dst_idx + 3] = if bitmap.transparent && pixel == 0 {
+                                            0
+                                        } else {
+                                            255
+                                        };
                                     }
                                 }
                             }
@@ -640,7 +711,14 @@ mod marathon_game_texture {
                         })
                         .collect();
 
-                    collections.insert(coll_idx, LoadedCollection { bitmaps, max_width, max_height });
+                    collections.insert(
+                        coll_idx,
+                        LoadedCollection {
+                            bitmaps,
+                            max_width,
+                            max_height,
+                        },
+                    );
                 }
             }
 
