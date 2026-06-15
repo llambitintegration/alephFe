@@ -9,7 +9,7 @@
 - [ ] 1.7 Define `PlayerOverride` struct and implement `interpret_player(section: &MmlSection) -> PlayerOverride` for player attributes (energy, oxygen, light, visual arcs, swim, powerup durations, starting items)
 - [x] 1.8 Define `DynamicLimitsOverride` struct and implement `interpret_dynamic_limits(section: &MmlSection) -> DynamicLimitsOverride` parsing child element text content as integers
 - [x] 1.9 Define `ItemOverride` struct and implement `interpret_items(section: &MmlSection) -> Vec<ItemOverride>` for item type, names, maximum, invalid flag
-- [ ] 1.10 Define `LandscapeOverride` struct and implement `interpret_landscapes(section: &MmlSection)` producing landscape overrides and clear directives
+- [x] 1.10 Define `LandscapeOverride` struct and implement `interpret_landscapes(section: &MmlSection)` producing landscape overrides and clear directives
 - [ ] 1.11 Define `TextureLoadingOverride` struct and implement `interpret_texture_loading(section: &MmlSection)` for the landscapes flag and texture_env entries
 - [ ] 1.12 Define `StringSetOverride` as a collection of `(resource_id, string_index) -> String` entries and implement `interpret_stringset(section: &MmlSection)` parsing resource ID from stringset `index` and string entries from child `<string>` elements
 - [ ] 1.13 Define `ScenarioIdOverride` struct and implement `interpret_scenario(section: &MmlSection)` for scenario name, version, id attributes

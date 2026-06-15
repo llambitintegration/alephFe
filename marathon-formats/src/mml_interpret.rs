@@ -186,6 +186,66 @@ pub fn interpret_items(section: &MmlSection) -> Vec<ItemOverride> {
     out
 }
 
+/// Overrides for one `<landscape>` element. `collection` carries the `coll`
+/// attribute; the `*_exp` fields are integer exponents. `vert_repeat` parses
+/// as a bool (accepting `true`/`false` or `1`/`0`) and `azimuth` as a float
+/// (accepting integer or fractional notation). `None` leaves the default.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LandscapeOverride {
+    pub collection: Option<i32>,
+    pub frame: Option<i32>,
+    pub horiz_exp: Option<i32>,
+    pub vert_exp: Option<i32>,
+    pub ogl_asprat_exp: Option<i32>,
+    pub vert_repeat: Option<bool>,
+    pub azimuth: Option<f32>,
+}
+
+/// Result of interpreting a `<landscapes>` section: the per-`<landscape>`
+/// overrides plus the collection indices named by `<clear>` directives.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LandscapesOverride {
+    pub landscapes: Vec<LandscapeOverride>,
+    pub clears: Vec<i32>,
+}
+
+/// Interpret a merged `<landscapes>` section into landscape overrides and
+/// `<clear>` directives. `<landscape>` elements produce a [`LandscapeOverride`];
+/// `<clear coll="N"/>` elements add `N` to the clear list; other elements are
+/// ignored.
+pub fn interpret_landscapes(section: &MmlSection) -> LandscapesOverride {
+    let mut out = LandscapesOverride::default();
+    for el in &section.elements {
+        match el.name.as_str() {
+            "landscape" => out.landscapes.push(LandscapeOverride {
+                collection: el.attributes.get("coll").and_then(|s| parse_mml_i32(s)),
+                frame: el.attributes.get("frame").and_then(|s| parse_mml_i32(s)),
+                horiz_exp: el
+                    .attributes
+                    .get("horiz_exp")
+                    .and_then(|s| parse_mml_i32(s)),
+                vert_exp: el.attributes.get("vert_exp").and_then(|s| parse_mml_i32(s)),
+                ogl_asprat_exp: el
+                    .attributes
+                    .get("ogl_asprat_exp")
+                    .and_then(|s| parse_mml_i32(s)),
+                vert_repeat: el
+                    .attributes
+                    .get("vert_repeat")
+                    .and_then(|s| parse_mml_bool(s)),
+                azimuth: el.attributes.get("azimuth").and_then(|s| parse_mml_f32(s)),
+            }),
+            "clear" => {
+                if let Some(coll) = el.attributes.get("coll").and_then(|s| parse_mml_i32(s)) {
+                    out.clears.push(coll);
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,5 +377,50 @@ mod tests {
         assert_eq!(it.plural.as_deref(), Some("Magnums"));
         assert_eq!(it.maximum, Some(9));
         assert_eq!(it.invalid, Some(true));
+    }
+
+    // ── box 1.10: landscapes interpreter ──
+
+    #[test]
+    fn landscape_assignment_override() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><landscapes><landscape coll=\"27\" frame=\"0\" horiz_exp=\"1\"/></landscapes></marathon>",
+        )
+        .unwrap();
+        let out = interpret_landscapes(&doc.landscapes.unwrap());
+        assert_eq!(out.landscapes.len(), 1);
+        assert_eq!(
+            out.landscapes[0],
+            LandscapeOverride {
+                collection: Some(27),
+                frame: Some(0),
+                horiz_exp: Some(1),
+                ..Default::default()
+            }
+        );
+        assert!(out.clears.is_empty());
+    }
+
+    #[test]
+    fn landscape_clear_directive() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><landscapes><clear coll=\"5\"/><clear coll=\"9\"/></landscapes></marathon>",
+        )
+        .unwrap();
+        let out = interpret_landscapes(&doc.landscapes.unwrap());
+        assert!(out.landscapes.is_empty());
+        assert_eq!(out.clears, vec![5, 9]);
+    }
+
+    #[test]
+    fn landscape_vert_repeat_and_azimuth_accept_flexible_forms() {
+        // vert_repeat accepts 1/0 or true/false; azimuth accepts int or float.
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><landscapes><landscape coll=\"3\" vert_repeat=\"1\" azimuth=\"90\"/></landscapes></marathon>",
+        )
+        .unwrap();
+        let out = interpret_landscapes(&doc.landscapes.unwrap());
+        assert_eq!(out.landscapes[0].vert_repeat, Some(true));
+        assert_eq!(out.landscapes[0].azimuth, Some(90.0));
     }
 }
