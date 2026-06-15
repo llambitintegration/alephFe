@@ -47,11 +47,19 @@ pub enum PreferencesCategory {
 #[derive(Debug, Clone)]
 pub enum PreferenceValue {
     /// A slider value (current, min, max, step).
-    Slider { current: f32, min: f32, max: f32, step: f32 },
+    Slider {
+        current: f32,
+        min: f32,
+        max: f32,
+        step: f32,
+    },
     /// A toggle (on/off).
     Toggle(bool),
     /// A choice among discrete options (current index, labels).
-    Choice { current: usize, options: Vec<String> },
+    Choice {
+        current: usize,
+        options: Vec<String>,
+    },
 }
 
 /// A preference item displayed in the preferences screen.
@@ -270,7 +278,12 @@ mod tests {
         apply_preference(
             &mut prefs,
             "Mouse Sensitivity",
-            &PreferenceValue::Slider { current: 2.5, min: 0.1, max: 5.0, step: 0.1 },
+            &PreferenceValue::Slider {
+                current: 2.5,
+                min: 0.1,
+                max: 5.0,
+                step: 0.1,
+            },
         );
         assert!((prefs.input.mouse_sensitivity - 2.5).abs() < f64::EPSILON);
     }
@@ -284,8 +297,12 @@ mod tests {
             &PreferenceValue::Choice {
                 current: 4,
                 options: vec![
-                    "640x480".into(), "800x600".into(), "1024x768".into(),
-                    "1280x720".into(), "1920x1080".into(), "2560x1440".into(),
+                    "640x480".into(),
+                    "800x600".into(),
+                    "1024x768".into(),
+                    "1280x720".into(),
+                    "1920x1080".into(),
+                    "2560x1440".into(),
                 ],
             },
         );

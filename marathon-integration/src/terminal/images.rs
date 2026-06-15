@@ -1,10 +1,10 @@
-/// Terminal image loading and rendering bridge.
-///
-/// Marathon terminals can display inline images referenced by PICT resource ID.
-/// In the original engine, these were Mac PICT resources stored in the scenario's
-/// resource fork. In our implementation, we load image data from the scenario's
-/// shapes collections or external image data and convert them to RGBA pixel buffers
-/// for rendering as textured quads in the terminal view.
+//! Terminal image loading and rendering bridge.
+//!
+//! Marathon terminals can display inline images referenced by PICT resource ID.
+//! In the original engine, these were Mac PICT resources stored in the scenario's
+//! resource fork. In our implementation, we load image data from the scenario's
+//! shapes collections or external image data and convert them to RGBA pixel buffers
+//! for rendering as textured quads in the terminal view.
 
 /// Decoded image data ready for GPU upload.
 #[derive(Debug, Clone)]
@@ -32,13 +32,16 @@ impl TerminalImageCache {
 
     /// Look up a cached image by resource ID.
     pub fn get(&self, resource_id: u16) -> Option<&TerminalImageData> {
-        self.images.iter().find(|img| img.resource_id == resource_id)
+        self.images
+            .iter()
+            .find(|img| img.resource_id == resource_id)
     }
 
     /// Insert a decoded image into the cache.
     pub fn insert(&mut self, image: TerminalImageData) {
         // Replace existing entry for same resource ID
-        self.images.retain(|img| img.resource_id != image.resource_id);
+        self.images
+            .retain(|img| img.resource_id != image.resource_id);
         self.images.push(image);
     }
 
@@ -102,7 +105,7 @@ pub fn placeholder_image(resource_id: u16) -> TerminalImageData {
     // Checkerboard pattern in dark colors to indicate missing image
     for y in 0..height {
         for x in 0..width {
-            let checker = ((x / 8) + (y / 8)) % 2 == 0;
+            let checker = ((x / 8) + (y / 8)).is_multiple_of(2);
             let c = if checker { 30u8 } else { 15u8 };
             rgba_data.extend_from_slice(&[c, c, c, 255]);
         }

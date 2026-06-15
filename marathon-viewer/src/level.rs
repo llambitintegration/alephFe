@@ -119,6 +119,7 @@ impl PlatformState {
 }
 
 /// Media animation state.
+#[allow(dead_code)]
 pub struct MediaState {
     pub polygon_index: usize,
     pub current_height: f32,
@@ -127,12 +128,17 @@ pub struct MediaState {
 }
 
 impl MediaState {
+    #[allow(dead_code)]
     pub fn from_data(media: &MediaData, map: &MapData) -> Option<Self> {
         // Find the polygon that references this media
-        let poly_idx = map
-            .polygons
-            .iter()
-            .position(|p| p.media_index >= 0 && map.media.get(p.media_index as usize).map(|m| std::ptr::eq(m, media)).unwrap_or(false));
+        let poly_idx = map.polygons.iter().position(|p| {
+            p.media_index >= 0
+                && map
+                    .media
+                    .get(p.media_index as usize)
+                    .map(|m| std::ptr::eq(m, media))
+                    .unwrap_or(false)
+        });
 
         poly_idx.map(|idx| MediaState {
             polygon_index: idx,
@@ -173,6 +179,6 @@ fn evaluate_static_light(light: &StaticLightData) -> f32 {
     // Use the primary active function's intensity as the base value.
     // The light function spec has intensity and delta fields.
     // For static evaluation, use the primary active intensity.
-    let intensity = light.primary_active.intensity as f32 / 65536.0;
+    let intensity = light.primary_active.intensity / 65536.0;
     intensity.clamp(0.0, 1.0)
 }

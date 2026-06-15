@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "changeId": "fix-dynamic-geometry-rendering",
+  "boxId": "fix-dynamic-geometry-rendering#L5",
+  "testFilePath": "marathon-web/src/poly_data.rs",
+  "testStatus": "passed",
+  "filesModified": [
+    "marathon-web/src/poly_data.rs",
+    "marathon-web/src/render.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "writtenPaths": [
+    "marathon-web/src/poly_data.rs",
+    "marathon-web/src/render.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "tasksMdBefore": "b019d45c21bccecb2d4484d7e3896f56c47e4ac887e3f57ec5e5c2c2e3f72c8c",
+  "tasksMdAfter": "a4b83179c1fdf6827b9a2a4f6ec31324f069686e0b044e3cf6bc2d77ba6d5e1b",
+  "generatedAt": "2026-05-16T20:21:09Z",
+  "notes": "Added write_poly_data_texture(queue, texture, &[PolyDynData]) plus data_texture_copy_layout and DATA_TEXTURE_BYTES_PER_ROW. Helper packs and uploads via queue.write_texture using the 2-texels/polygon layout. Wired an initial default upload in load_level_into. Tests: copy_layout_bytes_per_row_matches_packed_buffer and round_trip_through_texel_byte_layout_yields_input (pack -> bytes -> f32 -> unpack reproduces input) pass; all 8 poly_data tests green; wasm32 cargo check green."
+}

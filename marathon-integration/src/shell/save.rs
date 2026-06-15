@@ -93,8 +93,7 @@ impl SaveManager {
         let encoded =
             bincode::serialize(data).map_err(|e| SaveError::SerializeError(e.to_string()))?;
 
-        fs::write(self.slot_path(slot), encoded)
-            .map_err(|e| SaveError::IoError(e.to_string()))?;
+        fs::write(self.slot_path(slot), encoded).map_err(|e| SaveError::IoError(e.to_string()))?;
 
         Ok(())
     }

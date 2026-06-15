@@ -8,15 +8,15 @@ pub fn compute_light_intensity(light: &Light, tick: u64, rng: &mut impl Rng) -> 
     match light.function {
         LightFunction::Constant => light.intensity_max,
         LightFunction::Linear => {
-            let t = ((tick + light.phase as u64) % light.period as u64) as f32
-                / light.period as f32;
+            let t =
+                ((tick + light.phase as u64) % light.period as u64) as f32 / light.period as f32;
             // Triangle wave: 0->1->0 over one period
             let wave = if t < 0.5 { t * 2.0 } else { 2.0 - t * 2.0 };
             light.intensity_min + range * wave
         }
         LightFunction::Smooth => {
-            let t = ((tick + light.phase as u64) % light.period as u64) as f32
-                / light.period as f32;
+            let t =
+                ((tick + light.phase as u64) % light.period as u64) as f32 / light.period as f32;
             // Cosine wave: smooth oscillation
             let wave = (1.0 - (t * std::f32::consts::TAU).cos()) * 0.5;
             light.intensity_min + range * wave

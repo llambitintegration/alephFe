@@ -55,6 +55,7 @@ impl TerminalPageLayout {
 ///   - None = unconditional (always show)
 ///   - Some(true) = show on success
 ///   - Some(false) = show on failure
+#[allow(dead_code)]
 pub fn evaluate_conditional_groups(
     mission_success: bool,
     groups: &[(Option<bool>, Vec<TerminalLine>)],
@@ -150,10 +151,7 @@ mod tests {
             style: TerminalStyle::Information,
         }];
 
-        let groups = vec![
-            (Some(true), success_lines),
-            (Some(false), failure_lines),
-        ];
+        let groups = vec![(Some(true), success_lines), (Some(false), failure_lines)];
 
         let result = evaluate_conditional_groups(false, &groups);
         assert_eq!(result.len(), 1);

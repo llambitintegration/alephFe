@@ -222,6 +222,7 @@ pub enum AttackResult {
 }
 
 /// Determine what attack a monster should execute this tick.
+#[allow(clippy::too_many_arguments)]
 pub fn compute_monster_attack(
     state: MonsterState,
     distance_to_target: f32,
@@ -351,9 +352,7 @@ mod tests {
 
     #[test]
     fn cascade_skips_already_alerted() {
-        let monsters = vec![
-            (Vec2::new(1.0, 0.0), 0, 0xFF, MonsterState::Alerted),
-        ];
+        let monsters = vec![(Vec2::new(1.0, 0.0), 0, 0xFF, MonsterState::Alerted)];
         let targets = find_cascade_targets(Vec2::ZERO, 0, 0xFF, &monsters, 10.0);
         assert!(targets.is_empty());
     }
@@ -398,9 +397,18 @@ mod tests {
     #[test]
     fn monster_melee_attack_in_range() {
         let result = compute_monster_attack(
-            MonsterState::Attacking, 0.5, 0,
-            1.0, 10, 5, 0, 1.0,
-            10.0, 0, Vec3::ZERO, 0.0,
+            MonsterState::Attacking,
+            0.5,
+            0,
+            1.0,
+            10,
+            5,
+            0,
+            1.0,
+            10.0,
+            0,
+            Vec3::ZERO,
+            0.0,
         );
         matches!(result, AttackResult::Melee { .. });
     }
@@ -408,9 +416,18 @@ mod tests {
     #[test]
     fn monster_ranged_attack() {
         let result = compute_monster_attack(
-            MonsterState::Attacking, 5.0, 0,
-            1.0, 10, 5, 0, 1.0,
-            10.0, 3, Vec3::new(0.0, 0.0, 0.5), 0.1,
+            MonsterState::Attacking,
+            5.0,
+            0,
+            1.0,
+            10,
+            5,
+            0,
+            1.0,
+            10.0,
+            3,
+            Vec3::new(0.0, 0.0, 0.5),
+            0.1,
         );
         matches!(result, AttackResult::Ranged { .. });
     }
@@ -418,9 +435,18 @@ mod tests {
     #[test]
     fn monster_no_attack_on_cooldown() {
         let result = compute_monster_attack(
-            MonsterState::Attacking, 0.5, 5,
-            1.0, 10, 5, 0, 1.0,
-            10.0, 0, Vec3::ZERO, 0.0,
+            MonsterState::Attacking,
+            0.5,
+            5,
+            1.0,
+            10,
+            5,
+            0,
+            1.0,
+            10.0,
+            0,
+            Vec3::ZERO,
+            0.0,
         );
         matches!(result, AttackResult::None);
     }

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "changeId": "fix-dynamic-geometry-rendering",
+  "boxId": "fix-dynamic-geometry-rendering#L11",
+  "testFilePath": "marathon-web/src/poly_data.rs",
+  "testStatus": "passed",
+  "filesModified": [
+    "marathon-web/src/poly_data.rs",
+    "marathon-web/src/render.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "writtenPaths": [
+    "marathon-web/src/poly_data.rs",
+    "marathon-web/src/render.rs",
+    "openspec/changes/fix-dynamic-geometry-rendering/tasks.md"
+  ],
+  "tasksMdBefore": "43bf5d8548e3391691343353255dfea1531a3c1d2fb365fc98247931dd1694ed",
+  "tasksMdAfter": "3c3ef741243b9484d1b110cfcd2f5e020e3bb1ca6c862e0f49102202cde1b2a6",
+  "generatedAt": "2026-05-16T20:39:25Z",
+  "notes": "Added build_poly_dyn_data(map) -> Vec<PolyDynData>: floor/ceiling/media heights scaled identically to mesh::world_to_f32, floor/ceiling light via the same level::evaluate_light_intensity path the renderer used pre-change. Wired into load_level_into to replace the default-zero upload. Test initial_poly_dyn_data_reproduces_prechange_baked_values asserts heights == old baked position.y values and light == evaluate_light_intensity result. 29 lib + 8 integration tests pass; wasm32 cargo check green."
+}

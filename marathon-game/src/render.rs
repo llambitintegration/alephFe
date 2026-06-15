@@ -139,6 +139,7 @@ impl CameraState {
         proj * view
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn to_uniform(&self, aspect: f32, elapsed: f32) -> CameraUniform {
         let vp = self.view_proj(aspect);
         CameraUniform {
@@ -184,6 +185,7 @@ impl InputState {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn to_tick_input(&mut self) -> TickInput {
         let mut bits = 0u32;
         if self.forward {
@@ -252,6 +254,7 @@ struct GpuState {
     fallback_bind_group: wgpu::BindGroup,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     sprite_renderer: Option<SpriteRenderer>,
+    #[allow(dead_code)]
     camera_bind_group_layout: wgpu::BindGroupLayout,
 }
 
@@ -475,11 +478,8 @@ impl App {
             .filter_map(|entity| {
                 // Use shape field as collection index, frame as the frame index
                 let collection_idx = entity.shape;
-                let view_angle = crate::sprites::compute_view_angle(
-                    camera_pos,
-                    entity.position,
-                    entity.facing,
-                );
+                let view_angle =
+                    crate::sprites::compute_view_angle(camera_pos, entity.position, entity.facing);
 
                 let (bitmap_index, width, height) = crate::sprites::resolve_entity_sprite(
                     shapes,
@@ -619,20 +619,20 @@ impl App {
 
         // Upload to GPU
         if let Some(gpu) = &mut self.gpu {
-            gpu.vertex_buffer =
-                gpu.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("vertex_buffer"),
-                        contents: bytemuck::cast_slice(&level_mesh.vertices),
-                        usage: wgpu::BufferUsages::VERTEX,
-                    });
-            gpu.index_buffer =
-                gpu.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("index_buffer"),
-                        contents: bytemuck::cast_slice(&level_mesh.indices),
-                        usage: wgpu::BufferUsages::INDEX,
-                    });
+            gpu.vertex_buffer = gpu
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("vertex_buffer"),
+                    contents: bytemuck::cast_slice(&level_mesh.vertices),
+                    usage: wgpu::BufferUsages::VERTEX,
+                });
+            gpu.index_buffer = gpu
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("index_buffer"),
+                    contents: bytemuck::cast_slice(&level_mesh.indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                });
             gpu.num_indices = level_mesh.indices.len() as u32;
 
             let poly_buf_data = if polygon_data.is_empty() {
@@ -640,22 +640,21 @@ impl App {
             } else {
                 polygon_data
             };
-            gpu.polygon_buffer =
-                gpu.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("polygon_buffer"),
-                        contents: bytemuck::cast_slice(&poly_buf_data),
-                        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                    });
-            gpu.polygon_bind_group =
-                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("polygon_bind_group"),
-                    layout: &gpu.render_pipeline.get_bind_group_layout(1),
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: gpu.polygon_buffer.as_entire_binding(),
-                    }],
+            gpu.polygon_buffer = gpu
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("polygon_buffer"),
+                    contents: bytemuck::cast_slice(&poly_buf_data),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 });
+            gpu.polygon_bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("polygon_bind_group"),
+                layout: &gpu.render_pipeline.get_bind_group_layout(1),
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: gpu.polygon_buffer.as_entire_binding(),
+                }],
+            });
 
             let sampler = gpu.device.create_sampler(&wgpu::SamplerDescriptor {
                 label: Some("texture_sampler"),
@@ -675,8 +674,7 @@ impl App {
         }
 
         // Load audio for level
-        if let (Some(ref mut audio), Some(ref sounds)) =
-            (&mut self.audio_engine, &self.sounds_file)
+        if let (Some(ref mut audio), Some(ref sounds)) = (&mut self.audio_engine, &self.sounds_file)
         {
             audio.load_level(map, sounds);
             log::info!("Audio loaded for level");
@@ -731,8 +729,10 @@ impl ApplicationHandler for App {
             .find_map(|entry| PhysicsData::from_entry(entry).ok());
 
         // Load sounds file if provided
-        let sounds_file = self.sounds_path.as_ref().and_then(|path| {
-            match SoundsFile::open(path) {
+        let sounds_file = self
+            .sounds_path
+            .as_ref()
+            .and_then(|path| match SoundsFile::open(path) {
                 Ok(sf) => {
                     log::info!("Loaded sounds file");
                     Some(sf)
@@ -741,8 +741,7 @@ impl ApplicationHandler for App {
                     log::warn!("Failed to load sounds file: {e}");
                     None
                 }
-            }
-        });
+            });
 
         // Initialize audio engine (non-fatal if it fails)
         let audio_engine = match AudioEngine::new(AudioConfig {
@@ -1022,12 +1021,7 @@ impl ApplicationHandler for App {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        let sprite_renderer = SpriteRenderer::new(
-            &device,
-            &queue,
-            &camera_bgl,
-            surface_format,
-        );
+        let sprite_renderer = SpriteRenderer::new(&device, &queue, &camera_bgl, surface_format);
 
         self.gpu = Some(GpuState {
             surface,
@@ -1099,8 +1093,8 @@ impl ApplicationHandler for App {
                                     self.game_state = GameState::Paused;
                                     self.mouse_captured = false;
                                     if let Some(w) = &self.window {
-                                        let _ = w
-                                            .set_cursor_grab(winit::window::CursorGrabMode::None);
+                                        let _ =
+                                            w.set_cursor_grab(winit::window::CursorGrabMode::None);
                                         w.set_cursor_visible(true);
                                     }
                                     log::info!("Game paused");
@@ -1246,7 +1240,11 @@ impl ApplicationHandler for App {
                                         .map(|p| p as i16)
                                         .unwrap_or(-1),
                                 };
-                                audio.update(1.0 / TICKS_PER_SECOND as f32, listener, &audio_events);
+                                audio.update(
+                                    1.0 / TICKS_PER_SECOND as f32,
+                                    listener,
+                                    &audio_events,
+                                );
                             }
 
                             // Update GPU polygon buffer with platform/media/light state
@@ -1271,8 +1269,8 @@ impl ApplicationHandler for App {
                                 }
 
                                 for media in &snapshot.media {
-                                    let offset = media.polygon_index
-                                        * std::mem::size_of::<PolygonGpuData>();
+                                    let offset =
+                                        media.polygon_index * std::mem::size_of::<PolygonGpuData>();
                                     // Write media_height (7th field, offset 24 bytes)
                                     gpu.queue.write_buffer(
                                         &gpu.polygon_buffer,
@@ -1333,8 +1331,7 @@ impl ApplicationHandler for App {
                     ) {
                         Ok(()) => {}
                         Err(wgpu::SurfaceError::Lost) => {
-                            let size =
-                                PhysicalSize::new(gpu.config.width, gpu.config.height);
+                            let size = PhysicalSize::new(gpu.config.width, gpu.config.height);
                             if let Some(gpu) = &mut self.gpu {
                                 gpu.resize(size);
                             }
@@ -1437,7 +1434,10 @@ mod tests {
         };
         let vp = cam.view_proj(16.0 / 9.0);
         for i in 0..16 {
-            assert!(vp.to_cols_array()[i].is_finite(), "view_proj element {i} is not finite");
+            assert!(
+                vp.to_cols_array()[i].is_finite(),
+                "view_proj element {i} is not finite"
+            );
         }
     }
 

@@ -3,8 +3,10 @@ use super::{GameMode, PlayerScore, SpawnPoint, WinCheckResult};
 /// Cooperative multiplayer mode: multiple players, shared campaign progression.
 pub struct CooperativeMode {
     /// Current level index.
+    #[allow(dead_code)]
     current_level: usize,
     /// Total levels.
+    #[allow(dead_code)]
     total_levels: usize,
     /// Level completed flag.
     level_complete: bool,
@@ -57,7 +59,11 @@ impl GameMode for CooperativeMode {
         spawn_points
             .iter()
             .position(|sp| sp.team.is_some())
-            .or(if spawn_points.is_empty() { None } else { Some(0) })
+            .or(if spawn_points.is_empty() {
+                None
+            } else {
+                Some(0)
+            })
     }
 
     fn respawn_delay(&self) -> u32 {

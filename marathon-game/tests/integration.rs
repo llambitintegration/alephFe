@@ -128,7 +128,11 @@ fn make_test_map() -> MapData {
         index: 0,
         facing: 0,
         polygon_index: 0,
-        location: WorldPoint3d { x: 512, y: 512, z: 0 },
+        location: WorldPoint3d {
+            x: 512,
+            y: 512,
+            z: 0,
+        },
         flags: 0,
     };
 

@@ -1,4 +1,6 @@
-/// Marathon transfer mode constants.
+//! Marathon transfer mode constants.
+#![allow(dead_code)]
+
 pub const TRANSFER_NORMAL: u32 = 0;
 pub const TRANSFER_PULSATE: u32 = 1;
 pub const TRANSFER_WOBBLE: u32 = 2;

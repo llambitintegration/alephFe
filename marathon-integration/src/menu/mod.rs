@@ -101,7 +101,9 @@ impl MenuStack {
 
     /// Current active screen.
     pub fn current(&self) -> &MenuScreenState {
-        self.screens.last().expect("menu stack should never be empty")
+        self.screens
+            .last()
+            .expect("menu stack should never be empty")
     }
 
     /// Mutable reference to the current screen.

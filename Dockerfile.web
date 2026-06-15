@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 FROM rust:slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -45,7 +46,20 @@ server {
         add_header Access-Control-Allow-Origin *;
     }
 
+    # WASM/JS bundle. wasm-pack emits fixed filenames (marathon_web.js,
+    # marathon_web_bg.wasm) that are reused across builds, so a browser can
+    # otherwise serve a stale cached marathon_web.js against a freshly-fetched
+    # .wasm (or vice versa) after a redeploy. wasm-bindgen embeds matching
+    # build hashes in both, so any old/new mix throws
+    # "wasm_bindgen__convert__closures__invoke is not a function" at init.
+    # Force revalidation (cheap 304 via ETag when unchanged) to prevent that.
+    location /pkg/ {
+        add_header Cache-Control "no-cache";
+        try_files $uri =404;
+    }
+
     location / {
+        add_header Cache-Control "no-cache";
         try_files $uri $uri/ /index.html;
     }
 }
