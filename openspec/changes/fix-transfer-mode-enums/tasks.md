@@ -2,15 +2,15 @@
 
 ## Phase A: Fix constant values
 
-- [ ] **Fix Rust constants in `marathon-viewer/src/transfer.rs`**: Correct existing 6 constants to match Alephone values (TRANSFER_PULSATE=4, TRANSFER_WOBBLE=5, TRANSFER_STATIC=7). Rename TRANSFER_SLIDE to TRANSFER_HORIZONTAL_SLIDE (value=15). Add all 22 missing constants (fade_out_to_black=1 through 4x=27).
+- [x] **Fix Rust constants in `marathon-viewer/src/transfer.rs`**: Correct existing 6 constants to match Alephone values (TRANSFER_PULSATE=4, TRANSFER_WOBBLE=5, TRANSFER_STATIC=7). Rename TRANSFER_SLIDE to TRANSFER_HORIZONTAL_SLIDE (value=15). Add all 22 missing constants (fade_out_to_black=1 through 4x=27).
 
-- [ ] **Fix WGSL constants in `marathon-viewer/src/shader.wgsl`**: Update the `// Transfer mode constants` block to define all 28 modes with correct Alephone values. Rename TRANSFER_SLIDE to TRANSFER_HORIZONTAL_SLIDE.
+- [x] **Fix WGSL constants in `marathon-viewer/src/shader.wgsl`**: Update the `// Transfer mode constants` block to define all 28 modes with correct Alephone values. Rename TRANSFER_SLIDE to TRANSFER_HORIZONTAL_SLIDE.
 
-- [ ] **Fix WGSL constants in `marathon-game/src/shader.wgsl`**: Same constant updates as marathon-viewer shader.
+- [x] **Fix WGSL constants in `marathon-game/src/shader.wgsl`**: Same constant updates as marathon-viewer shader.
 
-- [ ] **Fix WGSL constants in `marathon-web/src/shader.wgsl`**: Same constant updates as marathon-web shader.
+- [x] **Fix WGSL constants in `marathon-web/src/shader.wgsl`**: Same constant updates as marathon-web shader.
 
-- [ ] **Update all Rust code referencing `TRANSFER_SLIDE`**: Find and replace with `TRANSFER_HORIZONTAL_SLIDE` in any Rust source files that reference the old name.
+- [x] **Update all Rust code referencing `TRANSFER_SLIDE`**: Find and replace with `TRANSFER_HORIZONTAL_SLIDE` in any Rust source files that reference the old name.
 
 ## Phase B: Add shader branches for new modes
 

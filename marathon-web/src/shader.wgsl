@@ -43,13 +43,35 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     return out;
 }
 
-// Transfer mode constants
+// Transfer mode constants (mirror Alephone map.h enum; all 28 modes)
 const TRANSFER_NORMAL: u32 = 0u;
-const TRANSFER_PULSATE: u32 = 1u;
-const TRANSFER_WOBBLE: u32 = 2u;
-const TRANSFER_SLIDE: u32 = 4u;
-const TRANSFER_STATIC: u32 = 6u;
+const TRANSFER_FADE_OUT_TO_BLACK: u32 = 1u;
+const TRANSFER_INVISIBILITY: u32 = 2u;
+const TRANSFER_SUBTLE_INVISIBILITY: u32 = 3u;
+const TRANSFER_PULSATE: u32 = 4u;
+const TRANSFER_WOBBLE: u32 = 5u;
+const TRANSFER_FAST_WOBBLE: u32 = 6u;
+const TRANSFER_STATIC: u32 = 7u;
+const TRANSFER_FIFTY_PERCENT_STATIC: u32 = 8u;
 const TRANSFER_LANDSCAPE: u32 = 9u;
+const TRANSFER_SMEAR: u32 = 10u;
+const TRANSFER_FADE_OUT_STATIC: u32 = 11u;
+const TRANSFER_PULSATING_STATIC: u32 = 12u;
+const TRANSFER_FOLD_IN: u32 = 13u;
+const TRANSFER_FOLD_OUT: u32 = 14u;
+const TRANSFER_HORIZONTAL_SLIDE: u32 = 15u;
+const TRANSFER_FAST_HORIZONTAL_SLIDE: u32 = 16u;
+const TRANSFER_VERTICAL_SLIDE: u32 = 17u;
+const TRANSFER_FAST_VERTICAL_SLIDE: u32 = 18u;
+const TRANSFER_WANDER: u32 = 19u;
+const TRANSFER_FAST_WANDER: u32 = 20u;
+const TRANSFER_BIG_LANDSCAPE: u32 = 21u;
+const TRANSFER_REVERSE_HORIZONTAL_SLIDE: u32 = 22u;
+const TRANSFER_REVERSE_FAST_HORIZONTAL_SLIDE: u32 = 23u;
+const TRANSFER_REVERSE_VERTICAL_SLIDE: u32 = 24u;
+const TRANSFER_REVERSE_FAST_VERTICAL_SLIDE: u32 = 25u;
+const TRANSFER_2X: u32 = 26u;
+const TRANSFER_4X: u32 = 27u;
 
 // Simple hash for static noise
 fn hash(p: vec2<f32>) -> f32 {
@@ -68,7 +90,7 @@ fn apply_transfer_mode(uv: vec2<f32>, mode: u32, time: f32, world_pos: vec3<f32>
             let offset_v = 0.03 * cos(time * 2.5 + world_pos.x * 4.0);
             return uv + vec2<f32>(offset_u, offset_v);
         }
-        case TRANSFER_SLIDE: {
+        case TRANSFER_HORIZONTAL_SLIDE: {
             return uv + vec2<f32>(time * 0.5, 0.0);
         }
         case TRANSFER_LANDSCAPE: {
