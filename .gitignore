@@ -1,6 +1,16 @@
 /target
 marathon-formats/target
 tests/fixtures/
+
+# dev-ops worktrees (created/torn down by the orchestrator; often root-owned)
+.worktrees/
+
+# transient dev-ops visual-verification artifacts (root-level scratch screenshots
+# and Playwright MCP logs). Scoped narrowly so e2e/ visual-regression baselines
+# stay trackable.
+/marathon-*.png
+/s7-*.png
+.playwright-mcp/
 *.sceA
 *.shpA
 *.sndA
