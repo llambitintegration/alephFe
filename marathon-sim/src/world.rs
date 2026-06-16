@@ -77,7 +77,15 @@ pub struct SimEvents {
 }
 
 /// A simulation event.
-#[derive(Debug, Clone)]
+///
+/// `serde` round-trips through bincode (box 1.4). The two variants that carry a
+/// bevy `Entity` handle (`EntityDamaged`, `EntityKilled`) serialize that handle
+/// via its raw `u64` bit representation (`Entity::to_bits`/`from_bits`), because
+/// `bevy_ecs` does not enable its `serialize` feature in this build so `Entity`
+/// has no serde impl of its own. The bits are only meaningful within the same
+/// `World` instance — events are a per-frame, same-process interface — so this
+/// is a transparent identity-preserving representation, not a stable cross-run id.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SimEvent {
     LevelTeleport {
         target_level: usize,
@@ -90,16 +98,40 @@ pub enum SimEvent {
         position: Vec3,
     },
     EntityDamaged {
+        #[serde(with = "entity_bits")]
         entity: Entity,
         amount: i16,
         damage_type: i16,
     },
     EntityKilled {
+        #[serde(with = "entity_bits")]
         entity: Entity,
     },
     ItemPickedUp {
         item_type: i16,
     },
+}
+
+/// serde adapter that represents a bevy `Entity` as its raw `u64` bits, since
+/// `bevy_ecs` is built without its `serialize` feature here (see `SimEvent`).
+mod entity_bits {
+    use bevy_ecs::entity::Entity;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(entity: &Entity, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u64(entity.to_bits())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Entity, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let bits = u64::deserialize(deserializer)?;
+        Ok(Entity::from_bits(bits))
+    }
 }
 
 impl SimEvents {
@@ -370,7 +402,7 @@ impl SimWorld {
 /// 0.0..=1.0 intensity multipliers. This is the sim-side equivalent of the web
 /// renderer's `PolyDynData`; the web layer maps one to the other so the sim
 /// crate stays free of any web dependency.
-#[derive(Copy, Clone, Debug, PartialEq, Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct PolyDynamicData {
     pub floor_height: f32,
     pub ceiling_height: f32,
@@ -1185,6 +1217,46 @@ mod sim_event_tests {
             _ => panic!("expected SimEvent::ItemPickedUp variant"),
         }
     }
+
+    /// box 1.4: every SimEvent variant round-trips through bincode unchanged,
+    /// including the two that carry a bevy `Entity` handle (serialized via raw
+    /// bits through the `entity_bits` adapter).
+    fn assert_round_trips(event: SimEvent) {
+        let bytes = bincode::serialize(&event).expect("serialize SimEvent");
+        let back: SimEvent = bincode::deserialize(&bytes).expect("deserialize SimEvent");
+        assert_eq!(format!("{:?}", event), format!("{:?}", back));
+    }
+
+    #[test]
+    fn sim_event_variants_round_trip_through_bincode() {
+        let entity = Entity::from_raw(42);
+        assert_round_trips(SimEvent::LevelTeleport { target_level: 3 });
+        assert_round_trips(SimEvent::TerminalActivation { terminal_index: 9 });
+        assert_round_trips(SimEvent::SoundTrigger {
+            sound_index: 5,
+            position: Vec3::new(1.0, 2.0, 3.0),
+        });
+        assert_round_trips(SimEvent::EntityDamaged {
+            entity,
+            amount: 17,
+            damage_type: 2,
+        });
+        assert_round_trips(SimEvent::EntityKilled { entity });
+        assert_round_trips(SimEvent::ItemPickedUp { item_type: 7 });
+    }
+
+    #[test]
+    fn entity_handle_survives_bits_round_trip() {
+        // The entity_bits adapter must preserve the exact handle value.
+        let entity = Entity::from_raw(1234);
+        let event = SimEvent::EntityKilled { entity };
+        let bytes = bincode::serialize(&event).expect("serialize");
+        let back: SimEvent = bincode::deserialize(&bytes).expect("deserialize");
+        match back {
+            SimEvent::EntityKilled { entity: e } => assert_eq!(e, entity),
+            _ => panic!("wrong variant"),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1358,6 +1430,21 @@ mod poly_dynamic_data_tests {
         let intensities = world.light_intensities();
         assert_eq!(intensities.len(), 1, "one entry per light_index");
         assert!((intensities[0] - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn poly_dynamic_data_bincode_round_trip() {
+        // box 1.1: PolyDynamicData round-trips through bincode unchanged.
+        let value = PolyDynamicData {
+            floor_height: 0.0,
+            ceiling_height: 2.0,
+            media_height: 0.5,
+            floor_light: 0.75,
+            ceiling_light: 1.0,
+        };
+        let bytes = bincode::serialize(&value).expect("serialize");
+        let back: PolyDynamicData = bincode::deserialize(&bytes).expect("deserialize");
+        assert_eq!(value, back);
     }
 
     #[test]
