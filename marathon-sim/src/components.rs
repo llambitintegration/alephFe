@@ -183,6 +183,12 @@ pub struct Platform {
     pub activation_flags: u32,
     /// Whether this platform crushes entities.
     pub crushes: bool,
+    /// Platform behavior type (Marathon platform definition type field).
+    pub platform_type: PlatformType,
+    /// Indices of platforms activated when this platform reaches its endpoints.
+    pub linked_platforms: Vec<usize>,
+    /// Indices of lights toggled when this platform reaches its endpoints.
+    pub linked_lights: Vec<usize>,
 }
 
 /// Platform behavior type (Marathon platform definition type field).

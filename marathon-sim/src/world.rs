@@ -623,6 +623,9 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
             delay_remaining: 0,
             activation_flags: platform.static_flags,
             crushes: platform.static_flags & (1 << 8) != 0,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
         });
     }
 
@@ -668,6 +671,9 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
                 delay_remaining: 0,
                 activation_flags: default_flags,
                 crushes: false,
+                platform_type: PlatformType::FromFloor,
+                linked_platforms: Vec::new(),
+                linked_lights: Vec::new(),
             });
         }
     }
