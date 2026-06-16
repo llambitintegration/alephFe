@@ -624,42 +624,161 @@ fn spawn_map_objects(
     Ok(())
 }
 
+/// Map a raw `StaticPlatformData.platform_type` (i16 0-5) to a [`PlatformType`].
+///
+/// Out-of-range values fall back to [`PlatformType::FromFloor`] (the most
+/// common elevator case), matching the conservative default used elsewhere.
+fn platform_type_from_i16(v: i16) -> PlatformType {
+    match v {
+        0 => PlatformType::ExtendsFloorToCeiling,
+        1 => PlatformType::ExtendsCeilingToFloor,
+        2 => PlatformType::ExtendsFloorAndCeiling,
+        3 => PlatformType::FromFloor,
+        4 => PlatformType::FromCeiling,
+        5 => PlatformType::Teleporter,
+        _ => PlatformType::FromFloor,
+    }
+}
+
+/// Resting and extended floor/ceiling heights for a platform, in world units.
+struct PlatformHeights {
+    floor_rest: f32,
+    floor_extended: f32,
+    ceiling_rest: f32,
+    ceiling_extended: f32,
+}
+
+/// Compute the floor/ceiling rest and extended heights for a platform of the
+/// given type, from the polygon's initial floor/ceiling and the platform's
+/// `minimum_height`/`maximum_height` (where the type uses them). See
+/// `openspec/changes/implement-platform-mechanics/design.md` §1.
+fn compute_platform_heights(
+    platform_type: PlatformType,
+    polygon_floor: f32,
+    polygon_ceiling: f32,
+    minimum_height: f32,
+    maximum_height: f32,
+) -> PlatformHeights {
+    match platform_type {
+        // Type 0 (door): floor rises to ceiling; ceiling stays put.
+        PlatformType::ExtendsFloorToCeiling => PlatformHeights {
+            floor_rest: polygon_floor,
+            floor_extended: polygon_ceiling,
+            ceiling_rest: polygon_ceiling,
+            ceiling_extended: polygon_ceiling,
+        },
+        // Type 1 (door): ceiling descends to floor; floor stays put.
+        PlatformType::ExtendsCeilingToFloor => PlatformHeights {
+            floor_rest: polygon_floor,
+            floor_extended: polygon_floor,
+            ceiling_rest: polygon_ceiling,
+            ceiling_extended: polygon_floor,
+        },
+        // Type 2: both floor and ceiling move toward each other.
+        PlatformType::ExtendsFloorAndCeiling => PlatformHeights {
+            floor_rest: polygon_floor,
+            floor_extended: polygon_ceiling,
+            ceiling_rest: polygon_ceiling,
+            ceiling_extended: polygon_floor,
+        },
+        // Type 3 (elevator): floor moves between min and max; ceiling fixed.
+        PlatformType::FromFloor => PlatformHeights {
+            floor_rest: minimum_height,
+            floor_extended: maximum_height,
+            ceiling_rest: polygon_ceiling,
+            ceiling_extended: polygon_ceiling,
+        },
+        // Type 4 (crusher): ceiling moves between min and max; floor fixed.
+        // Rests high (maximum_height), extends low (minimum_height) so it
+        // descends on extend.
+        PlatformType::FromCeiling => PlatformHeights {
+            floor_rest: polygon_floor,
+            floor_extended: polygon_floor,
+            ceiling_rest: maximum_height,
+            ceiling_extended: minimum_height,
+        },
+        // Type 5 (teleporter): no height movement.
+        PlatformType::Teleporter => PlatformHeights {
+            floor_rest: polygon_floor,
+            floor_extended: polygon_floor,
+            ceiling_rest: polygon_ceiling,
+            ceiling_extended: polygon_ceiling,
+        },
+    }
+}
+
 fn spawn_platforms(world: &mut World, map_data: &MapData) {
     use crate::world_mechanics::platforms::*;
 
     // Track which polygon indices have explicit platform data
     let mut explicit_polys = std::collections::HashSet::new();
 
+    // Pre-compute tag-based links: platforms sharing the same non-zero `tag`
+    // are linked. We record, per explicit platform, the polygon indices of the
+    // OTHER platforms with the same tag. tag == 0 means "no link".
+    let tag_links: Vec<Vec<usize>> = map_data
+        .platforms
+        .iter()
+        .map(|p| {
+            if p.tag == 0 {
+                Vec::new()
+            } else {
+                map_data
+                    .platforms
+                    .iter()
+                    .filter(|other| other.tag == p.tag && other.polygon_index != p.polygon_index)
+                    .map(|other| other.polygon_index as usize)
+                    .collect()
+            }
+        })
+        .collect();
+
     // First pass: explicit PLAT entries
-    for platform in &map_data.platforms {
+    for (plat_idx, platform) in map_data.platforms.iter().enumerate() {
         let poly_idx = platform.polygon_index as usize;
         explicit_polys.insert(poly_idx);
         let speed = world_coord(platform.speed);
         let min_height = world_coord(platform.minimum_height);
         let max_height = world_coord(platform.maximum_height);
 
-        let poly_ceiling = if poly_idx < map_data.polygons.len() {
-            world_coord(map_data.polygons[poly_idx].ceiling_height)
+        let (poly_floor, poly_ceiling) = if poly_idx < map_data.polygons.len() {
+            (
+                world_coord(map_data.polygons[poly_idx].floor_height),
+                world_coord(map_data.polygons[poly_idx].ceiling_height),
+            )
         } else {
-            2.0
+            (0.0, 2.0)
         };
+
+        let platform_type = platform_type_from_i16(platform.platform_type);
+        let heights = compute_platform_heights(
+            platform_type,
+            poly_floor,
+            poly_ceiling,
+            min_height,
+            max_height,
+        );
 
         world.spawn(Platform {
             polygon_index: poly_idx,
-            floor_rest: min_height,
-            floor_extended: max_height,
-            ceiling_rest: poly_ceiling,
-            ceiling_extended: poly_ceiling,
-            current_floor: min_height,
-            current_ceiling: poly_ceiling,
+            floor_rest: heights.floor_rest,
+            floor_extended: heights.floor_extended,
+            ceiling_rest: heights.ceiling_rest,
+            ceiling_extended: heights.ceiling_extended,
+            // Box 2.3: spawn at rest position.
+            current_floor: heights.floor_rest,
+            current_ceiling: heights.ceiling_rest,
             speed,
             state: PlatformState::AtRest,
             return_delay: platform.delay as u16,
             delay_remaining: 0,
             activation_flags: platform.static_flags,
             crushes: platform.static_flags & (1 << 8) != 0,
-            platform_type: PlatformType::FromFloor,
-            linked_platforms: Vec::new(),
+            platform_type,
+            linked_platforms: tag_links[plat_idx].clone(),
+            // No light-tag linkage source is exposed by StaticPlatformData /
+            // current map data, so linked_lights is left empty for now. It will
+            // be populated when line/side trigger data is parsed (design §2).
             linked_lights: Vec::new(),
         });
     }
@@ -1477,5 +1596,205 @@ mod poly_dynamic_data_tests {
             start_floor,
             after[1].floor_height
         );
+    }
+
+    // ─── Section 2: type-aware spawn_platforms ──────────────────────────────
+
+    use marathon_formats::map::StaticPlatformData;
+
+    fn mk_static_platform(
+        platform_type: i16,
+        min: i16,
+        max: i16,
+        polygon_index: i16,
+        tag: i16,
+    ) -> StaticPlatformData {
+        StaticPlatformData {
+            platform_type,
+            speed: 16,
+            delay: 30,
+            maximum_height: max,
+            minimum_height: min,
+            static_flags: 0,
+            polygon_index,
+            tag,
+        }
+    }
+
+    /// Build a map with a single polygon (floor 0, ceiling 2048) plus the
+    /// supplied explicit platform records on polygon 0 (or whatever
+    /// `polygon_index` they reference). Polygon 0 has type 0 so it does NOT
+    /// also spawn an implicit door platform.
+    fn map_with_platforms(platforms: Vec<StaticPlatformData>) -> MapData {
+        let endpoints = vec![
+            mk_endpoint(0, 0, 0),
+            mk_endpoint(1024, 0, 0),
+            mk_endpoint(1024, 1024, 0),
+            mk_endpoint(0, 1024, 0),
+        ];
+        let lines = vec![mk_line(0, 1), mk_line(1, 2), mk_line(2, 3), mk_line(3, 0)];
+        // Static (type 0) polygon, floor 0, ceiling 2048 → 0.0 / 2.0 WU.
+        let poly0 = mk_square_polygon(
+            0,
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            0,
+            2048,
+        );
+
+        MapData {
+            endpoints,
+            lines,
+            sides: vec![],
+            polygons: vec![poly0],
+            objects: vec![],
+            lights: LightData::Static(vec![constant_light(1.0)]),
+            platforms,
+            media: vec![],
+            annotations: vec![],
+            terminals: vec![],
+            ambient_sounds: vec![],
+            random_sounds: vec![],
+            map_info: None,
+            item_placement: vec![],
+            guard_paths: None,
+        }
+    }
+
+    /// Spawn platforms for `map` and return them sorted by `polygon_index`.
+    fn spawned_platforms(map: &MapData) -> Vec<Platform> {
+        let mut world = World::new();
+        spawn_platforms(&mut world, map);
+        let mut out: Vec<Platform> = world.query::<&Platform>().iter(&world).cloned().collect();
+        out.sort_by_key(|p| p.polygon_index);
+        out
+    }
+
+    const EPS: f32 = 1e-5;
+
+    #[test]
+    fn spawn_extends_floor_to_ceiling() {
+        // Type 0: floor rises to ceiling; ceiling fixed.
+        let map = map_with_platforms(vec![mk_static_platform(0, 256, 1024, 0, 0)]);
+        let p = &spawned_platforms(&map)[0];
+        assert_eq!(p.platform_type, PlatformType::ExtendsFloorToCeiling);
+        assert!((p.floor_rest - 0.0).abs() < EPS);
+        assert!((p.floor_extended - 2.0).abs() < EPS);
+        assert!((p.ceiling_rest - 2.0).abs() < EPS);
+        assert!((p.ceiling_extended - 2.0).abs() < EPS);
+        assert!((p.current_floor - p.floor_rest).abs() < EPS);
+        assert!((p.current_ceiling - p.ceiling_rest).abs() < EPS);
+        assert_eq!(p.state, PlatformState::AtRest);
+    }
+
+    #[test]
+    fn spawn_extends_ceiling_to_floor() {
+        // Type 1: ceiling descends to floor; floor fixed.
+        let map = map_with_platforms(vec![mk_static_platform(1, 256, 1024, 0, 0)]);
+        let p = &spawned_platforms(&map)[0];
+        assert_eq!(p.platform_type, PlatformType::ExtendsCeilingToFloor);
+        assert!((p.floor_rest - 0.0).abs() < EPS);
+        assert!((p.floor_extended - 0.0).abs() < EPS);
+        assert!((p.ceiling_rest - 2.0).abs() < EPS);
+        assert!((p.ceiling_extended - 0.0).abs() < EPS);
+        assert!((p.current_floor - p.floor_rest).abs() < EPS);
+        assert!((p.current_ceiling - p.ceiling_rest).abs() < EPS);
+    }
+
+    #[test]
+    fn spawn_extends_floor_and_ceiling() {
+        // Type 2: both move toward each other.
+        let map = map_with_platforms(vec![mk_static_platform(2, 256, 1024, 0, 0)]);
+        let p = &spawned_platforms(&map)[0];
+        assert_eq!(p.platform_type, PlatformType::ExtendsFloorAndCeiling);
+        assert!((p.floor_rest - 0.0).abs() < EPS);
+        assert!((p.floor_extended - 2.0).abs() < EPS);
+        assert!((p.ceiling_rest - 2.0).abs() < EPS);
+        assert!((p.ceiling_extended - 0.0).abs() < EPS);
+    }
+
+    #[test]
+    fn spawn_from_floor_elevator() {
+        // Type 3: floor between min and max; ceiling fixed.
+        let map = map_with_platforms(vec![mk_static_platform(3, 256, 1024, 0, 0)]);
+        let p = &spawned_platforms(&map)[0];
+        assert_eq!(p.platform_type, PlatformType::FromFloor);
+        assert!((p.floor_rest - 0.25).abs() < EPS); // 256 / 1024
+        assert!((p.floor_extended - 1.0).abs() < EPS); // 1024 / 1024
+        assert!((p.ceiling_rest - 2.0).abs() < EPS);
+        assert!((p.ceiling_extended - 2.0).abs() < EPS);
+        assert!((p.current_floor - 0.25).abs() < EPS);
+        assert!((p.current_ceiling - 2.0).abs() < EPS);
+    }
+
+    #[test]
+    fn spawn_from_ceiling_crusher() {
+        // Type 4: ceiling between min and max (rest high, extend low); floor fixed.
+        let map = map_with_platforms(vec![mk_static_platform(4, 256, 1024, 0, 0)]);
+        let p = &spawned_platforms(&map)[0];
+        assert_eq!(p.platform_type, PlatformType::FromCeiling);
+        assert!((p.floor_rest - 0.0).abs() < EPS);
+        assert!((p.floor_extended - 0.0).abs() < EPS);
+        assert!((p.ceiling_rest - 1.0).abs() < EPS); // max = 1024 / 1024
+        assert!((p.ceiling_extended - 0.25).abs() < EPS); // min = 256 / 1024
+        assert!((p.current_ceiling - 1.0).abs() < EPS);
+    }
+
+    #[test]
+    fn spawn_teleporter_no_movement() {
+        // Type 5: no height movement.
+        let map = map_with_platforms(vec![mk_static_platform(5, 256, 1024, 0, 0)]);
+        let p = &spawned_platforms(&map)[0];
+        assert_eq!(p.platform_type, PlatformType::Teleporter);
+        assert!((p.floor_rest - p.floor_extended).abs() < EPS);
+        assert!((p.ceiling_rest - p.ceiling_extended).abs() < EPS);
+        assert!((p.floor_rest - 0.0).abs() < EPS);
+        assert!((p.ceiling_rest - 2.0).abs() < EPS);
+        assert!((p.current_floor - 0.0).abs() < EPS);
+        assert!((p.current_ceiling - 2.0).abs() < EPS);
+    }
+
+    #[test]
+    fn spawn_out_of_range_type_defaults_to_from_floor() {
+        let map = map_with_platforms(vec![mk_static_platform(99, 256, 1024, 0, 0)]);
+        let p = &spawned_platforms(&map)[0];
+        assert_eq!(p.platform_type, PlatformType::FromFloor);
+    }
+
+    #[test]
+    fn spawn_links_platforms_sharing_tag() {
+        // Two polygons each carrying a platform with the same non-zero tag must
+        // reference each other's polygon index in linked_platforms.
+        let mut map = map_with_platforms(vec![
+            mk_static_platform(3, 0, 1024, 0, 7),
+            mk_static_platform(3, 0, 1024, 1, 7),
+        ]);
+        // Add a second polygon so platform poly_idx 1 is valid.
+        map.polygons.push(mk_square_polygon(
+            0,
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            0,
+            2048,
+        ));
+
+        let platforms = spawned_platforms(&map);
+        assert_eq!(platforms.len(), 2);
+        assert_eq!(platforms[0].linked_platforms, vec![1]);
+        assert_eq!(platforms[1].linked_platforms, vec![0]);
+        // No light-tag source yet → empty.
+        assert!(platforms[0].linked_lights.is_empty());
+    }
+
+    #[test]
+    fn spawn_tag_zero_no_links() {
+        let map = map_with_platforms(vec![
+            mk_static_platform(3, 0, 1024, 0, 0),
+            mk_static_platform(3, 0, 1024, 0, 0),
+        ]);
+        let platforms = spawned_platforms(&map);
+        for p in &platforms {
+            assert!(p.linked_platforms.is_empty(), "tag 0 must not link");
+        }
     }
 }
