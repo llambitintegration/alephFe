@@ -238,6 +238,41 @@ impl SimWorld {
         self.world.resource::<TickCounter>().0
     }
 
+    /// Current intensity of every light, as a `Vec` indexed by `light_index`
+    /// (box 6.1). Renderers read this each frame to drive per-polygon floor /
+    /// ceiling lighting. Indices with no spawned light default to `1.0` (full
+    /// bright), matching the renderer's no-light fallback.
+    pub fn light_intensities(&mut self) -> Vec<f32> {
+        let mut q = self.world.query::<&crate::components::Light>();
+        let pairs: Vec<(usize, f32)> = q
+            .iter(&self.world)
+            .map(|l| (l.light_index, l.current_intensity))
+            .collect();
+        let len = pairs.iter().map(|(i, _)| i + 1).max().unwrap_or(0);
+        let mut out = vec![1.0; len];
+        for (i, v) in pairs {
+            out[i] = v;
+        }
+        out
+    }
+
+    /// Current surface height of every media, as a `Vec` indexed by media index
+    /// (box 6.2). Renderers read this each frame to drive liquid surface
+    /// heights. Indices with no spawned media default to `0.0`.
+    pub fn media_heights(&mut self) -> Vec<f32> {
+        let mut q = self.world.query::<&crate::components::Media>();
+        let pairs: Vec<(usize, f32)> = q
+            .iter(&self.world)
+            .map(|m| (m.index, m.current_height))
+            .collect();
+        let len = pairs.iter().map(|(i, _)| i + 1).max().unwrap_or(0);
+        let mut out = vec![0.0; len];
+        for (i, v) in pairs {
+            out[i] = v;
+        }
+        out
+    }
+
     /// Drain pending simulation events.
     pub fn drain_events(&mut self) -> Vec<SimEvent> {
         self.world.resource_mut::<SimEvents>().drain()
@@ -1311,6 +1346,68 @@ mod poly_dynamic_data_tests {
             physics: None,
             weapons: None,
         }
+    }
+
+    #[test]
+    fn light_intensities_indexed_by_light_index() {
+        // box 6.1: platform_map has one constant-1.0 light at index 0.
+        let map = platform_map();
+        let mut world =
+            SimWorld::new(&map, &empty_physics(), &SimConfig::default()).expect("world");
+        world.tick(crate::tick::TickInput::default());
+        let intensities = world.light_intensities();
+        assert_eq!(intensities.len(), 1, "one entry per light_index");
+        assert!((intensities[0] - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn media_heights_empty_without_media() {
+        // box 6.2: platform_map has no media, so the Vec is empty. (The
+        // populated case is covered by the tick_loop_media_tracks_light
+        // integration test.)
+        let map = platform_map();
+        let mut world =
+            SimWorld::new(&map, &empty_physics(), &SimConfig::default()).expect("world");
+        world.tick(crate::tick::TickInput::default());
+        assert!(world.media_heights().is_empty());
+    }
+
+    #[test]
+    fn serialize_roundtrip_preserves_light_state() {
+        // box 8.3: a SimWorld with state-machine lights survives a
+        // serialize/deserialize round-trip with its light state intact.
+        let map = platform_map();
+        let mut world =
+            SimWorld::new(&map, &empty_physics(), &SimConfig::default()).expect("world");
+        for _ in 0..5 {
+            world.tick(crate::tick::TickInput::default());
+        }
+        let before_intensities = world.light_intensities();
+        let before_state = {
+            let w = world.ecs_world_mut();
+            let mut q = w.query::<&Light>();
+            q.iter(w)
+                .map(|l| (l.state, l.phase, l.period, l.light_index))
+                .collect::<Vec<_>>()
+        };
+
+        let bytes = world.serialize().expect("serialize");
+        let mut restored =
+            SimWorld::deserialize(&bytes, &map, &empty_physics()).expect("deserialize");
+
+        assert_eq!(
+            restored.light_intensities(),
+            before_intensities,
+            "current intensities preserved"
+        );
+        let after_state = {
+            let w = restored.ecs_world_mut();
+            let mut q = w.query::<&Light>();
+            q.iter(w)
+                .map(|l| (l.state, l.phase, l.period, l.light_index))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(after_state, before_state, "light state machine preserved");
     }
 
     #[test]

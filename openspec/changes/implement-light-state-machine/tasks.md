@@ -60,8 +60,8 @@
 
 ## 6. Expose Light Data for Renderers
 
-- [ ] 6.1 Add `light_intensities(&mut self) -> Vec<f32>` method on `SimWorld` that returns a Vec indexed by `light_index` with each light's `current_intensity`
-- [ ] 6.2 Add `media_heights(&mut self) -> Vec<f32>` method on `SimWorld` that returns a Vec indexed by media index with each media's `current_height`
+- [x] 6.1 Add `light_intensities(&mut self) -> Vec<f32>` method on `SimWorld` that returns a Vec indexed by `light_index` with each light's `current_intensity`
+- [x] 6.2 Add `media_heights(&mut self) -> Vec<f32>` method on `SimWorld` that returns a Vec indexed by media index with each media's `current_height`
 
 ## 7. Update Renderer GPU Buffer Writes
 
@@ -72,9 +72,9 @@
 
 ## 8. Update Serialization
 
-- [ ] 8.1 Update `SimSnapshot` in `world.rs` to work with the new `Light` struct shape (ensure Serialize/Deserialize derives still work)
-- [ ] 8.2 Verify `snapshot()` and `deserialize()` round-trip correctly with new Light fields
-- [ ] 8.3 Add unit test: serialize and deserialize a SimWorld with state-machine lights, verify light state is preserved
+- [x] 8.1 Update `SimSnapshot` in `world.rs` to work with the new `Light` struct shape (ensure Serialize/Deserialize derives still work)
+- [x] 8.2 Verify `snapshot()` and `deserialize()` round-trip correctly with new Light fields
+- [x] 8.3 Add unit test: serialize and deserialize a SimWorld with state-machine lights, verify light state is preserved
 
 ## 9. Testing and Validation
 
