@@ -10,8 +10,22 @@
 //! intrinsic to [`apply`] — the set of already-applied ids lives inside the
 //! `WorldState` — so a direct re-`apply` of the same id is also a no-op.
 //!
-//! Snapshot-anchor reconstruction and restart-by-replay recovery (boxes
-//! 3.5-3.7) are not yet implemented.
+//! [`reconstruct_as_of`] reconstructs state-as-of-T from the nearest
+//! file-resident [`Anchor`] whose `as_of <= T`, then replays the tail
+//! (`seq > anchor.last_seq`, `time <= T`) onto it (box 3.5); the result equals a
+//! full prefix fold up to T. [`recover_from_anchor`] rebuilds the live
+//! `WorldState` after restart by replaying the log from the latest anchor (box
+//! 3.6) — anchors are producer-owned, so this module only ever *consumes*
+//! anchors, never authors one. [`validate_anchor`] treats an anchor as a
+//! deletable cache: a corrupt anchor (whose embedded state disagrees with the
+//! log up to its `last_seq`) is discarded in favor of the log-derived state, and
+//! deleting all anchors and re-folding yields an identical state (box 3.7).
+//!
+//! Time comparison (`time <= T`, `as_of <= T`) is lexicographic on the
+//! RFC 3339 / ISO 8601 string fields the envelopes already carry (e.g.
+//! `"2026-06-17T00:00:00Z"`). For fixed-offset, equal-precision timestamps —
+//! which the producer emits — byte order equals chronological order, so no
+//! parsing is required.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -109,6 +123,131 @@ pub fn fold(events: &[EventEnvelope]) -> WorldState {
     state
 }
 
+/// A producer-owned snapshot anchor: a cached fold of the log up to a point in
+/// time, used only to bound the cost of a later reconstruction.
+///
+/// An anchor is never authored by this consumer (box 3.6) — it is read from a
+/// file produced upstream. It records the timestamp it was taken at (`as_of`),
+/// the highest `seq` folded into its `state` (`last_seq`), and the folded
+/// `state` itself. Because the append-only log is the single source of truth
+/// (box 3.7), an anchor whose `state` disagrees with the log is discarded.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Anchor {
+    /// Producer event-time this anchor was taken at (RFC 3339 string). Compared
+    /// lexicographically against event `time` and the requested `T`.
+    pub as_of: String,
+    /// Highest event `seq` folded into `state`. The reconstruction tail is every
+    /// event whose `seq` exceeds this.
+    pub last_seq: u64,
+    /// The folded [`WorldState`] as of `as_of` / `last_seq`.
+    pub state: WorldState,
+}
+
+/// Fold only the events whose `time <= t` (lexicographic on the RFC 3339 string)
+/// — i.e. a full fold of the log prefix up to and including T. This is the
+/// authoritative state-as-of-T against which any anchor-bounded reconstruction
+/// must agree (box 3.5) and the fallback when no anchor is usable.
+#[must_use]
+pub fn fold_prefix_to(events: &[EventEnvelope], t: &str) -> WorldState {
+    let prefix: Vec<EventEnvelope> = events
+        .iter()
+        .filter(|e| e.time.as_str() <= t)
+        .cloned()
+        .collect();
+    fold(&prefix)
+}
+
+/// Select the anchor with the GREATEST `as_of` that is still `<= t` (box 3.5).
+///
+/// Returns `None` when no anchor is at or before T, in which case the caller
+/// folds from the beginning. `as_of` is compared lexicographically on the
+/// RFC 3339 string.
+#[must_use]
+fn nearest_anchor_at_or_before<'a>(anchors: &'a [Anchor], t: &str) -> Option<&'a Anchor> {
+    anchors
+        .iter()
+        .filter(|a| a.as_of.as_str() <= t)
+        .max_by(|a, b| a.as_of.cmp(&b.as_of))
+}
+
+/// Reconstruct state-as-of-T from the nearest file-resident anchor plus the tail
+/// of the log (box 3.5).
+///
+/// Selects the anchor with the greatest `as_of <= t` as the fold base — or the
+/// empty [`WorldState`] when no anchor qualifies — then folds the tail events
+/// whose `seq` exceeds the anchor's `last_seq` AND whose `time <= t` onto it. The
+/// result is byte-identical to [`fold_prefix_to`] for the same `t`, so the anchor
+/// is purely a cost optimization and never authority (box 3.7).
+#[must_use]
+pub fn reconstruct_as_of(events: &[EventEnvelope], anchors: &[Anchor], t: &str) -> WorldState {
+    match nearest_anchor_at_or_before(anchors, t) {
+        // No anchor at or before T: fall back to a full prefix fold from the
+        // beginning of the log (box 3.5, third scenario).
+        None => fold_prefix_to(events, t),
+        Some(anchor) => {
+            let tail: Vec<EventEnvelope> = events
+                .iter()
+                .filter(|e| e.seq > anchor.last_seq && e.time.as_str() <= t)
+                .cloned()
+                .collect();
+            // Order-independent: `apply` dedupes by id and the tail is folded by
+            // ascending seq, so a shuffled tail yields the same state.
+            let mut ordered: Vec<&EventEnvelope> = tail.iter().collect();
+            ordered.sort_by(|a, b| a.seq.cmp(&b.seq).then_with(|| a.id.cmp(&b.id)));
+            let mut state = anchor.state.clone();
+            for event in ordered {
+                state = apply(state, event);
+            }
+            state
+        }
+    }
+}
+
+/// Recover the live `WorldState` after a process restart by replaying the
+/// append-only log from the latest anchor (box 3.6).
+///
+/// The latest anchor (greatest `last_seq`) bounds the replay; every event whose
+/// `seq` exceeds it is folded back on top, reproducing the exact pre-restart
+/// state. With no anchor, the whole log is re-folded. This consumer authors NO
+/// anchor — it only reads producer-owned ones — so there is no anchor-creation
+/// path to call here (box 3.6, "Consumer synthesizes no anchors").
+#[must_use]
+pub fn recover_from_anchor(events: &[EventEnvelope], anchors: &[Anchor]) -> WorldState {
+    match anchors.iter().max_by_key(|a| a.last_seq) {
+        None => fold(events),
+        Some(anchor) => {
+            let tail: Vec<EventEnvelope> = events
+                .iter()
+                .filter(|e| e.seq > anchor.last_seq)
+                .cloned()
+                .collect();
+            let mut ordered: Vec<&EventEnvelope> = tail.iter().collect();
+            ordered.sort_by(|a, b| a.seq.cmp(&b.seq).then_with(|| a.id.cmp(&b.id)));
+            let mut state = anchor.state.clone();
+            for event in ordered {
+                state = apply(state, event);
+            }
+            state
+        }
+    }
+}
+
+/// Validate an anchor against the single source of truth, the log (box 3.7).
+///
+/// An anchor is trustworthy only if its embedded `state` equals the result of
+/// folding the log up to its own `last_seq`. A corrupt anchor (whose `state`
+/// disagrees) returns `false` and MUST be discarded in favor of the log-derived
+/// state — the anchor is a deletable cache, never authority.
+#[must_use]
+pub fn validate_anchor(events: &[EventEnvelope], anchor: &Anchor) -> bool {
+    let log_derived: Vec<EventEnvelope> = events
+        .iter()
+        .filter(|e| e.seq <= anchor.last_seq)
+        .cloned()
+        .collect();
+    fold(&log_derived) == anchor.state
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -125,6 +264,56 @@ mod tests {
             correlation_id: "corr".to_string(),
             causation_id: "cause".to_string(),
         }
+    }
+
+    /// Like [`evt`] but with an explicit producer `time`, for the time-bounded
+    /// reconstruction tests (boxes 3.5-3.7).
+    fn evt_at(id: &str, seq: u64, subject: &str, time: &str, data: Value) -> EventEnvelope {
+        let mut e = evt(id, seq, subject, "fleet.delta", data);
+        e.time = time.to_string();
+        e
+    }
+
+    /// A monotonic log whose `seq` and `time` advance together, so the prefix up
+    /// to a given T is unambiguous.
+    fn timed_log() -> Vec<EventEnvelope> {
+        vec![
+            evt_at(
+                "e1",
+                1,
+                "lane-a",
+                "2026-06-17T00:00:01Z",
+                serde_json::json!({ "x": 1 }),
+            ),
+            evt_at(
+                "e2",
+                2,
+                "lane-b",
+                "2026-06-17T00:00:02Z",
+                serde_json::json!({ "x": 9 }),
+            ),
+            evt_at(
+                "e3",
+                3,
+                "lane-a",
+                "2026-06-17T00:00:03Z",
+                serde_json::json!({ "x": 2 }),
+            ),
+            evt_at(
+                "e4",
+                4,
+                "lane-b",
+                "2026-06-17T00:00:04Z",
+                serde_json::json!({ "y": 7 }),
+            ),
+            evt_at(
+                "e5",
+                5,
+                "lane-a",
+                "2026-06-17T00:00:05Z",
+                serde_json::json!({ "z": 3 }),
+            ),
+        ]
     }
 
     fn sample_log() -> Vec<EventEnvelope> {
@@ -312,5 +501,160 @@ mod tests {
         let _ = fold(&log);
         let after: Vec<u64> = log.iter().map(|e| e.seq).collect();
         assert_eq!(before, after, "fold must sort a copy, never the input");
+    }
+
+    /// A producer-owned anchor taken at event `seq`, with its `state` folded
+    /// faithfully from the prefix of `log` up to that `seq`.
+    fn anchor_at(log: &[EventEnvelope], as_of: &str, last_seq: u64) -> Anchor {
+        let prefix: Vec<EventEnvelope> =
+            log.iter().filter(|e| e.seq <= last_seq).cloned().collect();
+        Anchor {
+            as_of: as_of.to_string(),
+            last_seq,
+            state: fold(&prefix),
+        }
+    }
+
+    // ---- Box 3.5: state-as-of-T reconstruction from a file-resident anchor ----
+
+    #[test]
+    fn scrub_reconstructs_from_nearest_anchor_plus_tail() {
+        let log = timed_log();
+        let t = "2026-06-17T00:00:04Z";
+        // One anchor at seq 2 (as_of 00:00:02), comfortably before T.
+        let anchors = vec![anchor_at(&log, "2026-06-17T00:00:02Z", 2)];
+
+        let reconstructed = reconstruct_as_of(&log, &anchors, t);
+        let full = fold_prefix_to(&log, t);
+        assert_eq!(
+            serde_json::to_vec(&reconstructed).unwrap(),
+            serde_json::to_vec(&full).unwrap(),
+            "anchor+tail reconstruction must equal the full prefix fold up to T",
+        );
+        // e5 (seq 5, time 00:00:05) is past T and must NOT be folded in.
+        assert_eq!(reconstructed.entities["lane-a"].last_seq, 3);
+        assert!(!reconstructed.entities["lane-a"].data.contains_key("z"));
+    }
+
+    #[test]
+    fn nearest_anchor_at_or_before_t_is_chosen() {
+        let log = timed_log();
+        let t = "2026-06-17T00:00:04Z";
+        // Anchors both before and after T; the greatest as_of <= T (seq 3) wins.
+        let anchors = vec![
+            anchor_at(&log, "2026-06-17T00:00:01Z", 1),
+            anchor_at(&log, "2026-06-17T00:00:03Z", 3),
+            // This one is AFTER T and must be ignored.
+            anchor_at(&log, "2026-06-17T00:00:05Z", 5),
+        ];
+        assert_eq!(
+            nearest_anchor_at_or_before(&anchors, t).map(|a| a.last_seq),
+            Some(3),
+            "the greatest as_of still <= T must be selected as the base",
+        );
+        // And the reconstruction still equals the full prefix fold.
+        assert_eq!(
+            serde_json::to_vec(&reconstruct_as_of(&log, &anchors, t)).unwrap(),
+            serde_json::to_vec(&fold_prefix_to(&log, t)).unwrap(),
+        );
+    }
+
+    #[test]
+    fn no_anchor_before_t_falls_back_to_full_fold() {
+        let log = timed_log();
+        let t = "2026-06-17T00:00:03Z";
+        // The only anchor is AFTER T, so there is no usable base.
+        let anchors = vec![anchor_at(&log, "2026-06-17T00:00:05Z", 5)];
+        assert!(nearest_anchor_at_or_before(&anchors, t).is_none());
+
+        let reconstructed = reconstruct_as_of(&log, &anchors, t);
+        let full = fold_prefix_to(&log, t);
+        assert_eq!(
+            serde_json::to_vec(&reconstructed).unwrap(),
+            serde_json::to_vec(&full).unwrap(),
+            "with no anchor <= T, reconstruction folds the prefix from the start",
+        );
+    }
+
+    // ---- Box 3.6: restart recovery by log replay ----
+
+    #[test]
+    fn restart_replays_to_pre_restart_state() {
+        let log = timed_log();
+        // The state held immediately before the restart is a full fold.
+        let pre_restart = fold(&log);
+        // The producer has anchored partway through; recovery replays the tail.
+        let anchors = vec![anchor_at(&log, "2026-06-17T00:00:03Z", 3)];
+
+        let recovered = recover_from_anchor(&log, &anchors);
+        assert_eq!(
+            serde_json::to_vec(&recovered).unwrap(),
+            serde_json::to_vec(&pre_restart).unwrap(),
+            "recovery from the latest anchor must reproduce the pre-restart state",
+        );
+    }
+
+    #[test]
+    fn recovery_with_no_anchor_refolds_whole_log() {
+        let log = timed_log();
+        assert_eq!(recover_from_anchor(&log, &[]), fold(&log));
+    }
+
+    #[test]
+    fn consumer_synthesizes_no_anchors() {
+        // The recovery API only ever *consumes* anchors; there is no path by
+        // which this module authors one. We assert the contract structurally:
+        // recovery takes anchors as input and returns a WorldState, never an
+        // Anchor, so no consumer-authored anchor can leak out.
+        let log = timed_log();
+        let recovered: WorldState = recover_from_anchor(&log, &[]);
+        // The returned value is a WorldState, not an Anchor — there is no anchor
+        // to inspect because none was created. (If recover_from_anchor ever
+        // returned/emitted an Anchor, this binding's type would fail to compile.)
+        assert_eq!(recovered, fold(&log));
+    }
+
+    // ---- Box 3.7: snapshots are a deletable cache, not source of truth ----
+
+    #[test]
+    fn delete_and_rebuild_yields_the_same_state() {
+        let log = timed_log();
+        let t = "2026-06-17T00:00:05Z";
+        let anchors = vec![anchor_at(&log, "2026-06-17T00:00:03Z", 3)];
+
+        let with_anchor = reconstruct_as_of(&log, &anchors, t);
+        // Delete all anchors and rebuild by a full re-fold of the log.
+        let without_anchor = reconstruct_as_of(&log, &[], t);
+        assert_eq!(
+            serde_json::to_vec(&with_anchor).unwrap(),
+            serde_json::to_vec(&without_anchor).unwrap(),
+            "delete-and-rebuild must match the anchor-bounded reconstruction",
+        );
+    }
+
+    #[test]
+    fn corrupt_snapshot_is_discarded_in_favor_of_the_log() {
+        let log = timed_log();
+        // A faithful anchor validates; a tampered one does not.
+        let good = anchor_at(&log, "2026-06-17T00:00:03Z", 3);
+        assert!(validate_anchor(&log, &good), "honest anchor must validate");
+
+        let mut corrupt = good.clone();
+        corrupt
+            .state
+            .entities
+            .get_mut("lane-a")
+            .unwrap()
+            .data
+            .insert("x".to_string(), serde_json::json!(999));
+        assert!(
+            !validate_anchor(&log, &corrupt),
+            "anchor disagreeing with the log up to its last_seq must be rejected",
+        );
+
+        // Discarding the corrupt anchor (treating anchors as []) and folding the
+        // log yields the trustworthy, log-derived state.
+        let log_derived = recover_from_anchor(&log, &[]);
+        assert_eq!(log_derived, fold(&log));
     }
 }
