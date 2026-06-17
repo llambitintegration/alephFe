@@ -32,14 +32,14 @@
 
 ## 5. Wall-height fix, web (step 5 — web lane)
 
-- [ ] 5.1 Resolve the neighbor-index design question: decide whether wall vertices need one extra `u32` (neighbor polygon) or can derive both source polygons from `polygon_index` + side topology; document the choice
+- [x] 5.1 Resolve the neighbor-index design question: decide whether wall vertices need one extra `u32` (neighbor polygon) or can derive both source polygons from `polygon_index` + side topology; document the choice
 - [ ] 5.2 In `marathon-web/src/mesh.rs` wall emission (`~432-433,456-457,482-483`), replace baked absolute top/bottom Y with a height-source discriminator + source polygon index (mirroring `SURFACE_FLOOR/CEILING/MEDIA`); test that wall vertices carry the discriminator and source index instead of absolute Y
 - [ ] 5.3 In `marathon-web/src/shader.wgsl` `vs_main`, extend the discriminator branch (`~71-80`) to resolve wall Y from the data texture for the source polygon; verify the pipeline still builds under `downlevel_webgl2_defaults`
 - [ ] 5.4 Web E2E on a moving-platform/door level (door-anim scenario): assert the wall quads bordering the moving polygon stretch with it and leave no gap, while vertex/index buffers stay immutable
 
 ## 6. Wall-height fix, native (step 6 — native lane)
 
-- [ ] 6.1 Apply the same wall height-source discriminator in `marathon-game/src/mesh.rs`; test wall vertices carry the discriminator + source index
+- [x] 6.1 Apply the same wall height-source discriminator in `marathon-game/src/mesh.rs`; test wall vertices carry the discriminator + source index
 - [ ] 6.2 Extend `marathon-game/src/shader.wgsl` to resolve wall Y from the polygon buffer for the source polygon (consistent with the floor/ceiling read at `shader.wgsl:189`)
 - [ ] 6.3 Native integration/visual check: a moving platform stretches its native walls with no gap, buffers immutable
 

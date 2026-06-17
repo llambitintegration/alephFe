@@ -109,3 +109,45 @@ Rollback: each step is an isolated, independently-green commit on disjoint surfa
 - **`SimEvent` serde** — does every variant already serialize cleanly, or does an entity-handle/`Entity` field need a custom representation? Resolve in step 1.
 - **Neighbor index for walls** — does a wall vertex need one extra `u32` attribute for the neighbor polygon, or can both source polygons be derived from the existing `polygon_index` + side topology? Resolve in step 5.
 - **Whether `events` belongs in `WorldSnapshot`** — including drained events makes the snapshot the single frame interface, but events are consumed (not a pure read-model). Default: include them; the headless test asserts determinism with events present.
+
+## Wall height-source representation (box 5.1)
+
+This resolves the "Neighbor index for walls" open question above (line 110), specifically for the **native** renderer (`marathon-game`), which box 6.1 implements.
+
+### The neighbor problem (why `polygon_index` alone is insufficient)
+
+A wall quad's top/bottom Y is *not* always sourced from its owning polygon. Inspecting `build_wall_side` in `marathon-game/src/mesh.rs` (side-type switch), the Y endpoints are sourced as follows:
+
+| side_type | quad | bottom Y source | top Y source |
+|-----------|------|-----------------|--------------|
+| 0 (full)  | full | **own** floor   | **own** ceiling |
+| 1 (high)  | high | **adjacent** ceiling | **own** ceiling |
+| 2 (low)   | low  | **own** floor   | **adjacent** floor |
+| 3/4 (split) | low | **own** floor | **adjacent** floor |
+| 3/4 (split) | transparent (middle) | **adjacent** floor | **adjacent** ceiling |
+| 3/4 (split) | high | **adjacent** ceiling | **own** ceiling |
+
+Two facts fall out:
+
+1. A wall vertex's Y can come from the **adjacent** (neighbor) polygon, not the polygon stored in `polygon_index`. So `polygon_index` (which is kept for light/transfer-mode sampling = the *owning* polygon) cannot, by itself, identify the polygon whose animated floor/ceiling height drives the vertex.
+2. For a given source polygon, the Y can be either its **floor** or its **ceiling**. So a single "source polygon index" is also insufficient — we additionally need a floor-vs-ceiling selector per vertex.
+
+The shader has no side topology (lines/sides/adjacency are not uploaded — only the per-polygon `PolygonData` array is in `polygon_data`). Therefore the neighbor cannot be derived in-shader from `polygon_index`; it must be carried on the vertex.
+
+### Decision
+
+(a) **A wall vertex needs an explicit extra `u32`** — call it `height_source` — added to `marathon-game::mesh::Vertex`. `polygon_index` is retained unchanged for light/transfer-mode sampling (always the owning polygon). `height_source` independently names the polygon whose floor/ceiling height drives this vertex's Y. Deriving it from `polygon_index` + side topology is rejected because the side topology is not present on the GPU.
+
+(b) **Discriminator encoding.** `height_source` packs a 1-bit surface selector in the high bit and the source polygon index in the low 31 bits:
+
+```
+height_source = (surface_selector << 31) | (source_polygon_index & 0x7FFF_FFFF)
+WALL_HEIGHT_FROM_FLOOR   = 0   // sample polygon_data[src].floor_height
+WALL_HEIGHT_FROM_CEILING = 1   // sample polygon_data[src].ceiling_height
+```
+
+This mirrors the floor/ceiling/media discriminator pattern (web `SURFACE_FLOOR=0/CEILING=1/MEDIA=2` in `position.y`), but uses a dedicated attribute rather than overloading `position.y`, because (unlike a floor/ceiling vertex) a wall vertex's `polygon_index` is *not* the source polygon, so the source index must travel separately. Floor/ceiling/media native vertices set `height_source = (their own selector) | polygon_index` for forward consistency, though the native shader keeps reading their baked `position.y` (those are already correct and unbaking them is out of scope for §6).
+
+(c) **`position.y` stays baked for now (native).** Box 6.1 adds `height_source` to every vertex and asserts wall vertices carry the correct selector + source polygon index, but leaves the baked absolute `position.y` in place so the static native build renders identically without a shader change. Box 6.2 (shader) is the structural mirror that *resolves* wall Y from `polygon_data[src]` instead of `position.y`; it can only be runtime-verified on a GPU (operator-gated, like 6.3), so it ships for structural consistency but the baked Y is the safe fallback until then.
+
+This keeps 6.1 fully headless-testable on CPU vertex data (the new attribute and its packing) while making the vertex layout shader-ready for 6.2.
