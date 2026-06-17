@@ -36,10 +36,10 @@
 
 ## 3. event-sourced-projection
 
-- [ ] 3.1 Implement the pure deterministic reducer `apply(state, event) -> state` with no clock, no RNG, no I/O; same ordered log ⇒ byte-identical `WorldState` (specs/event-sourced-projection "Pure Deterministic Reducer" — scenarios "Same log yields byte-identical state" / "Reducer consults no external source").
-- [ ] 3.2 Fold per-entity keyed by `subject`, so interleaved events for distinct subjects never cross-contaminate state (specs/event-sourced-projection — scenario "Per-entity fold keyed by subject").
-- [ ] 3.3 Apply strictly in ascending `seq` order so shuffled delivery produces identical state (specs/event-sourced-projection "Producer-Owned Seq Ordering Authority").
-- [ ] 3.4 Make `apply` idempotent via dedupe-by-`id` so at-least-once redelivery of a single event or a whole batch is a no-op (specs/event-sourced-projection "Idempotent Apply With Dedupe By Id").
+- [x] 3.1 Implement the pure deterministic reducer `apply(state, event) -> state` with no clock, no RNG, no I/O; same ordered log ⇒ byte-identical `WorldState` (specs/event-sourced-projection "Pure Deterministic Reducer" — scenarios "Same log yields byte-identical state" / "Reducer consults no external source").
+- [x] 3.2 Fold per-entity keyed by `subject`, so interleaved events for distinct subjects never cross-contaminate state (specs/event-sourced-projection — scenario "Per-entity fold keyed by subject").
+- [x] 3.3 Apply strictly in ascending `seq` order so shuffled delivery produces identical state (specs/event-sourced-projection "Producer-Owned Seq Ordering Authority").
+- [x] 3.4 Make `apply` idempotent via dedupe-by-`id` so at-least-once redelivery of a single event or a whole batch is a no-op (specs/event-sourced-projection "Idempotent Apply With Dedupe By Id").
 - [ ] 3.5 Reconstruct state-as-of-T from the nearest file-resident snapshot anchor whose `asOf ≤ T`, then replay the tail (`seq > anchor.lastSeq`, `time ≤ T`); result equals a full prefix fold (specs/event-sourced-projection "State-As-Of-T Reconstruction From File-Resident Anchor" — all three scenarios incl. no-anchor-falls-back-to-full-fold).
 - [ ] 3.6 Recover after restart by replaying the append-only log from the latest anchor to the pre-restart `WorldState`; synthesize NO consumer-authored anchors (specs/event-sourced-projection "Restart Recovery By Log Replay").
 - [ ] 3.7 Treat snapshot anchors as a deletable cache: delete-and-rebuild by full re-fold yields the same state, and a corrupt anchor is discarded in favor of the log (specs/event-sourced-projection "Snapshots Are A Deletable Cache, Not Source Of Truth").
