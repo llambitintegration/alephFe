@@ -14,19 +14,25 @@
 //! - [`projection`]: the pure deterministic event-sourced reducer.
 //! - [`reconciler`]: the per-tick desired-set diff (spawn / update / despawn).
 //! - [`embodiment`]: the pure per-channel body mapping (species/pose/facing/glow).
+//! - [`placement`]: the pure lease-stream -> spatial-home (room/corridor) mapping.
 //! - [`interaction`]: care-verb interaction and broker-signed operator hints.
 //! - [`replay`]: the switchable view-clock live/replay render layer.
 
 pub mod embodiment;
 pub mod event;
 pub mod interaction;
+pub mod placement;
 pub mod projection;
 pub mod reconciler;
 pub mod replay;
 pub mod transport;
 
 pub use embodiment::{
-    facing_for, facing_of, glow_for, glow_of, pose_for, pose_of, species_for, Facing, Glow,
-    LifecyclePose, ProgressPhase, Species, SpeciesColor,
+    body_view_of, completion_beat_for, completion_beat_of, damage_flash_for, damage_flash_of,
+    facing_for, facing_of, glow_for, glow_of, hitl_signal_for, hitl_signal_of, label_overlay_for,
+    pose_for, pose_of, quest_status_for, quest_status_of, species_for, BodyView, CompletionBeat,
+    DamageFlash, DecorativeTool, Facing, Glow, HitlBeacon, HitlSignal, LabelOverlay, LifecyclePose,
+    ProgressPhase, QuestStatus, Species, SpeciesColor,
 };
 pub use event::{EntityDesc, EntityId, EntityKind, EntityState, EventEnvelope, GameAction};
+pub use placement::{lease_of, placement_for, placement_of, Lease, PlaceKind, Placement};

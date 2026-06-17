@@ -357,6 +357,317 @@ pub fn glow_of(desc: &EntityDesc) -> Glow {
     glow_for(phase)
 }
 
+// ============================================================================
+// Box 5.4: Discrete Event And Status Channels
+// ============================================================================
+//
+// Four INDEPENDENT channels, each a pure mapping that renders without consulting
+// any of the others (the spec's "Each of these channels MUST render
+// independently of the others"):
+//   - `box.advanced` -> a discrete completion BEAT; an `append:true` round for an
+//     already-beaten box renders a REPEATED beat, not a new box.
+//   - `test` result   -> a ONE-SHOT damage flash (a momentary event, not a state).
+//   - `pr` axis        -> a floating-label QUEST status (the quest-label channel).
+//   - `hitl.required`  -> a RAISE-A-HAND pose plus a BEACON that doubles as the
+//     ack/resurrect surface.
+
+/// A discrete completion beat fired by a `box.advanced` event (box 5.4).
+///
+/// A *new* box advance plays a single [`CompletionBeat::New`] beat; an
+/// `append:true` round for a box that already beat plays a
+/// [`CompletionBeat::Repeat`] beat (a repeated emphasis on the same box, NOT a
+/// new completion). When no `box.advanced` event is present the channel is
+/// [`CompletionBeat::None`] — discrete and momentary, never a sustained state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CompletionBeat {
+    /// No completion event this tick.
+    None,
+    /// A fresh box advance: a single new-completion beat.
+    New,
+    /// An `append:true` round on an already-beaten box: a repeated beat.
+    Repeat,
+}
+
+/// Map a `box.advanced` signal onto a discrete completion beat (box 5.4).
+///
+/// `advanced` is whether a `box.advanced` event fired this tick; `append` is its
+/// `append:true` round flag. An append round for an already-beaten box renders a
+/// [`CompletionBeat::Repeat`] beat rather than a fresh box. The beat is always a
+/// momentary one-shot — there is no sustained "completed" state here.
+///
+/// Pure: depends only on its arguments.
+#[must_use]
+pub fn completion_beat_for(advanced: bool, append: bool) -> CompletionBeat {
+    match (advanced, append) {
+        (false, _) => CompletionBeat::None,
+        (true, false) => CompletionBeat::New,
+        (true, true) => CompletionBeat::Repeat,
+    }
+}
+
+/// The completion beat for an [`EntityDesc`], reading its `box.advanced` axes.
+///
+/// Reads `meta["box.advanced"]` (a truthy `"true"`/`"1"`) and `meta["append"]`;
+/// a missing event resolves to [`CompletionBeat::None`] with no error.
+#[must_use]
+pub fn completion_beat_of(desc: &EntityDesc) -> CompletionBeat {
+    let advanced = meta_truthy(desc, "box.advanced");
+    let append = meta_truthy(desc, "append");
+    completion_beat_for(advanced, append)
+}
+
+/// A one-shot damage flash fired by a `test` result (box 5.4).
+///
+/// A `failed` test plays a single [`DamageFlash::Flash`] — a momentary flash, NOT
+/// a sustained damaged state. A `passed` test or an absent/unrecognized result is
+/// [`DamageFlash::None`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DamageFlash {
+    /// No flash this tick (test passed, absent, or unrecognized).
+    None,
+    /// A single one-shot damage flash (the test failed).
+    Flash,
+}
+
+/// Map a `test` result string onto a one-shot damage flash (box 5.4).
+///
+/// `failed` -> a single [`DamageFlash::Flash`]; anything else (incl. `passed`,
+/// empty, or unrecognized) -> [`DamageFlash::None`]. The flash is momentary by
+/// construction: this channel carries no sustained state.
+///
+/// Pure: depends only on its argument.
+#[must_use]
+pub fn damage_flash_for(test: &str) -> DamageFlash {
+    match test {
+        "failed" => DamageFlash::Flash,
+        _ => DamageFlash::None,
+    }
+}
+
+/// The damage flash for an [`EntityDesc`], reading its `test` axis.
+#[must_use]
+pub fn damage_flash_of(desc: &EntityDesc) -> DamageFlash {
+    let test = desc.meta.get("test").map(String::as_str).unwrap_or("");
+    damage_flash_for(test)
+}
+
+/// The `pr` axis rendered as a floating-label quest status (box 5.4).
+///
+/// The `pr` axis is surfaced as a quest-status label floating at the monster; the
+/// `merged` value pairs with the allied species (box 5.1) but the quest label is
+/// an independent channel. An absent/unrecognized `pr` renders no quest status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum QuestStatus {
+    /// No `pr` axis present — no quest label.
+    None,
+    /// A PR is open (work in flight).
+    Open,
+    /// A PR is in review.
+    InReview,
+    /// A PR is merged (paired with the allied skin).
+    Merged,
+    /// A PR is closed without merge.
+    Closed,
+}
+
+/// Map the `pr` axis onto a floating-label quest status (box 5.4).
+///
+/// Recognizes the canonical `pr` spellings; an absent/unrecognized value renders
+/// [`QuestStatus::None`] (no quest label) with no error. This is the quest-label
+/// channel; it renders independently of the species/allied-skin channel.
+///
+/// Pure: depends only on its argument.
+#[must_use]
+pub fn quest_status_for(pr: &str) -> QuestStatus {
+    match pr {
+        "open" => QuestStatus::Open,
+        "in-review" | "in_review" | "review" => QuestStatus::InReview,
+        "merged" => QuestStatus::Merged,
+        "closed" => QuestStatus::Closed,
+        _ => QuestStatus::None,
+    }
+}
+
+/// The quest status for an [`EntityDesc`], reading its optional `pr` axis.
+#[must_use]
+pub fn quest_status_of(desc: &EntityDesc) -> QuestStatus {
+    let pr = desc.meta.get("pr").map(String::as_str).unwrap_or("");
+    quest_status_for(pr)
+}
+
+/// The `hitl.required` channel: a raise-a-hand pose plus an ack/resurrect beacon
+/// (box 5.4).
+///
+/// When a HITL gate is required the monster adopts the raise-a-hand pose AND
+/// surfaces a beacon; the SAME beacon is the surface an operator clicks to
+/// ack/resurrect, so `beacon.is_some()` iff `raise_hand` (they co-fire). When no
+/// gate is required there is no raised hand and no beacon.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HitlSignal {
+    /// `true` when the monster adopts the raise-a-hand gate pose.
+    pub raise_hand: bool,
+    /// The beacon, present iff a gate is required; it doubles as the
+    /// ack/resurrect interaction surface.
+    pub beacon: Option<HitlBeacon>,
+}
+
+/// The HITL beacon — surfaced on a required gate, doubling as ack/resurrect
+/// surface (box 5.4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HitlBeacon {
+    /// `true`: clicking the beacon acks/resurrects the gated monster.
+    pub is_ack_resurrect_surface: bool,
+}
+
+impl HitlSignal {
+    /// The default signal when no gate is required: no raised hand, no beacon.
+    pub const NONE: HitlSignal = HitlSignal {
+        raise_hand: false,
+        beacon: None,
+    };
+}
+
+/// Map the `hitl.required` flag onto the raise-a-hand pose + beacon (box 5.4).
+///
+/// A set gate raises the hand AND surfaces a beacon that is the ack/resurrect
+/// surface; an unset gate holds [`HitlSignal::NONE`] (no hand, no beacon).
+///
+/// Pure: depends only on its argument.
+#[must_use]
+pub fn hitl_signal_for(required: bool) -> HitlSignal {
+    if required {
+        HitlSignal {
+            raise_hand: true,
+            beacon: Some(HitlBeacon {
+                is_ack_resurrect_surface: true,
+            }),
+        }
+    } else {
+        HitlSignal::NONE
+    }
+}
+
+/// The HITL signal for an [`EntityDesc`], reading its `hitl.required` axis.
+#[must_use]
+pub fn hitl_signal_of(desc: &EntityDesc) -> HitlSignal {
+    hitl_signal_for(meta_truthy(desc, "hitl.required"))
+}
+
+/// Read a `meta` axis as a boolean flag (`"true"`/`"1"` are truthy).
+///
+/// A missing key or any other value is falsey, with no error.
+#[must_use]
+fn meta_truthy(desc: &EntityDesc, key: &str) -> bool {
+    matches!(
+        desc.meta.get(key).map(String::as_str),
+        Some("true" | "1" | "yes")
+    )
+}
+
+// ============================================================================
+// Box 5.6: Floating-label / annotation overlay
+// ============================================================================
+
+/// The floating-label / annotation overlay drawn at the monster (box 5.6).
+///
+/// A small, render-facing annotation carrying the agent's opaque identity
+/// (`laneId`) and its current human-facing task (`label`). The `id` is the
+/// stable, opaque `laneId` (never a mutable label); `task` is the human-facing
+/// `label` and may change tick-to-tick without changing identity. An empty task
+/// renders the id alone (no error).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LabelOverlay {
+    /// The opaque, stable agent identity (the `laneId`).
+    pub id: String,
+    /// The human-facing current task (the `label`); may be empty.
+    pub task: String,
+}
+
+/// Render the floating-label overlay for an [`EntityDesc`] (box 5.6).
+///
+/// The overlay carries the opaque `laneId` as `id` and the human-facing `label`
+/// as `task`. It is keyed on the stable `laneId`, so a relabel changes only the
+/// `task` text, never the `id`.
+///
+/// Pure: depends only on `desc`.
+#[must_use]
+pub fn label_overlay_for(desc: &EntityDesc) -> LabelOverlay {
+    LabelOverlay {
+        id: desc.lane_id.clone(),
+        task: desc.label.clone(),
+    }
+}
+
+// ============================================================================
+// Box 5.7: Monster Is A Faithful Debugger View
+// ============================================================================
+
+/// The complete debugger-view body composed from the per-channel mappings
+/// (box 5.7).
+///
+/// Bundles the channels an observer reads to infer the agent's state from the
+/// body ALONE: the discrete lifecycle [`pose`](BodyView::pose) and the
+/// [`facing`](BodyView::facing) orientation are BOTH present so a simultaneous
+/// lifecycle + attention shift is legible at once. There is deliberately NO
+/// weapon/kill affordance field; any equipment is decorative and indicates the
+/// active tool only ([`tool`](BodyView::tool)).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BodyView {
+    /// The discrete lifecycle pose (driven by `work` state).
+    pub pose: LifecyclePose,
+    /// The orientation/lean (driven by the attention target).
+    pub facing: Facing,
+    /// Decorative-only equipment indicating the active tool, if any.
+    ///
+    /// This is the ONLY equipment channel and it is purely decorative: it can
+    /// never name or render a kill-weapon affordance.
+    pub tool: Option<DecorativeTool>,
+}
+
+/// Decorative equipment indicating the agent's active tool only (box 5.7).
+///
+/// This is NOT a weapon: it carries no damage/kill semantics. It exists solely to
+/// indicate which tool the agent is actively using, by construction unable to
+/// represent a combat affordance.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct DecorativeTool {
+    /// A human-facing tool name (e.g. `"editor"`, `"shell"`); decorative only.
+    pub active_tool: String,
+}
+
+impl BodyView {
+    /// Whether this body renders any combat/kill-weapon affordance.
+    ///
+    /// Always `false`: the [`BodyView`] type has no weapon channel, so a faithful
+    /// debugger view can never render a kill affordance. The decorative
+    /// [`tool`](BodyView::tool), when present, indicates the active tool only.
+    #[must_use]
+    pub const fn renders_combat_affordance(&self) -> bool {
+        false
+    }
+}
+
+/// Compose the faithful debugger-view body from an [`EntityDesc`] + clock
+/// (box 5.7).
+///
+/// Drives BOTH the discrete lifecycle pose (from `work`) and the orientation
+/// (from `attention`) from the same `desc`, so a tick that shifts lifecycle state
+/// AND attention together updates both channels at once — the body stays legible
+/// as a debugger view. The optional `tool` axis is decorative (active-tool
+/// indicator) only; there is no combat affordance anywhere in the result.
+///
+/// Pure: depends only on its arguments.
+#[must_use]
+pub fn body_view_of(desc: &EntityDesc, anim_clock: u64) -> BodyView {
+    BodyView {
+        pose: pose_of(desc, anim_clock),
+        facing: facing_of(desc),
+        tool: desc.meta.get("tool").map(|t| DecorativeTool {
+            active_tool: t.clone(),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,6 +954,227 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ---- Box 5.4: Discrete Event And Status Channels ----
+
+    // Scenario: A failed test produces a one-shot damage flash.
+    #[test]
+    fn failed_test_produces_a_one_shot_damage_flash() {
+        assert_eq!(
+            damage_flash_for("failed"),
+            DamageFlash::Flash,
+            "a failed test plays a single damage flash"
+        );
+        // A passed/absent test plays no flash (the flash is momentary, not a state).
+        assert_eq!(damage_flash_for("passed"), DamageFlash::None);
+        assert_eq!(damage_flash_for(""), DamageFlash::None);
+
+        let failed = desc_meta("lane-a", "test", "failed");
+        assert_eq!(damage_flash_of(&failed), DamageFlash::Flash);
+        let passed = desc_meta("lane-a", "test", "passed");
+        assert_eq!(damage_flash_of(&passed), DamageFlash::None);
+    }
+
+    // Scenario: A required HITL gate raises a hand and a beacon.
+    #[test]
+    fn required_hitl_gate_raises_a_hand_and_a_beacon() {
+        let sig = hitl_signal_for(true);
+        assert!(
+            sig.raise_hand,
+            "a required gate adopts the raise-a-hand pose"
+        );
+        let beacon = sig.beacon.expect("a required gate surfaces a beacon");
+        assert!(
+            beacon.is_ack_resurrect_surface,
+            "the beacon doubles as the ack/resurrect surface"
+        );
+
+        // No gate -> no hand, no beacon.
+        let none = hitl_signal_for(false);
+        assert_eq!(none, HitlSignal::NONE);
+        assert!(!none.raise_hand);
+        assert!(none.beacon.is_none());
+
+        // Via the EntityDesc path.
+        let gated = desc_meta("lane-a", "hitl.required", "true");
+        assert!(hitl_signal_of(&gated).raise_hand);
+        let ungated = desc("lane-a");
+        assert_eq!(hitl_signal_of(&ungated), HitlSignal::NONE);
+    }
+
+    // Scenario: An append round repeats the completion beat.
+    #[test]
+    fn append_round_repeats_the_completion_beat() {
+        // A fresh box advance is a NEW beat.
+        assert_eq!(completion_beat_for(true, false), CompletionBeat::New);
+        // An append:true round on an already-beaten box is a REPEATED beat,
+        // distinct from a new box.
+        assert_eq!(completion_beat_for(true, true), CompletionBeat::Repeat);
+        assert_ne!(
+            completion_beat_for(true, false),
+            completion_beat_for(true, true),
+            "an append round is a repeat, not a new box"
+        );
+        // No event -> no beat (discrete/momentary).
+        assert_eq!(completion_beat_for(false, false), CompletionBeat::None);
+
+        // Via the EntityDesc path.
+        let mut appended = desc_meta("lane-a", "box.advanced", "true");
+        appended
+            .meta
+            .insert("append".to_string(), "true".to_string());
+        assert_eq!(completion_beat_of(&appended), CompletionBeat::Repeat);
+        let fresh = desc_meta("lane-a", "box.advanced", "1");
+        assert_eq!(completion_beat_of(&fresh), CompletionBeat::New);
+        let quiet = desc("lane-a");
+        assert_eq!(completion_beat_of(&quiet), CompletionBeat::None);
+    }
+
+    #[test]
+    fn pr_axis_renders_a_floating_label_quest_status() {
+        assert_eq!(quest_status_for("open"), QuestStatus::Open);
+        assert_eq!(quest_status_for("in-review"), QuestStatus::InReview);
+        assert_eq!(quest_status_for("merged"), QuestStatus::Merged);
+        assert_eq!(quest_status_for("closed"), QuestStatus::Closed);
+        assert_eq!(quest_status_for(""), QuestStatus::None);
+        assert_eq!(quest_status_for("garbage"), QuestStatus::None);
+
+        let merged = desc_meta("lane-a", "pr", "merged");
+        assert_eq!(quest_status_of(&merged), QuestStatus::Merged);
+        let none = desc("lane-a");
+        assert_eq!(quest_status_of(&none), QuestStatus::None);
+    }
+
+    #[test]
+    fn discrete_event_status_channels_render_independently() {
+        // One desc carries ALL four event/status axes; each channel resolves its
+        // own value with no cross-talk.
+        let mut d = desc_meta("lane-a", "test", "failed");
+        d.meta.insert("pr".to_string(), "open".to_string());
+        d.meta
+            .insert("hitl.required".to_string(), "true".to_string());
+        d.meta
+            .insert("box.advanced".to_string(), "true".to_string());
+
+        assert_eq!(damage_flash_of(&d), DamageFlash::Flash);
+        assert_eq!(quest_status_of(&d), QuestStatus::Open);
+        assert!(hitl_signal_of(&d).raise_hand);
+        assert_eq!(completion_beat_of(&d), CompletionBeat::New);
+
+        // Flipping one channel (the test) does not disturb the others.
+        let mut d2 = d.clone();
+        d2.meta.insert("test".to_string(), "passed".to_string());
+        assert_eq!(
+            damage_flash_of(&d2),
+            DamageFlash::None,
+            "test channel changed"
+        );
+        assert_eq!(quest_status_of(&d2), QuestStatus::Open, "pr unaffected");
+        assert!(hitl_signal_of(&d2).raise_hand, "hitl unaffected");
+        assert_eq!(
+            completion_beat_of(&d2),
+            CompletionBeat::New,
+            "completion beat unaffected"
+        );
+    }
+
+    // ---- Box 5.6: Floating-label / annotation overlay ----
+
+    #[test]
+    fn label_overlay_carries_opaque_id_and_human_task() {
+        let mut d = desc("lane-xyz");
+        d.label = "build the platform mechanics".to_string();
+        let overlay = label_overlay_for(&d);
+        assert_eq!(overlay.id, "lane-xyz", "id is the opaque laneId");
+        assert_eq!(overlay.task, "build the platform mechanics");
+    }
+
+    #[test]
+    fn label_overlay_id_is_stable_across_relabel() {
+        // A relabel changes only the task text, never the opaque id.
+        let mut t0 = desc("lane-xyz");
+        t0.label = "old task".to_string();
+        let mut t1 = desc("lane-xyz");
+        t1.label = "new task".to_string();
+        let o0 = label_overlay_for(&t0);
+        let o1 = label_overlay_for(&t1);
+        assert_eq!(o0.id, o1.id, "the id is stable across a relabel");
+        assert_ne!(o0.task, o1.task, "only the task text changes");
+    }
+
+    #[test]
+    fn label_overlay_empty_task_renders_id_alone_no_error() {
+        let mut d = desc("lane-xyz");
+        d.label = String::new();
+        let overlay = label_overlay_for(&d);
+        assert_eq!(overlay.id, "lane-xyz");
+        assert!(overlay.task.is_empty());
+    }
+
+    // ---- Box 5.7: Monster Is A Faithful Debugger View ----
+
+    // Scenario: Lifecycle and attention are both legible from the body.
+    #[test]
+    fn simultaneous_lifecycle_and_attention_shift_drives_both_channels() {
+        // Tick 0: working, attention at 0.0.
+        let mut t0 = desc_meta("lane-a", "work", "working");
+        t0.meta.insert("attention".to_string(), "0.0".to_string());
+        let v0 = body_view_of(&t0, 0);
+        assert_eq!(v0.pose, LifecyclePose::Working);
+
+        // Tick 1: SIMULTANEOUSLY shift lifecycle (-> blocked) AND attention (-> 0.5).
+        let mut t1 = desc_meta("lane-a", "work", "blocked");
+        t1.meta.insert("attention".to_string(), "0.5".to_string());
+        let v1 = body_view_of(&t1, 1);
+
+        // BOTH channels updated on the same tick.
+        assert_eq!(
+            v1.pose,
+            LifecyclePose::Blocked,
+            "the discrete pose changed for the new lifecycle state"
+        );
+        assert_ne!(v0.pose, v1.pose, "pose changed");
+        assert!(v1.facing.from_attention, "facing is attention-driven");
+        assert!(
+            (v1.facing.yaw - 0.5).abs() < 1e-6,
+            "the body reoriented toward the new attention target"
+        );
+        assert_ne!(v0.facing.yaw, v1.facing.yaw, "orientation changed");
+    }
+
+    // Scenario: No combat affordance is rendered.
+    #[test]
+    fn no_combat_affordance_is_ever_rendered() {
+        // Across a spread of states, the body never renders a kill-weapon.
+        for work in ["spawning", "working", "idle", "blocked", "finished", "???"] {
+            let d = desc_meta("lane-a", "work", work);
+            let view = body_view_of(&d, 0);
+            assert!(
+                !view.renders_combat_affordance(),
+                "no kill-weapon affordance is rendered in any state"
+            );
+        }
+    }
+
+    #[test]
+    fn decorative_tool_indicates_active_tool_only() {
+        // The only equipment channel is the decorative active-tool indicator.
+        let d = desc_meta("lane-a", "tool", "editor");
+        let view = body_view_of(&d, 0);
+        let tool = view
+            .tool
+            .as_ref()
+            .expect("an active tool is surfaced decoratively");
+        assert_eq!(tool.active_tool, "editor");
+        // It is still not a combat affordance.
+        assert!(!view.renders_combat_affordance());
+
+        // No tool axis -> no equipment shown, still no combat affordance.
+        let bare = desc("lane-a");
+        let bare_view = body_view_of(&bare, 0);
+        assert!(bare_view.tool.is_none());
+        assert!(!bare_view.renders_combat_affordance());
     }
 
     #[test]
