@@ -3332,3 +3332,102 @@ fn action_key_release_then_repress_reactivates_door() {
         "releasing then re-pressing ACTION must re-activate the door (second activation)"
     );
 }
+
+// ──────────────────── render_snapshot aggregator (decouple-tick-snapshot) ────────────────────
+
+/// A copy of `make_test_map` with no player object, for the no-player case.
+fn make_no_player_map() -> MapData {
+    let mut map = make_test_map();
+    map.objects = vec![];
+    map
+}
+
+#[test]
+fn render_snapshot_fields_match_individual_accessors() {
+    // box 2.3: each snapshot field equals the corresponding individual accessor
+    // after N ticks.
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let mut world = SimWorld::new(&map, &physics, &SimConfig::default()).expect("world");
+    for _ in 0..5 {
+        world.tick(marathon_sim::tick::TickInput::default());
+    }
+
+    // Capture the read-only accessors first (these do not mutate sim state),
+    // then take the snapshot and compare. render_snapshot drains events, so we
+    // read events from the snapshot itself rather than comparing to a prior
+    // drain (per design.md: events are the only allowed state change).
+    let expect_tick = world.tick_count();
+    let expect_poly = world.poly_dynamic_data();
+    let expect_entities = world.entities();
+    let expect_pos = world.player_position();
+    let expect_facing = world.player_facing();
+    let expect_health = world.player_health();
+    let expect_weapon_some = world.player_weapon_state().is_some();
+
+    let snap = world.render_snapshot();
+
+    assert_eq!(snap.tick_count, expect_tick);
+    assert_eq!(snap.poly_dynamic, expect_poly);
+    assert_eq!(snap.entities.len(), expect_entities.len());
+    for (a, b) in snap.entities.iter().zip(expect_entities.iter()) {
+        assert_eq!(a.position, b.position);
+        assert_eq!(a.shape, b.shape);
+        assert_eq!(a.frame, b.frame);
+    }
+    let player = snap.player.expect("player present");
+    assert_eq!(Some(player.position), expect_pos);
+    assert_eq!(Some(player.facing), expect_facing);
+    assert_eq!(Some(player.health), expect_health);
+    assert_eq!(snap.weapon.is_some(), expect_weapon_some);
+}
+
+#[test]
+fn render_snapshot_is_read_only_wrt_sim_state() {
+    // box 2.4: calling render_snapshot twice without a tick yields the same
+    // tick_count and identical poly/entity/player data. Draining events is the
+    // only permitted state change (design.md Open Question default), so we only
+    // assert poly/entity/tick/player stability.
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let mut world = SimWorld::new(&map, &physics, &SimConfig::default()).expect("world");
+    for _ in 0..3 {
+        world.tick(marathon_sim::tick::TickInput::default());
+    }
+
+    let first = world.render_snapshot();
+    let second = world.render_snapshot();
+
+    assert_eq!(
+        first.tick_count, second.tick_count,
+        "snapshotting must not advance the tick counter"
+    );
+    assert_eq!(first.poly_dynamic, second.poly_dynamic);
+    assert_eq!(first.entities.len(), second.entities.len());
+    for (a, b) in first.entities.iter().zip(second.entities.iter()) {
+        assert_eq!(a.position, b.position);
+    }
+    assert_eq!(first.player, second.player);
+}
+
+#[test]
+fn render_snapshot_no_player_yields_none_but_rest_present() {
+    // box 2.5: a world with no player yields player == None and still produces
+    // the rest of the snapshot (poly_dynamic populated per polygon).
+    let map = make_no_player_map();
+    let physics = make_test_physics();
+    let mut world = SimWorld::new(&map, &physics, &SimConfig::default()).expect("world");
+    assert!(
+        world.player_position().is_none(),
+        "fixture has no player object"
+    );
+    world.tick(marathon_sim::tick::TickInput::default());
+
+    let snap = world.render_snapshot();
+    assert!(snap.player.is_none(), "no player => player view is None");
+    assert_eq!(
+        snap.poly_dynamic.len(),
+        world.poly_dynamic_data().len(),
+        "poly_dynamic still produced without a player"
+    );
+}

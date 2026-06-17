@@ -2508,7 +2508,7 @@ impl SimWorld {
 }
 
 /// Rendering data for an active entity.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct EntityRenderState {
     pub entity_type: RenderEntityType,
     pub position: glam::Vec3,
@@ -2518,7 +2518,7 @@ pub struct EntityRenderState {
 }
 
 /// Type of entity for rendering purposes.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub enum RenderEntityType {
     Monster { definition_index: usize },
     Projectile { definition_index: usize },
@@ -2527,7 +2527,7 @@ pub enum RenderEntityType {
 }
 
 /// Rendering data for the player's current weapon.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct WeaponRenderState {
     /// Shape collection index (references a collection in the shapes file).
     pub collection: u16,
@@ -2557,6 +2557,71 @@ mod tests {
     fn action_flags_empty() {
         let flags = ActionFlags::default();
         assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn entity_render_state_bincode_round_trip() {
+        // box 1.2: a populated EntityRenderState (and its RenderEntityType)
+        // round-trips through bincode unchanged.
+        let state = EntityRenderState {
+            entity_type: RenderEntityType::Monster {
+                definition_index: 4,
+            },
+            position: glam::Vec3::new(1.5, -2.0, 3.25),
+            facing: 0.7,
+            shape: 12,
+            frame: 6,
+        };
+        let bytes = bincode::serialize(&state).expect("serialize");
+        let back: EntityRenderState = bincode::deserialize(&bytes).expect("deserialize");
+        assert_eq!(back.position, state.position);
+        assert_eq!(back.facing, state.facing);
+        assert_eq!(back.shape, state.shape);
+        assert_eq!(back.frame, state.frame);
+        match back.entity_type {
+            RenderEntityType::Monster { definition_index } => assert_eq!(definition_index, 4),
+            _ => panic!("wrong RenderEntityType variant"),
+        }
+    }
+
+    #[test]
+    fn render_entity_type_variants_round_trip() {
+        // box 1.2: each RenderEntityType variant survives bincode.
+        for variant in [
+            RenderEntityType::Monster {
+                definition_index: 1,
+            },
+            RenderEntityType::Projectile {
+                definition_index: 2,
+            },
+            RenderEntityType::Item { item_type: 3 },
+            RenderEntityType::Effect {
+                definition_index: 4,
+            },
+        ] {
+            let bytes = bincode::serialize(&variant).expect("serialize");
+            let back: RenderEntityType = bincode::deserialize(&bytes).expect("deserialize");
+            assert_eq!(format!("{:?}", variant), format!("{:?}", back));
+        }
+    }
+
+    #[test]
+    fn weapon_render_state_bincode_round_trip() {
+        // box 1.3: WeaponRenderState round-trips through bincode unchanged.
+        let state = WeaponRenderState {
+            collection: 3,
+            shape: 9,
+            frame: 1,
+            vertical_position: 0.4,
+            horizontal_position: 0.6,
+        };
+        let bytes = bincode::serialize(&state).expect("serialize");
+        let back: WeaponRenderState = bincode::deserialize(&bytes).expect("deserialize");
+        assert_eq!(back.collection, state.collection);
+        assert_eq!(back.shape, state.shape);
+        assert_eq!(back.frame, state.frame);
+        assert_eq!(back.vertical_position, state.vertical_position);
+        assert_eq!(back.horizontal_position, state.horizontal_position);
     }
 
     #[test]
