@@ -24,11 +24,11 @@
 
 ## 4. Native migration + frozen-light fix (step 4 — native lane, riskiest)
 
-- [ ] 4.1 Replace the `snapshot()` + byte-offset update path in `marathon-game/src/render.rs:1250-1289` with whole-`PolygonGpuData`-struct writes built from `render_snapshot().poly_dynamic` for all polygons (floor/ceiling/media height + floor/ceiling light)
-- [ ] 4.2 Remove the dead light no-op stub (`render.rs:1282-1288`); confirm no `let _ = light;` or equivalent remains in the polygon-update path
-- [ ] 4.3 Keep/verify the `size_of::<PolygonGpuData>() == 48` assertion (`render.rs:1593`) as the layout guardrail; test it holds
-- [ ] 4.4 Headless/integration test: tick a sim with an animated light for N ticks and assert the native polygon buffer's floor/ceiling light entries change (lights no longer frozen)
-- [ ] 4.5 Native binary builds and its render/integration tests are green
+- [x] 4.1 Replace the `snapshot()` + byte-offset update path in `marathon-game/src/render.rs:1250-1289` with whole-`PolygonGpuData`-struct writes built from `render_snapshot().poly_dynamic` for all polygons (floor/ceiling/media height + floor/ceiling light)
+- [x] 4.2 Remove the dead light no-op stub (`render.rs:1282-1288`); confirm no `let _ = light;` or equivalent remains in the polygon-update path
+- [x] 4.3 Keep/verify the `size_of::<PolygonGpuData>() == 48` assertion (`render.rs:1593`) as the layout guardrail; test it holds
+- [x] 4.4 Headless/integration test: tick a sim with an animated light for N ticks and assert the native polygon buffer's floor/ceiling light entries change (lights no longer frozen)
+- [x] 4.5 Native binary builds and its render/integration tests are green
 
 ## 5. Wall-height fix, web (step 5 — web lane)
 
