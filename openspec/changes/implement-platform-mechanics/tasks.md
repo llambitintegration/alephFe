@@ -7,10 +7,10 @@
 
 ## 2. Platform Type-Aware Height Initialization
 
-- [ ] 2.1 Rewrite `spawn_platforms()` in `marathon-sim/src/world.rs` to read `StaticPlatformData.platform_type` and compute `floor_rest`, `floor_extended`, `ceiling_rest`, `ceiling_extended` per the six-type formula using the polygon's initial floor/ceiling heights from `MapGeometry`.
-- [ ] 2.2 Populate `linked_platforms` and `linked_lights` from map data during `spawn_platforms()`. Use `StaticPlatformData.tag` to cross-reference platforms sharing the same tag.
-- [ ] 2.3 Set `current_floor` and `current_ceiling` to their rest values for each platform type during spawn.
-- [ ] 2.4 Add unit tests for `spawn_platforms()` covering each of the 6 platform types to verify correct height range computation.
+- [x] 2.1 Rewrite `spawn_platforms()` in `marathon-sim/src/world.rs` to read `StaticPlatformData.platform_type` and compute `floor_rest`, `floor_extended`, `ceiling_rest`, `ceiling_extended` per the six-type formula using the polygon's initial floor/ceiling heights from `MapGeometry`.
+- [x] 2.2 Populate `linked_platforms` and `linked_lights` from map data during `spawn_platforms()`. Use `StaticPlatformData.tag` to cross-reference platforms sharing the same tag.
+- [x] 2.3 Set `current_floor` and `current_ceiling` to their rest values for each platform type during spawn.
+- [x] 2.4 Add unit tests for `spawn_platforms()` covering each of the 6 platform types to verify correct height range computation.
 
 ## 3. MapGeometry Dirty Flag Extension
 
