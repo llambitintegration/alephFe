@@ -47,7 +47,7 @@
 
 - [x] 7.1 Add a headless test that constructs a `SimWorld` with no GPU, ticks N times with a fixed `TickInput` sequence, and calls `render_snapshot()` after each tick without initializing any graphics backend
 - [x] 7.2 Serialize each frame's `render_snapshot()`; assert two runs with the same seed/level/input sequence produce byte-identical per-tick streams
-- [ ] 7.3 Assert calling `render_snapshot()` between ticks does not perturb the deterministic tick sequence vs. a reference run that omits the snapshot calls
+- [x] 7.3 Assert calling `render_snapshot()` between ticks does not perturb the deterministic tick sequence vs. a reference run that omits the snapshot calls
 
 ## 8. Workspace verification
 

@@ -429,3 +429,67 @@ fn same_seed_runs_produce_byte_identical_snapshot_streams() {
         "expected snapshot bytes to vary across ticks (player should move)"
     );
 }
+
+// ──────────── Box 7.3: snapshot calls do not perturb the sim ────────────
+
+/// A per-tick fingerprint of observable sim state, built only from accessors
+/// that exist independently of `render_snapshot` (so the reference run never
+/// has to call `render_snapshot`). Serialized to bytes for exact comparison.
+fn sim_fingerprint(world: &mut SimWorld) -> Vec<u8> {
+    let fp = (
+        world.tick_count(),
+        world.player_position().map(|p| (p.x, p.y, p.z)),
+        world.player_facing(),
+        world.player_vertical_look(),
+        world.player_polygon(),
+        world.player_health(),
+        world.player_shield(),
+        world.player_oxygen(),
+        world.poly_dynamic_data(),
+    );
+    bincode::serialize(&fp).expect("fingerprint serialization failed")
+}
+
+/// Calling `render_snapshot()` between ticks (which drains the per-frame event
+/// queue) must not perturb the deterministic tick sequence. We compare a run
+/// that snapshots after every tick against a reference run that never calls
+/// `render_snapshot`, fingerprinting both with the SAME accessor set after each
+/// tick. The two fingerprint streams must match tick-for-tick.
+#[test]
+fn snapshot_between_ticks_does_not_perturb_sim() {
+    const N: usize = 60;
+    let inputs = input_sequence();
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig {
+        random_seed: 42,
+        difficulty: 2,
+    };
+
+    // Reference run: tick only, never call render_snapshot.
+    let mut reference = SimWorld::new(&map, &physics, &config).expect("world construction failed");
+    let mut ref_fps = Vec::with_capacity(N);
+    for i in 0..N {
+        reference.tick(inputs[i % inputs.len()].into());
+        ref_fps.push(sim_fingerprint(&mut reference));
+    }
+
+    // Observed run: identical seed/level/inputs, but call render_snapshot after
+    // every tick before fingerprinting.
+    let mut observed = SimWorld::new(&map, &physics, &config).expect("world construction failed");
+    let mut obs_fps = Vec::with_capacity(N);
+    for i in 0..N {
+        observed.tick(inputs[i % inputs.len()].into());
+        let _snapshot = observed.render_snapshot();
+        obs_fps.push(sim_fingerprint(&mut observed));
+    }
+
+    assert_eq!(ref_fps.len(), N);
+    assert_eq!(obs_fps.len(), N);
+    for tick in 0..N {
+        assert_eq!(
+            ref_fps[tick], obs_fps[tick],
+            "render_snapshot perturbed the sim trajectory at tick {tick}"
+        );
+    }
+}
