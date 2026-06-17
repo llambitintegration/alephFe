@@ -13,9 +13,11 @@
 //! - [`event`]: the CloudEvents-shaped envelope and shared cross-stage types.
 //! - [`projection`]: the pure deterministic event-sourced reducer.
 //! - [`reconciler`]: the per-tick desired-set diff (spawn / update / despawn).
+//! - [`embodiment`]: the pure per-channel body mapping (species/pose/facing/glow).
 //! - [`interaction`]: care-verb interaction and broker-signed operator hints.
 //! - [`replay`]: the switchable view-clock live/replay render layer.
 
+pub mod embodiment;
 pub mod event;
 pub mod interaction;
 pub mod projection;
@@ -23,4 +25,8 @@ pub mod reconciler;
 pub mod replay;
 pub mod transport;
 
+pub use embodiment::{
+    facing_for, facing_of, glow_for, glow_of, pose_for, pose_of, species_for, Facing, Glow,
+    LifecyclePose, ProgressPhase, Species, SpeciesColor,
+};
 pub use event::{EntityDesc, EntityId, EntityKind, EntityState, EventEnvelope, GameAction};
