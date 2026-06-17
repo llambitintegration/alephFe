@@ -47,12 +47,12 @@
 ## 4. agent-reconciler
 
 - [ ] 4.1 Consume the desired-set on a latest-wins `tokio::sync::watch` channel, reading at most the most-recent snapshot per game tick and coalescing intervening publishes into one diff; tolerate an empty/stale set without error (specs/agent-reconciler "Latest-Wins Desired-Set Channel" — scenarios "Multiple publishes between ticks coalesce" / "Empty desired-set is tolerated").
-- [ ] 4.2 Key reconcile strictly on the opaque `laneId`, never on a label/attribute, so a republished `EntityDesc` with changed label/persona matches the same monster (specs/agent-reconciler — scenario "Reconcile is keyed on laneId not label").
+- [x] 4.2 Key reconcile strictly on the opaque `laneId`, never on a label/attribute, so a republished `EntityDesc` with changed label/persona matches the same monster (specs/agent-reconciler — scenario "Reconcile is keyed on laneId not label").
 - [ ] 4.3 Implement the per-tick diff in `update_agents()`: spawn newcomers (via `ecs_world_mut()`), update-in-place on `EntityDesc` state change (never despawn+respawn), smooth-despawn vanished agents (specs/agent-reconciler "Per-Tick Diff — Spawn, Update-In-Place, Smooth-Despawn"; proposal Impact).
-- [ ] 4.4 Enforce the per-tick spawn cap of 8: spawn ≤8 this tick, queue the remainder, drain across subsequent ticks with no further publish required; below-cap diffs spawn all immediately (specs/agent-reconciler "Per-Tick Spawn Cap" — all three scenarios).
-- [ ] 4.5 Assign a stable slot per `laneId` (1:1 for life, derived from `laneId`, never reassigned while live) so a flapping lane reappears in place and distinct lanes never collide (specs/agent-reconciler "Stable Slot Assignment Per Lane").
-- [ ] 4.6 Grace-debounce despawns: start a grace timer on first absence, cancel the pending despawn if the same `laneId` reappears within the window, proceed with smooth despawn only after the window elapses (specs/agent-reconciler "Grace-Debounced Despawn").
-- [ ] 4.7 Implement the `m_del` split: emit a `Kill` `GameAction` ONLY for a deliberate operator retire/send-home of a `laneId` still present in the last desired-set; sweep a self-departed lane (`final` flag and/or bare absence) silently with no callback (specs/agent-reconciler "m_del Operator-Retire vs Self-Departure Split").
+- [x] 4.4 Enforce the per-tick spawn cap of 8: spawn ≤8 this tick, queue the remainder, drain across subsequent ticks with no further publish required; below-cap diffs spawn all immediately (specs/agent-reconciler "Per-Tick Spawn Cap" — all three scenarios).
+- [x] 4.5 Assign a stable slot per `laneId` (1:1 for life, derived from `laneId`, never reassigned while live) so a flapping lane reappears in place and distinct lanes never collide (specs/agent-reconciler "Stable Slot Assignment Per Lane").
+- [x] 4.6 Grace-debounce despawns: start a grace timer on first absence, cancel the pending despawn if the same `laneId` reappears within the window, proceed with smooth despawn only after the window elapses (specs/agent-reconciler "Grace-Debounced Despawn").
+- [x] 4.7 Implement the `m_del` split: emit a `Kill` `GameAction` ONLY for a deliberate operator retire/send-home of a `laneId` still present in the last desired-set; sweep a self-departed lane (`final` flag and/or bare absence) silently with no callback (specs/agent-reconciler "m_del Operator-Retire vs Self-Departure Split").
 
 ## 5. agent-embodiment
 
