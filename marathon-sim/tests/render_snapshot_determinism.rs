@@ -378,3 +378,54 @@ fn headless_render_snapshot_after_each_tick() {
     // A player exists, so every snapshot carries a PlayerView.
     assert!(snapshots.iter().all(|s| s.player.is_some()));
 }
+
+// ──────────────── Box 7.2: byte-identical snapshot streams ────────────────
+
+/// Drive a fresh `SimWorld` for `n` ticks and return the bincode-serialized
+/// `render_snapshot()` taken after each tick (one byte vector per tick).
+fn run_snapshot_stream(seed: u64, n: usize) -> Vec<Vec<u8>> {
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig {
+        random_seed: seed,
+        difficulty: 2,
+    };
+    let mut world = SimWorld::new(&map, &physics, &config).expect("world construction failed");
+
+    let inputs = input_sequence();
+    let mut stream = Vec::with_capacity(n);
+    for i in 0..n {
+        let input = inputs[i % inputs.len()];
+        world.tick(input.into());
+        let snap = world.render_snapshot();
+        let bytes = bincode::serialize(&snap).expect("snapshot serialization failed");
+        stream.push(bytes);
+    }
+    stream
+}
+
+/// Two runs with the same seed / level / input sequence must produce
+/// byte-identical per-tick snapshot streams. This would fail if the snapshot
+/// (or the sim feeding it) carried any non-determinism: pointer addresses,
+/// HashMap iteration order, unseeded RNG, wall-clock, etc.
+#[test]
+fn same_seed_runs_produce_byte_identical_snapshot_streams() {
+    const N: usize = 60;
+    let stream_a = run_snapshot_stream(42, N);
+    let stream_b = run_snapshot_stream(42, N);
+
+    assert_eq!(stream_a.len(), N);
+    assert_eq!(stream_b.len(), N);
+    for tick in 0..N {
+        assert_eq!(
+            stream_a[tick], stream_b[tick],
+            "snapshot byte streams diverged at tick {tick}"
+        );
+    }
+    // Sanity: the streams are not trivially empty/constant — at least one tick's
+    // serialized snapshot differs from tick 0's (the player is moving).
+    assert!(
+        stream_a.iter().any(|b| *b != stream_a[0]),
+        "expected snapshot bytes to vary across ticks (player should move)"
+    );
+}
