@@ -18,13 +18,13 @@
 
 ## 2. event-capture-daemon
 
-- [ ] 2.1 Define an abstract `LiveEventSource` trait that yields a normalized internal event stream, with the rest of the pipeline transport-agnostic (specs/event-capture-daemon "Abstract live transport source" — scenario "Transport swap leaves the pipeline unchanged").
+- [x] 2.1 Define an abstract `LiveEventSource` trait that yields a normalized internal event stream, with the rest of the pipeline transport-agnostic (specs/event-capture-daemon "Abstract live transport source" — scenario "Transport swap leaves the pipeline unchanged").
 - [ ] 2.2 Implement the SSE source: fetch the retained `fleet.snapshot` from `GET /fleet/snapshot` then follow `GET /fleet/sse` for `fleet.delta` on `:9091`, loopback-bound with `?token=` (specs/event-capture-daemon — scenario "SSE source selected by configuration"; design Decision 1).
 - [ ] 2.3 Implement the MQTT source: retained `fleet/v1/…` snapshot on connect + live subtree, producing a byte-shape-identical normalized stream to the SSE case (specs/event-capture-daemon — scenario "MQTT source selected by configuration").
 - [ ] 2.4 Select the concrete transport by configuration only, with no downstream code change between SSE and MQTT (specs/event-capture-daemon — scenario "SSE source selected by configuration" / "MQTT source selected by configuration").
-- [ ] 2.5 Order every received event strictly by producer-owned monotonic `seq`, reordering out-of-order arrivals before apply (specs/event-capture-daemon "Producer `seq` is the ordering authority" — scenario "Out-of-order arrival is reordered by seq").
-- [ ] 2.6 Dedupe by event `id` so a redelivered/at-least-once event applies exactly once (specs/event-capture-daemon — scenario "Duplicate event id is applied once"; design Decision 2).
-- [ ] 2.7 Normalize each captured signal into the append-only NDJSON event log (one JSON value per line; byte offset = resumable cursor; checkpoint cursor AFTER apply) (design Decision 2; data-flow `events.jsonl`).
+- [x] 2.5 Order every received event strictly by producer-owned monotonic `seq`, reordering out-of-order arrivals before apply (specs/event-capture-daemon "Producer `seq` is the ordering authority" — scenario "Out-of-order arrival is reordered by seq").
+- [x] 2.6 Dedupe by event `id` so a redelivered/at-least-once event applies exactly once (specs/event-capture-daemon — scenario "Duplicate event id is applied once"; design Decision 2).
+- [x] 2.7 Normalize each captured signal into the append-only NDJSON event log (one JSON value per line; byte offset = resumable cursor; checkpoint cursor AFTER apply) (design Decision 2; data-flow `events.jsonl`).
 - [ ] 2.8 Tail raw Claude Code JSONL independently and JOIN body-motion to the domain feed on `sessionId`; parse defensively (key off `version`, additive unknowns, only `\n`-terminated lines) (specs/event-capture-daemon "Independent JSONL tail joined to the domain feed on `sessionId`"; design Decision 1 Layer B).
 - [ ] 2.9 Attach the `<sessionId>.jsonl` tail on `fleet.lane.session_bound{laneId, sessionId}`, route its body-motion to the entity keyed on `laneId`, and idempotently re-point the tail on a `session_bound` refire (specs/event-capture-daemon — scenarios "session_bound attaches the body-motion tail" / "session_bound refire re-points the tail").
 - [ ] 2.10 Keep body-motion (`tool_use`, idle-gap, token deltas) sourced ONLY from the joined JSONL tail, never expected on the domain feed (specs/event-capture-daemon — scenario "Body-motion never sourced from the domain feed").

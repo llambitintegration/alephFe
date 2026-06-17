@@ -10,6 +10,7 @@
 //! Module map (each stage of the capture -> projection -> reconcile -> interact
 //! -> replay pipeline):
 //! - [`transport`]: abstract live event sources (SSE / MQTT) feeding the daemon.
+//! - [`event_log`]: the append-only NDJSON event log (resumable byte cursor).
 //! - [`event`]: the CloudEvents-shaped envelope and shared cross-stage types.
 //! - [`projection`]: the pure deterministic event-sourced reducer.
 //! - [`reconciler`]: the per-tick desired-set diff (spawn / update / despawn).
@@ -20,6 +21,7 @@
 
 pub mod embodiment;
 pub mod event;
+pub mod event_log;
 pub mod interaction;
 pub mod placement;
 pub mod projection;
@@ -35,4 +37,6 @@ pub use embodiment::{
     ProgressPhase, QuestStatus, Species, SpeciesColor,
 };
 pub use event::{EntityDesc, EntityId, EntityKind, EntityState, EventEnvelope, GameAction};
+pub use event_log::{Checkpoint, Cursor, EventLog, LogLine};
 pub use placement::{lease_of, placement_for, placement_of, Lease, PlaceKind, Placement};
+pub use transport::{capture, CaptureBuffer, LiveEventSource, ReplaySource};
