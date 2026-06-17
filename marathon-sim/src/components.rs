@@ -1,6 +1,7 @@
 use bevy_ecs::prelude::Component;
 use glam::Vec3;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // ─── Spatial Components ────────────────────────────────────────────────────
 
@@ -141,6 +142,30 @@ pub struct Immunities(pub u32);
 /// Damage type weaknesses (bitmask).
 #[derive(Component, Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct Weaknesses(pub u32);
+
+// ─── Powerup / Inventory Components ────────────────────────────────────────
+
+/// Active powerup countdown timers (in ticks). A field is nonzero while the
+/// corresponding powerup is active and decrements toward zero each tick.
+#[derive(Component, Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct PowerupTimers {
+    /// Ticks of invincibility remaining.
+    pub invincibility: u16,
+    /// Ticks of invisibility remaining.
+    pub invisibility: u16,
+    /// Ticks of infravision remaining.
+    pub infravision: u16,
+    /// Ticks of extravision remaining.
+    pub extravision: u16,
+}
+
+/// Non-weapon inventory items the player is carrying, keyed by item type with a
+/// per-type count.
+#[derive(Component, Debug, Clone, Default, Serialize, Deserialize)]
+pub struct InventoryItems {
+    /// Map of item type to count held.
+    pub counts: HashMap<i16, u16>,
+}
 
 // ─── Rendering Hints ───────────────────────────────────────────────────────
 
@@ -372,6 +397,21 @@ mod tests {
         assert_eq!(pos.0.x, 1.0);
         assert_eq!(pos.0.y, 2.0);
         assert_eq!(pos.0.z, 3.0);
+    }
+
+    #[test]
+    fn powerup_timers_default_all_zero() {
+        let t = PowerupTimers::default();
+        assert_eq!(t.invincibility, 0);
+        assert_eq!(t.invisibility, 0);
+        assert_eq!(t.infravision, 0);
+        assert_eq!(t.extravision, 0);
+    }
+
+    #[test]
+    fn inventory_items_default_empty() {
+        let inv = InventoryItems::default();
+        assert!(inv.counts.is_empty());
     }
 
     #[test]

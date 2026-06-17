@@ -1,10 +1,10 @@
 ## 1. Add New Components and Resources
 
-- [ ] 1.1 Add `PowerupTimers` component to `marathon-sim/src/components.rs` with fields: `invincibility: u16`, `invisibility: u16`, `infravision: u16`, `extravision: u16` (all default 0). Derive `Component, Debug, Clone, Copy, Default, Serialize, Deserialize`.
-- [ ] 1.2 Add `InventoryItems` component to `marathon-sim/src/components.rs` with a `HashMap<i16, u16>` tracking item type to count. Derive `Component, Debug, Clone, Default, Serialize, Deserialize`.
-- [ ] 1.3 Add `ItemRespawnQueue` resource to `marathon-sim/src/world.rs` as a `Vec<ItemRespawnEntry>` where `ItemRespawnEntry` has `item_type: i16`, `position: Vec3`, `polygon_index: usize`, `remaining_ticks: u16`. Derive `Resource, Debug, Default, Clone, Serialize, Deserialize`.
+- [x] 1.1 Add `PowerupTimers` component to `marathon-sim/src/components.rs` with fields: `invincibility: u16`, `invisibility: u16`, `infravision: u16`, `extravision: u16` (all default 0). Derive `Component, Debug, Clone, Copy, Default, Serialize, Deserialize`.
+- [x] 1.2 Add `InventoryItems` component to `marathon-sim/src/components.rs` with a `HashMap<i16, u16>` tracking item type to count. Derive `Component, Debug, Clone, Default, Serialize, Deserialize`.
+- [x] 1.3 Add `ItemRespawnQueue` resource to `marathon-sim/src/world.rs` as a `Vec<ItemRespawnEntry>` where `ItemRespawnEntry` has `item_type: i16`, `position: Vec3`, `polygon_index: usize`, `remaining_ticks: u16`. Derive `Resource, Debug, Default, Clone, Serialize, Deserialize`.
 - [x] 1.4 Add `SimEvent::ItemPickedUp { item_type: i16 }` variant to the `SimEvent` enum in `marathon-sim/src/world.rs`.
-- [ ] 1.5 Add unit tests: verify `PowerupTimers::default()` has all zeros, verify `InventoryItems::default()` is empty.
+- [x] 1.5 Add unit tests: verify `PowerupTimers::default()` has all zeros, verify `InventoryItems::default()` is empty.
 
 ## 2. Attach Components at Player Spawn
 

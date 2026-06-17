@@ -112,6 +112,25 @@ impl SimEvents {
     }
 }
 
+/// A single pending item respawn. Picked-up items that respawn schedule one of
+/// these; it counts down `remaining_ticks` and re-spawns the item at the stored
+/// location when it reaches zero.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemRespawnEntry {
+    /// Item type to respawn.
+    pub item_type: i16,
+    /// World-space position to respawn at.
+    pub position: Vec3,
+    /// Polygon the respawned item belongs to.
+    pub polygon_index: usize,
+    /// Ticks remaining before the item respawns.
+    pub remaining_ticks: u16,
+}
+
+/// Queue of pending item respawns, processed each tick.
+#[derive(Resource, Debug, Default, Clone, Serialize, Deserialize)]
+pub struct ItemRespawnQueue(pub Vec<ItemRespawnEntry>);
+
 /// The top-level simulation world.
 ///
 /// Wraps a bevy_ecs `World` and provides a high-level API for
