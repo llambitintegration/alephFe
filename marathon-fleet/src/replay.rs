@@ -405,4 +405,129 @@ mod tests {
         let before = buf.sample(MAX_TRAVEL / 2.0).unwrap();
         assert!(before.x > 0.0 && before.x < 100.0);
     }
+
+    // Box 7.5 scenario "Bounded travel-time tween over a long gap": after a
+    // multi-MINUTE idle gap the body still tweens to the target within the
+    // bounded MAX_TRAVEL window and then plays idle (holds) for the remainder of
+    // the gap, rather than crawling proportionally to the wall-clock gap.
+    #[test]
+    fn long_idle_gap_tweens_within_bound_then_idles() {
+        let mut buf = InterpBuffer::new();
+        buf.push(Keyframe::new(0.0, 0.0, 0.0, 0.0));
+        // A multi-minute gap to the next target (300s >> MAX_TRAVEL).
+        buf.push(Keyframe::new(300.0, 90.0, 0.0, 0.0));
+
+        // A wall-clock lerp would have moved only 90 * (1/300) = 0.3 one second
+        // in; the bounded tween instead moves 90 * (1/MAX_TRAVEL) of the way,
+        // i.e. far further, so it does NOT crawl proportionally to the full gap.
+        let one_second_in = buf.sample(1.0).unwrap();
+        let wall_clock_lerp_x = 90.0 * (1.0 / 300.0);
+        assert!(
+            one_second_in.x > wall_clock_lerp_x * 10.0,
+            "bounded tween does not crawl proportionally to the wall-clock gap: {} vs {}",
+            one_second_in.x,
+            wall_clock_lerp_x
+        );
+
+        // By MAX_TRAVEL the tween has arrived; the rest of the long gap idles.
+        let arrived = buf.sample(MAX_TRAVEL).unwrap();
+        assert_eq!(arrived.x, 90.0, "arrives within the bounded travel window");
+        let mid_gap = buf.sample(150.0).unwrap();
+        assert_eq!(
+            mid_gap.x, 90.0,
+            "idles (holds) for the remainder of the gap"
+        );
+    }
+
+    // Box 7.5 scenario "New keyframe converges without a hard snap": a new
+    // keyframe arriving for an entity that is mid-tween toward a prior target is
+    // converged onto smoothly — the sampled pose never instantaneously jumps to
+    // the new target on the frame the keyframe lands.
+    #[test]
+    fn new_keyframe_mid_tween_converges_without_hard_snap() {
+        let mut buf = InterpBuffer::new();
+        buf.push(Keyframe::new(0.0, 0.0, 0.0, 0.0));
+        buf.push(Keyframe::new(1.0, 10.0, 0.0, 0.0));
+
+        // Mid-tween toward the first target (event_time 1.0) at render_time 0.5.
+        let mid = buf.sample(0.5).unwrap();
+        assert!(
+            mid.x > 0.0 && mid.x < 10.0,
+            "mid-tween intermediate: {}",
+            mid.x
+        );
+
+        // A NEW keyframe arrives for this entity (a later target). It is absorbed
+        // into the same buffer; the straddle at the SAME render_time 0.5 still
+        // brackets the first segment, so the sampled pose is unchanged on the
+        // frame the keyframe lands — no instantaneous jump toward the new target.
+        buf.push(Keyframe::new(2.0, 100.0, 0.0, 0.0));
+        let mid_after = buf.sample(0.5).unwrap();
+        assert_eq!(
+            mid, mid_after,
+            "absorbing a new keyframe does not hard-snap the current pose"
+        );
+
+        // Advancing render_time into the new segment converges smoothly toward
+        // the new target — a strict intermediate, never an instantaneous jump.
+        let into_new = buf.sample(1.5).unwrap();
+        assert!(
+            into_new.x > 10.0 && into_new.x < 100.0,
+            "converges smoothly onto the new target, not a hard snap: {}",
+            into_new.x
+        );
+    }
+
+    // Box 7.5 scenario "Hot buffer carries only flat scalars": every buffered
+    // quantity is a flat scalar (x, y, angle) with no nested structured fields,
+    // and the sampled pose is likewise flat scalars only.
+    #[test]
+    fn hot_buffer_carries_only_flat_scalars() {
+        let mut buf = InterpBuffer::new();
+        let kf = Keyframe::new(0.0, 1.0, 2.0, 3.0);
+        buf.push(kf);
+
+        // The buffered keyframe destructures into exactly four flat f64 scalars;
+        // there is no nested field to reach through. (This binds every field by
+        // name — adding a nested field would break compilation here.)
+        let Keyframe {
+            event_time,
+            x,
+            y,
+            angle,
+        } = buf.keyframes()[0];
+        assert_eq!((event_time, x, y, angle), (0.0, 1.0, 2.0, 3.0));
+
+        // The sampled pose is likewise three flat scalars, no nested fields.
+        let Pose { x, y, angle } = buf.sample(0.0).unwrap();
+        assert_eq!((x, y, angle), (1.0, 2.0, 3.0));
+    }
+
+    // Box 7.4 scenario "Straddling keyframes are selected for the render
+    // instant": with keyframes at t0 and t1 and t0 <= render_time <= t1, the
+    // selected pair is exactly (t0, t1). (Isolates straddle selection from the
+    // burst-absorption assertion in the combined test above.)
+    #[test]
+    fn straddling_keyframes_selected_for_render_instant() {
+        let mut buf = InterpBuffer::new();
+        buf.push(Keyframe::new(2.0, 0.0, 0.0, 0.0)); // t0
+        buf.push(Keyframe::new(5.0, 0.0, 0.0, 0.0)); // t1
+
+        match buf.straddle(3.5).expect("non-empty") {
+            Straddle::Between { prev, next } => {
+                assert_eq!(prev.event_time, 2.0, "t0 selected");
+                assert_eq!(next.event_time, 5.0, "t1 selected");
+            }
+            other => panic!("expected the straddling pair (t0,t1), got {other:?}"),
+        }
+
+        // Boundary inclusivity: render_time exactly on t0 still brackets (t0,t1).
+        match buf.straddle(2.0).expect("non-empty") {
+            Straddle::Between { prev, next } => {
+                assert_eq!(prev.event_time, 2.0);
+                assert_eq!(next.event_time, 5.0);
+            }
+            other => panic!("render_time on t0 should bracket (t0,t1), got {other:?}"),
+        }
+    }
 }
