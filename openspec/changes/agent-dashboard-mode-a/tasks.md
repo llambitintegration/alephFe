@@ -32,7 +32,7 @@
 - [ ] 2.12 Broker-sign gated outbound care verbs: receive the unsigned `GameAction` from the browser, wrap 1:1 into `OperatorHint{field:"fleet.careAction", …}`, compute HMAC-SHA256 over `miniCanonicalize({field,value,origin,nonce,issuedAt})`; the browser never holds the key (specs/event-capture-daemon — scenario "Signed care verb leaves the daemon, not the browser").
 - [ ] 2.13 Forward the ungated `check_in` (inspect) verb unsigned while still signing the gated verbs (specs/event-capture-daemon — scenario "Ungated check-in passes through unsigned").
 - [ ] 2.14 Provision short-lived browser READ tokens (read-subscription only, no signing capability, loopback-scoped) and refuse expired tokens (specs/event-capture-daemon "Short-lived browser read tokens" — scenarios "WASM client receives a read-only token" / "Expired read token is refused").
-- [ ] 2.15 Implement graceful degradation with no session binding: render a lane's identity/place/task from the domain feed alone, keep body-motion dormant, and treat a never-bound spawn→finish as a normal completion (specs/event-capture-daemon "Graceful degradation with no session binding").
+- [x] 2.15 Implement graceful degradation with no session binding: render a lane's identity/place/task from the domain feed alone, keep body-motion dormant, and treat a never-bound spawn→finish as a normal completion (specs/event-capture-daemon "Graceful degradation with no session binding").
 
 ## 3. event-sourced-projection
 

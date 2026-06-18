@@ -248,6 +248,127 @@ pub fn validate_anchor(events: &[EventEnvelope], anchor: &Anchor) -> bool {
     fold(&log_derived) == anchor.state
 }
 
+// ============================================================================
+// Box 2.15: Graceful degradation with no session binding
+// ============================================================================
+//
+// A lane that has never received a `fleet.lane.session_bound` SHALL still render
+// its identity, place, and task from the domain feed alone, with the body-motion
+// layer dormant; a never-bound spawn->finish is a NORMAL completion, never an
+// error. The functions below are PURE projections over a folded
+// [`EntityProjection`] — no clock, no RNG, no I/O, no JSONL tail. They read only
+// the merged domain `data` and the lane's lifecycle, so they degrade gracefully
+// the instant the producer's late `sessionId` binding (producer dep N2) is
+// absent, and become faithful with no code change once it lands.
+
+/// The body-motion layer state for a lane (box 2.15).
+///
+/// Body-motion (`tool_use`, idle-gap, token deltas) is sourced ONLY from the
+/// JSONL tail joined on `sessionId` (box 2.10); until a `fleet.lane.session_bound`
+/// is observed there is no tail, so the layer is [`BodyMotion::Dormant`]. This is
+/// graceful degradation, NOT an error: every other channel renders from the
+/// domain feed regardless.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BodyMotion {
+    /// No `session_bound` observed: the body-motion layer is dormant. The lane
+    /// still renders fully from the domain feed.
+    Dormant,
+    /// A `session_bound` bound this `session_id`: the body-motion tail is
+    /// (or can be) attached and routed to this lane.
+    Bound {
+        /// The bound `sessionId` the JSONL tail keys on.
+        session_id: String,
+    },
+}
+
+/// The coarse domain lifecycle status a lane reached on the domain feed alone
+/// (box 2.15).
+///
+/// Derived purely from the lane's `last_event_type`. A never-bound lane that
+/// reaches [`LaneLifecycle::Finished`] is a normal completion — the absence of a
+/// session binding never turns it into an error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneLifecycle {
+    /// `fleet.lane.spawned` (or any pre-finish domain event) — live on the feed.
+    Spawned,
+    /// `fleet.lane.finished` — completed on the domain feed.
+    Finished,
+}
+
+/// A lane's render descriptor derived from the domain feed alone (box 2.15).
+///
+/// Carries the identity / place / task the daemon surfaces with no session
+/// binding, the domain [`lifecycle`](LaneRender::lifecycle) the lane reached, and
+/// the [`body_motion`](LaneRender::body_motion) layer state (dormant until a
+/// `session_bound`). Building a [`LaneRender`] NEVER fails: a missing field reads
+/// as an empty string and an unbound lane reads [`BodyMotion::Dormant`], so the
+/// pipeline is never blocked or stalled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LaneRender {
+    /// The lane's identity (the `identity` domain field, empty if absent).
+    pub identity: String,
+    /// The lane's place (the `place` domain field, empty if absent).
+    pub place: String,
+    /// The lane's current task (the `task` domain field, empty if absent).
+    pub task: String,
+    /// The domain lifecycle status reached on the feed alone.
+    pub lifecycle: LaneLifecycle,
+    /// The body-motion layer state: dormant until a `session_bound` is observed.
+    pub body_motion: BodyMotion,
+}
+
+/// Read a merged-`data` string field, defaulting to the empty string (no error).
+fn data_str(projection: &EntityProjection, key: &str) -> String {
+    projection
+        .data
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// Render a lane from its folded domain projection alone (box 2.15).
+///
+/// Surfaces identity/place/task from the merged domain `data`, classifies the
+/// domain lifecycle from `last_event_type` (a `fleet.lane.finished` is a normal
+/// completion), and reports the body-motion layer as [`BodyMotion::Dormant`]
+/// unless a `fleet.lane.session_bound` bound a `sessionId` into the fold — in
+/// which case body-motion is [`BodyMotion::Bound`]. Pure: depends only on the
+/// projection.
+///
+/// This honours the graceful-degradation guarantee: a lane that spawned and even
+/// finished before any `session_bound` arrived renders entirely on the domain
+/// layer, with body-motion dormant, and never errors.
+#[must_use]
+pub fn lane_render(projection: &EntityProjection) -> LaneRender {
+    let lifecycle = if projection.last_event_type == "fleet.lane.finished" {
+        LaneLifecycle::Finished
+    } else {
+        LaneLifecycle::Spawned
+    };
+    // A `session_bound` carries the `sessionId` into the merged data; without it
+    // the body-motion layer is dormant (graceful degradation, not an error). Both
+    // the camelCase wire spelling and the snake_case fallback are accepted.
+    let session_id = projection
+        .data
+        .get("sessionId")
+        .or_else(|| projection.data.get("session_id"))
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let body_motion = match session_id {
+        Some(session_id) => BodyMotion::Bound { session_id },
+        None => BodyMotion::Dormant,
+    };
+    LaneRender {
+        identity: data_str(projection, "identity"),
+        place: data_str(projection, "place"),
+        task: data_str(projection, "task"),
+        lifecycle,
+        body_motion,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -656,5 +777,132 @@ mod tests {
         // log yields the trustworthy, log-derived state.
         let log_derived = recover_from_anchor(&log, &[]);
         assert_eq!(log_derived, fold(&log));
+    }
+
+    // ---- Box 2.15: Graceful degradation with no session binding ----
+
+    /// A `fleet.lane.*` lifecycle event carrying identity/place/task in `data`.
+    fn lane_evt(id: &str, seq: u64, lane: &str, event_type: &str, data: Value) -> EventEnvelope {
+        let mut e = evt(id, seq, lane, event_type, data);
+        e.event_type = event_type.to_string();
+        e
+    }
+
+    // Scenario: Lane renders from domain feed before session binding.
+    #[test]
+    fn lane_renders_from_domain_feed_before_session_binding() {
+        // Only a `fleet.lane.spawned` on the domain feed — no session_bound yet.
+        let log = vec![lane_evt(
+            "e1",
+            1,
+            "lane-a",
+            "fleet.lane.spawned",
+            serde_json::json!({
+                "identity": "durandal",
+                "place": "room-7",
+                "task": "build the platform mechanics",
+            }),
+        )];
+        let state = fold(&log);
+        let render = lane_render(&state.entities["lane-a"]);
+
+        // Identity/place/task surface from the domain feed alone.
+        assert_eq!(render.identity, "durandal");
+        assert_eq!(render.place, "room-7");
+        assert_eq!(render.task, "build the platform mechanics");
+        // The lane is live (spawned), not finished.
+        assert_eq!(render.lifecycle, LaneLifecycle::Spawned);
+        // Body-motion is dormant with no session binding — and crucially this is
+        // a value, not an error or panic: the pipeline is never blocked.
+        assert_eq!(render.body_motion, BodyMotion::Dormant);
+    }
+
+    #[test]
+    fn session_bound_lights_up_the_body_motion_layer() {
+        // The same lane later receives a session_bound; body-motion binds.
+        let log = vec![
+            lane_evt(
+                "e1",
+                1,
+                "lane-a",
+                "fleet.lane.spawned",
+                serde_json::json!({ "identity": "durandal", "place": "room-7" }),
+            ),
+            lane_evt(
+                "e2",
+                2,
+                "lane-a",
+                "fleet.lane.session_bound",
+                serde_json::json!({ "sessionId": "sess-xyz" }),
+            ),
+        ];
+        let state = fold(&log);
+        let render = lane_render(&state.entities["lane-a"]);
+        assert_eq!(
+            render.body_motion,
+            BodyMotion::Bound {
+                session_id: "sess-xyz".to_string()
+            },
+            "an observed session_bound binds the body-motion tail"
+        );
+        // The domain channels are unaffected by the binding.
+        assert_eq!(render.identity, "durandal");
+        assert_eq!(render.place, "room-7");
+    }
+
+    // Scenario: Short-lived lane finishes with no session binding.
+    #[test]
+    fn never_bound_spawn_to_finish_is_a_normal_completion() {
+        // A lane spawns then finishes, with NO session_bound ever received.
+        let log = vec![
+            lane_evt(
+                "e1",
+                1,
+                "lane-a",
+                "fleet.lane.spawned",
+                serde_json::json!({ "identity": "tycho", "task": "quick fix" }),
+            ),
+            lane_evt(
+                "e2",
+                2,
+                "lane-a",
+                "fleet.lane.finished",
+                serde_json::json!({}),
+            ),
+        ];
+        let state = fold(&log);
+        let render = lane_render(&state.entities["lane-a"]);
+
+        // The never-bound lane is a NORMAL completion, not an error.
+        assert_eq!(
+            render.lifecycle,
+            LaneLifecycle::Finished,
+            "a never-bound spawn->finish completes normally on the domain layer"
+        );
+        // Body-motion stayed dormant the whole life of the lane.
+        assert_eq!(render.body_motion, BodyMotion::Dormant);
+        // Identity/task still rendered from the domain feed.
+        assert_eq!(render.identity, "tycho");
+        assert_eq!(render.task, "quick fix");
+    }
+
+    #[test]
+    fn lane_render_tolerates_missing_domain_fields() {
+        // A bare spawn with no identity/place/task fields renders empty strings,
+        // never panicking — the pipeline is never blocked.
+        let log = vec![lane_evt(
+            "e1",
+            1,
+            "lane-a",
+            "fleet.lane.spawned",
+            serde_json::json!({}),
+        )];
+        let state = fold(&log);
+        let render = lane_render(&state.entities["lane-a"]);
+        assert!(render.identity.is_empty());
+        assert!(render.place.is_empty());
+        assert!(render.task.is_empty());
+        assert_eq!(render.body_motion, BodyMotion::Dormant);
+        assert_eq!(render.lifecycle, LaneLifecycle::Spawned);
     }
 }

@@ -45,6 +45,10 @@ pub use interaction::{
     SweepOutcome,
 };
 pub use placement::{lease_of, placement_for, placement_of, Lease, PlaceKind, Placement};
+pub use projection::{
+    apply, fold, fold_prefix_to, lane_render, reconstruct_as_of, recover_from_anchor,
+    validate_anchor, Anchor, BodyMotion, EntityProjection, LaneLifecycle, LaneRender, WorldState,
+};
 pub use replay::{
     InterpBuffer, Keyframe, Pose, Straddle, ViewClock, INTERP_DELAY, MAX_TRAVEL, MIN_TRAVEL,
 };

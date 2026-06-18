@@ -371,6 +371,132 @@ mod tests {
         assert!(r.is_live("lane-x"));
     }
 
+    // ---- Box 4.1 (forward coverage): empty-set tolerance + per-tick diff ----
+    //
+    // These pin the pure-`reconcile()` half of the agent-reconciler scenarios
+    // (empty-set tolerance, newcomer-spawn, update-in-place, smooth-despawn) that
+    // box 8.3 enumerates. The channel-level "coalesce N publishes into one diff"
+    // scenario is the latest-wins `watch` channel (box 4.1, sim-side) and is NOT
+    // exercised here, so 8.3 itself stays blocked on 4.1.
+
+    // Scenario: Empty desired-set is tolerated.
+    #[test]
+    fn empty_desired_set_is_tolerated_with_no_live_agents() {
+        let mut r = Reconciler::default();
+        // An empty publish against an empty live-set completes with no ops, no panic.
+        let ops = r.reconcile(&[], 0);
+        assert!(ops.is_empty(), "empty-on-empty produces no ops, no error");
+        assert_eq!(r.pending_spawn_count(), 0);
+        // Repeated empty ticks remain tolerated.
+        let ops = r.reconcile(&[], 1);
+        assert!(ops.is_empty());
+    }
+
+    #[test]
+    fn empty_desired_set_sweeps_live_agents_per_normal_rules() {
+        // With a zero grace window an empty publish despawns a live lane on the
+        // tick after its first absence (the first absence arms the timer).
+        let mut r = Reconciler::new(0);
+        let _ = r.reconcile(&[desc("lane-a", "l", EntityState::Active)], 0);
+        assert!(r.is_live("lane-a"));
+        // Tick 1: first absence arms the timer (deadline = 1), no despawn yet.
+        let ops = r.reconcile(&[], 1);
+        assert!(!ops
+            .iter()
+            .any(|op| matches!(op, ReconcileOp::Despawn { .. })));
+        // Tick 2: window elapsed -> the empty set sweeps the live agent.
+        let ops = r.reconcile(&[], 2);
+        assert_eq!(
+            ops,
+            vec![ReconcileOp::Despawn {
+                lane_id: "lane-a".to_string()
+            }],
+            "an empty desired-set despawns live agents per normal diff rules"
+        );
+        assert!(!r.is_live("lane-a"));
+    }
+
+    // Scenario: Newcomer is spawned.
+    #[test]
+    fn newcomer_with_no_live_counterpart_is_spawned() {
+        let mut r = Reconciler::default();
+        let ops = r.reconcile(&[desc("lane-new", "l", EntityState::Active)], 0);
+        assert_eq!(
+            lane_ids_of_spawns(&ops),
+            vec!["lane-new".to_string()],
+            "a laneId with no live monster spawns this tick"
+        );
+        assert!(r.is_live("lane-new"));
+    }
+
+    // Scenario: State change updates in place without respawn.
+    #[test]
+    fn work_state_change_updates_in_place_without_respawn() {
+        let mut r = Reconciler::default();
+        let mut working = desc("lane-a", "l", EntityState::Active);
+        working
+            .meta
+            .insert("work".to_string(), "working".to_string());
+        let _ = r.reconcile(&[working], 0);
+        let slot = r.slot_of("lane-a").expect("live");
+
+        // Republish the SAME laneId with a changed `work` state.
+        let mut blocked = desc("lane-a", "l", EntityState::Active);
+        blocked
+            .meta
+            .insert("work".to_string(), "blocked".to_string());
+        let ops = r.reconcile(&[blocked], 1);
+
+        assert_eq!(
+            ops,
+            vec![ReconcileOp::UpdateInPlace {
+                lane_id: "lane-a".to_string()
+            }],
+            "a changed work state updates in place"
+        );
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::Spawn { .. } | ReconcileOp::Despawn { .. })),
+            "an in-place update must not despawn or respawn"
+        );
+        assert_eq!(r.slot_of("lane-a"), Some(slot), "kept its slot");
+    }
+
+    #[test]
+    fn unchanged_desc_produces_no_op() {
+        // Republishing the identical desc must yield no diff at all.
+        let mut r = Reconciler::default();
+        let d = desc("lane-a", "l", EntityState::Active);
+        let _ = r.reconcile(std::slice::from_ref(&d), 0);
+        let ops = r.reconcile(std::slice::from_ref(&d), 1);
+        assert!(ops.is_empty(), "an unchanged desc is a no-op diff");
+    }
+
+    // Scenario: Vanished agent is smooth-despawned.
+    #[test]
+    fn vanished_agent_is_smooth_despawned_not_instant() {
+        let mut r = Reconciler::new(2);
+        let _ = r.reconcile(&[desc("lane-a", "l", EntityState::Active)], 0);
+        // Absent from tick 1: deadline = 1 + 2 = 3; no instant removal.
+        let ops = r.reconcile(&[], 1);
+        assert!(
+            !ops.iter()
+                .any(|op| matches!(op, ReconcileOp::Despawn { .. })),
+            "the despawn is smooth (grace-debounced), never instantaneous"
+        );
+        assert!(r.is_live("lane-a"), "still live during the grace window");
+        // Tick 3: window elapsed -> a single smooth despawn op.
+        let _ = r.reconcile(&[], 2);
+        let ops = r.reconcile(&[], 3);
+        assert_eq!(
+            ops,
+            vec![ReconcileOp::Despawn {
+                lane_id: "lane-a".to_string()
+            }]
+        );
+        assert!(!r.is_live("lane-a"));
+    }
+
     // ---- Box 4.4: Per-Tick Spawn Cap ----
 
     #[test]
