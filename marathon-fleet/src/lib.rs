@@ -50,6 +50,7 @@ pub use projection::{
     validate_anchor, Anchor, BodyMotion, EntityProjection, LaneLifecycle, LaneRender, WorldState,
 };
 pub use replay::{
-    InterpBuffer, Keyframe, Pose, Straddle, ViewClock, INTERP_DELAY, MAX_TRAVEL, MIN_TRAVEL,
+    resolve_scrub_state, InterpBuffer, Keyframe, Pose, ScrubResolver, Straddle, ViewClock,
+    INTERP_DELAY, MAX_TRAVEL, MIN_TRAVEL,
 };
 pub use transport::{capture, CaptureBuffer, LiveEventSource, ReplaySource};

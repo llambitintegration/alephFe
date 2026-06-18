@@ -245,9 +245,225 @@ impl InterpBuffer {
     }
 }
 
+// ============================================================================
+// Box 7.6: scrub-to-T resolution against the file-resident projection anchors
+// ============================================================================
+//
+// Replay's [`ViewClock::Replay`] resolves a scrub position in the RENDER clock
+// domain (`f64` seconds) for the per-entity tween. To paint a frozen frame the
+// render loop also needs the WORLD STATE as-of-T — the same event-sourced fold a
+// live run would have reached at T. Rather than re-derive a fold here, this layer
+// delegates straight to the proven projection reconstruction (box 3.5): the
+// nearest file-resident anchor whose `as_of <= T` plus the replay tail
+// (`seq > anchor.last_seq`, `time <= T`). Because `reconstruct_as_of` is
+// byte-identical to `fold_prefix_to(events, T)` and is invariant to the choice of
+// any valid anchor, scrub-to-T equals a forward live run that reached T.
+//
+// `T` here is the PROJECTION time domain — the RFC 3339 `as_of` / `time` string
+// the projection compares lexicographically — NOT the render clock's `f64`
+// seconds. The two domains are deliberately distinct: the render clock drives the
+// flat-scalar pose tween, while this resolver picks the event-sourced state the
+// tween's keyframes belong to. Pure: no clock, no RNG, no I/O.
+
+use crate::projection::{reconstruct_as_of, Anchor, WorldState};
+
+/// Resolve the world state to render at scrub target `t` (box 7.6).
+///
+/// Delegates to [`crate::projection::reconstruct_as_of`]: it selects the nearest
+/// file-resident [`Anchor`] whose `as_of <= t` as the fold base, then folds the
+/// replay tail (events whose `seq > anchor.last_seq` and whose `time <= t`) onto
+/// it. `t` is the projection time domain (an RFC 3339 / ISO 8601 string compared
+/// lexicographically), matching how the projection compares `time` / `as_of`.
+///
+/// The returned [`WorldState`] is byte-identical to
+/// [`crate::projection::fold_prefix_to`]`(events, t)` — i.e. exactly what a live
+/// run that played forward and reached `t` holds — and the choice of any valid
+/// anchor (`as_of <= t`) does not change it. This function writes NO new fold; it
+/// reuses the task-3.5 reconstruction so replay and live share one authority.
+#[must_use]
+pub fn resolve_scrub_state(events: &[EventEnvelope], anchors: &[Anchor], t: &str) -> WorldState {
+    reconstruct_as_of(events, anchors, t)
+}
+
+/// A replay session's view over a fixed event log and its file-resident anchors,
+/// resolving many scrub targets without re-threading the inputs (box 7.6).
+///
+/// Holds borrows of the append-only `events` and the producer-owned `anchors`;
+/// [`ScrubResolver::resolve`] is a thin call to [`resolve_scrub_state`] for a
+/// given `t`. It is purely a convenience for a scrub UI that drags `T` across
+/// many values against one log — every `resolve(t)` is the same anchor-invariant,
+/// forward-run-identical reconstruction. No state is mutated and nothing is
+/// cached, so a resolver is itself a pure value.
+#[derive(Debug, Clone, Copy)]
+pub struct ScrubResolver<'a> {
+    events: &'a [EventEnvelope],
+    anchors: &'a [Anchor],
+}
+
+impl<'a> ScrubResolver<'a> {
+    /// Borrow an event log and its file-resident anchors for repeated scrubbing.
+    #[must_use]
+    pub fn new(events: &'a [EventEnvelope], anchors: &'a [Anchor]) -> Self {
+        ScrubResolver { events, anchors }
+    }
+
+    /// Resolve the world state at scrub target `t` (the projection time domain).
+    ///
+    /// Equivalent to [`resolve_scrub_state`]`(self.events, self.anchors, t)`.
+    #[must_use]
+    pub fn resolve(&self, t: &str) -> WorldState {
+        resolve_scrub_state(self.events, self.anchors, t)
+    }
+}
+
+use crate::event::EventEnvelope;
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::projection::fold_prefix_to;
+    use serde_json::Value;
+
+    /// A timed event whose `seq` and `time` advance together, so the prefix up to
+    /// a given T is unambiguous (mirrors `projection.rs`'s `timed_log`).
+    fn scrub_evt(id: &str, seq: u64, subject: &str, time: &str, data: Value) -> EventEnvelope {
+        EventEnvelope {
+            id: id.to_string(),
+            seq,
+            time: time.to_string(),
+            ingest_time: time.to_string(),
+            subject: subject.to_string(),
+            event_type: "fleet.delta".to_string(),
+            data,
+            correlation_id: "corr".to_string(),
+            causation_id: "cause".to_string(),
+        }
+    }
+
+    fn scrub_log() -> Vec<EventEnvelope> {
+        vec![
+            scrub_evt(
+                "e1",
+                1,
+                "lane-a",
+                "2026-06-17T00:00:01Z",
+                serde_json::json!({ "x": 1 }),
+            ),
+            scrub_evt(
+                "e2",
+                2,
+                "lane-b",
+                "2026-06-17T00:00:02Z",
+                serde_json::json!({ "x": 9 }),
+            ),
+            scrub_evt(
+                "e3",
+                3,
+                "lane-a",
+                "2026-06-17T00:00:03Z",
+                serde_json::json!({ "x": 2 }),
+            ),
+            scrub_evt(
+                "e4",
+                4,
+                "lane-b",
+                "2026-06-17T00:00:04Z",
+                serde_json::json!({ "y": 7 }),
+            ),
+            scrub_evt(
+                "e5",
+                5,
+                "lane-a",
+                "2026-06-17T00:00:05Z",
+                serde_json::json!({ "z": 3 }),
+            ),
+        ]
+    }
+
+    /// A producer-owned anchor faithfully folded from the prefix of `log` up to
+    /// `last_seq`.
+    fn scrub_anchor(log: &[EventEnvelope], as_of: &str, last_seq: u64) -> Anchor {
+        let prefix: Vec<EventEnvelope> =
+            log.iter().filter(|e| e.seq <= last_seq).cloned().collect();
+        Anchor {
+            as_of: as_of.to_string(),
+            last_seq,
+            state: crate::projection::fold(&prefix),
+        }
+    }
+
+    // ---- Box 7.6: scrub-to-T equals a forward live run that reached T ----
+
+    // Scenario "Scrub matches a forward live run at the same T": resolving the
+    // scrub to T yields a state byte-identical to the forward prefix fold up to T.
+    #[test]
+    fn scrub_to_t_equals_a_forward_live_run() {
+        let log = scrub_log();
+        let t = "2026-06-17T00:00:04Z";
+        let anchors = vec![scrub_anchor(&log, "2026-06-17T00:00:02Z", 2)];
+
+        let resolved = resolve_scrub_state(&log, &anchors, t);
+        let forward_run = fold_prefix_to(&log, t);
+        assert_eq!(
+            serde_json::to_vec(&resolved).unwrap(),
+            serde_json::to_vec(&forward_run).unwrap(),
+            "scrub-to-T must be byte-identical to a forward live run that reached T",
+        );
+        // e5 (seq 5, time 00:00:05) is past T and must NOT be folded in.
+        assert_eq!(resolved.entities["lane-a"].last_seq, 3);
+        assert!(!resolved.entities["lane-a"].data.contains_key("z"));
+    }
+
+    // Scenario "Anchor choice does not change the result": the same T resolved
+    // from any valid anchor (asOf <= T), or from no anchor at all, is identical.
+    #[test]
+    fn anchor_choice_does_not_change_the_scrub_result() {
+        let log = scrub_log();
+        let t = "2026-06-17T00:00:05Z";
+
+        // Resolve the same T three ways: an early anchor, a later anchor, and no
+        // anchor at all (full prefix fold). All must agree.
+        let early = resolve_scrub_state(&log, &[scrub_anchor(&log, "2026-06-17T00:00:01Z", 1)], t);
+        let later = resolve_scrub_state(&log, &[scrub_anchor(&log, "2026-06-17T00:00:03Z", 3)], t);
+        let none = resolve_scrub_state(&log, &[], t);
+
+        assert_eq!(
+            serde_json::to_vec(&early).unwrap(),
+            serde_json::to_vec(&later).unwrap(),
+            "choosing a different valid anchor must not change the resolved state",
+        );
+        assert_eq!(
+            serde_json::to_vec(&later).unwrap(),
+            serde_json::to_vec(&none).unwrap(),
+            "an anchor-bounded resolution must equal the anchorless full fold",
+        );
+        // And all equal the forward live run at T.
+        assert_eq!(
+            serde_json::to_vec(&early).unwrap(),
+            serde_json::to_vec(&fold_prefix_to(&log, t)).unwrap(),
+        );
+    }
+
+    // The resolver also works through a `ScrubResolver` borrowing the log+anchors,
+    // so a replay session resolves many scrub targets without re-threading them.
+    #[test]
+    fn scrub_resolver_resolves_many_targets() {
+        let log = scrub_log();
+        let anchors = vec![scrub_anchor(&log, "2026-06-17T00:00:02Z", 2)];
+        let resolver = ScrubResolver::new(&log, &anchors);
+
+        for t in [
+            "2026-06-17T00:00:01Z",
+            "2026-06-17T00:00:03Z",
+            "2026-06-17T00:00:05Z",
+        ] {
+            assert_eq!(
+                serde_json::to_vec(&resolver.resolve(t)).unwrap(),
+                serde_json::to_vec(&fold_prefix_to(&log, t)).unwrap(),
+                "ScrubResolver::resolve must equal the forward live run at {t}",
+            );
+        }
+    }
 
     // Box 7.1: switching modes reuses the same render path. Both modes resolve
     // through the ONE `render_time` resolver; the downstream render is a pure
