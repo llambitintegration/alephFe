@@ -41,8 +41,8 @@ pub use event_log::{Checkpoint, Cursor, EventLog, LogLine};
 pub use interaction::{
     action_key, emit_care_action, renders_weapon_affordance, resurrect_on_result, reveal_for_zone,
     sweep_outcome, sweep_outcome_for, BodyOutcome, CareAction, CareVerb, Confirmation,
-    GameActionKind, InteractionContext, ProxemicZone, RemovalReason, ResultStatus, Reveal,
-    SweepOutcome,
+    GameActionKind, InteractionContext, Nonce, NonceCorrelator, ProxemicZone, RemovalReason,
+    ResultStatus, Reveal, SweepOutcome,
 };
 pub use placement::{lease_of, placement_for, placement_of, Lease, PlaceKind, Placement};
 pub use projection::{

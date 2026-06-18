@@ -3,8 +3,11 @@
 //! This module models the in-world interaction with an agent-monster as a set of
 //! total, deterministic, side-effect-free functions: there is no clock, no RNG,
 //! no I/O, no async, no networking, and no HMAC/crypto here. The daemon-side
-//! broker signing (boxes 6.3/6.4) and any MQTT transport live elsewhere; what is
-//! captured here is the engine-local *logic* of the collaborative care surface.
+//! broker signing (box 6.3) and the MQTT transport binding live elsewhere; what
+//! is captured here is the engine-local *logic* of the collaborative care
+//! surface — including the pure nonce minting + result correlation half of box
+//! 6.4 ([`NonceCorrelator`]), whose producer emission and per-nonce
+//! response-topic remain the daemon's responsibility.
 //!
 //! What lives here (boxes 6.1, 6.2, 6.5, 6.6, 6.7, 6.8):
 //! - **Care-verb gating (box 6.1):** the verb set is EXACTLY
@@ -388,6 +391,71 @@ pub const fn renders_weapon_affordance() -> bool {
     false
 }
 
+/// A minted, opaque care-action nonce (box 6.4).
+///
+/// Unique per emitted care action; the engine correlates an inbound
+/// `fleet.action.result{nonce, …}` back to its originating action by this value
+/// alone. Minting is deterministic — a monotonic counter owned by the
+/// [`NonceCorrelator`], with no RNG and no clock in this pure layer. The MQTT
+/// per-nonce response-topic binding (CONTRACT §10.4) is the daemon's transport
+/// wiring and stays out of this module, exactly as the broker signing does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Nonce(pub u64);
+
+/// Correlates care-action results back to their originating action by nonce
+/// (box 6.4).
+///
+/// Each emitted care action is registered under a freshly-minted [`Nonce`]; an
+/// inbound `fleet.action.result{nonce, status}` is applied ONLY to the action
+/// that minted the matching nonce, and applied at most once. A result for an
+/// unknown or already-resolved nonce is ignored — it is never mis-applied to a
+/// different pending action. The body consequence of a result reuses the pure
+/// [`resurrect_on_result`] rule (box 6.5), so a `denied`/`failed` retire/send-home
+/// resurrects while an `accepted` retire stays despawned.
+///
+/// This is the engine-local half of box 6.4 (nonce minting + result
+/// correlation); the producer-facing emission and the MQTT response-topic
+/// binding remain the daemon's responsibility.
+#[derive(Debug, Clone, Default)]
+pub struct NonceCorrelator {
+    next: u64,
+    pending: std::collections::HashMap<Nonce, CareAction>,
+}
+
+impl NonceCorrelator {
+    /// A fresh correlator with no pending actions.
+    pub fn new() -> Self {
+        Self {
+            next: 0,
+            pending: std::collections::HashMap::new(),
+        }
+    }
+
+    /// Mint a unique [`Nonce`] for `action`, register it as pending, and return
+    /// the nonce the caller attaches to the outbound `fleet.careAction`. Each
+    /// call yields a distinct nonce for the lifetime of this correlator.
+    pub fn emit(&mut self, action: CareAction) -> Nonce {
+        let nonce = Nonce(self.next);
+        self.next += 1;
+        self.pending.insert(nonce, action);
+        nonce
+    }
+
+    /// Number of emitted actions still awaiting a result.
+    pub fn pending_len(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Apply a `fleet.action.result{nonce, status}` to the action that minted
+    /// `nonce`, returning its [`BodyOutcome`]. Returns `None` when no pending
+    /// action minted `nonce` (unknown or already resolved) — the result is then
+    /// dropped rather than applied to any other action.
+    pub fn correlate(&mut self, nonce: Nonce, status: ResultStatus) -> Option<BodyOutcome> {
+        let action = self.pending.remove(&nonce)?;
+        Some(resurrect_on_result(action, status))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,5 +798,64 @@ mod tests {
             sweep_outcome_for(CareVerb::Retire, present),
             SweepOutcome::EmitKill { graceful: false }
         );
+    }
+
+    // ----- box 6.4: nonce minting + result correlation -----
+
+    #[test]
+    fn minted_nonces_are_unique_per_action() {
+        let mut c = NonceCorrelator::new();
+        let n1 = c.emit(CareVerb::Retire.game_action());
+        let n2 = c.emit(CareVerb::SendHome.game_action());
+        let n3 = c.emit(CareVerb::OfferHelp.game_action());
+        assert_ne!(n1, n2);
+        assert_ne!(n2, n3);
+        assert_ne!(n1, n3);
+        assert_eq!(c.pending_len(), 3);
+    }
+
+    #[test]
+    fn result_is_applied_only_to_the_matching_nonce() {
+        // Two distinct care actions are in flight; a result for the second's
+        // nonce must resolve ONLY the second, leaving the first untouched.
+        let mut c = NonceCorrelator::new();
+        let retire = c.emit(CareVerb::Retire.game_action());
+        let send_home = c.emit(CareVerb::SendHome.game_action());
+
+        // Deny the send-home — only it resurrects; the retire is still pending.
+        assert_eq!(
+            c.correlate(send_home, ResultStatus::Denied),
+            Some(BodyOutcome::Resurrect)
+        );
+        assert_eq!(c.pending_len(), 1);
+
+        // The retire resolves independently and on its own nonce.
+        assert_eq!(
+            c.correlate(retire, ResultStatus::Accepted),
+            Some(BodyOutcome::StayDespawned)
+        );
+        assert_eq!(c.pending_len(), 0);
+    }
+
+    #[test]
+    fn result_for_unknown_nonce_is_dropped() {
+        let mut c = NonceCorrelator::new();
+        let _ = c.emit(CareVerb::Retire.game_action());
+        // A nonce that was never minted by this correlator resolves nothing.
+        assert_eq!(c.correlate(Nonce(9_999), ResultStatus::Failed), None);
+        assert_eq!(c.pending_len(), 1);
+    }
+
+    #[test]
+    fn result_is_applied_at_most_once() {
+        let mut c = NonceCorrelator::new();
+        let n = c.emit(CareVerb::SendHome.game_action());
+        assert_eq!(
+            c.correlate(n, ResultStatus::Failed),
+            Some(BodyOutcome::Resurrect)
+        );
+        // A duplicate/late redelivery of the same result is ignored.
+        assert_eq!(c.correlate(n, ResultStatus::Failed), None);
+        assert_eq!(c.pending_len(), 0);
     }
 }
