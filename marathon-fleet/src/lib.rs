@@ -39,4 +39,7 @@ pub use embodiment::{
 pub use event::{EntityDesc, EntityId, EntityKind, EntityState, EventEnvelope, GameAction};
 pub use event_log::{Checkpoint, Cursor, EventLog, LogLine};
 pub use placement::{lease_of, placement_for, placement_of, Lease, PlaceKind, Placement};
+pub use replay::{
+    InterpBuffer, Keyframe, Pose, Straddle, ViewClock, INTERP_DELAY, MAX_TRAVEL, MIN_TRAVEL,
+};
 pub use transport::{capture, CaptureBuffer, LiveEventSource, ReplaySource};

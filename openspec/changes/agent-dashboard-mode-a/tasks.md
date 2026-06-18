@@ -78,11 +78,11 @@
 
 ## 7. agent-replay
 
-- [ ] 7.1 Drive all rendering through one render loop whose `render_time` comes from a single `view_clock` abstraction with two selectable modes; switching modes changes only the clock source (specs/agent-replay "One Render Loop With A Switchable View Clock" — scenario "Switching modes reuses the same render path").
-- [ ] 7.2 Live mode: `render_time = now − INTERP_DELAY` (stream head held a bounded interval behind real time) (specs/agent-replay — scenario "Live mode renders behind the stream head").
-- [ ] 7.3 Replay mode: `render_time = scrub_T`, ignoring wall-clock `now` (specs/agent-replay — scenario "Replay mode renders at the scrub position").
-- [ ] 7.4 Emit one keyframe `{event_time, target}` per entity on each state change into that entity's interpolation buffer, and select the two keyframes straddling `render_time` per entity; a burst is absorbed by the `INTERP_DELAY` buffer, played in `event_time` order (specs/agent-replay "Render Slightly In The Past Over A Keyframe Buffer").
-- [ ] 7.5 Interpolate with a bounded travel-time tween (~0.5–2 s window) + idle animation in the gaps; converge smoothly on a new keyframe (never hard-snap); keep buffered quantities flat scalars (x, y, angle) with no nested fields (specs/agent-replay "Smooth Bounded-Travel-Time Interpolation Without Hard Snaps").
+- [x] 7.1 Drive all rendering through one render loop whose `render_time` comes from a single `view_clock` abstraction with two selectable modes; switching modes changes only the clock source (specs/agent-replay "One Render Loop With A Switchable View Clock" — scenario "Switching modes reuses the same render path").
+- [x] 7.2 Live mode: `render_time = now − INTERP_DELAY` (stream head held a bounded interval behind real time) (specs/agent-replay — scenario "Live mode renders behind the stream head").
+- [x] 7.3 Replay mode: `render_time = scrub_T`, ignoring wall-clock `now` (specs/agent-replay — scenario "Replay mode renders at the scrub position").
+- [x] 7.4 Emit one keyframe `{event_time, target}` per entity on each state change into that entity's interpolation buffer, and select the two keyframes straddling `render_time` per entity; a burst is absorbed by the `INTERP_DELAY` buffer, played in `event_time` order (specs/agent-replay "Render Slightly In The Past Over A Keyframe Buffer").
+- [x] 7.5 Interpolate with a bounded travel-time tween (~0.5–2 s window) + idle animation in the gaps; converge smoothly on a new keyframe (never hard-snap); keep buffered quantities flat scalars (x, y, angle) with no nested fields (specs/agent-replay "Smooth Bounded-Travel-Time Interpolation Without Hard Snaps").
 - [ ] 7.6 Resolve `scrub_T` against the nearest file-resident anchor `asOf ≤ T` + replay tail (`seq > lastSeq`, `time ≤ T`) so scrub-to-T equals a forward live run that reached T, and the choice of valid anchor does not change the result (specs/agent-replay "Scrub-To-T Equals A Live Run That Reached T"; reuses the task 3.5 fold).
 - [ ] 7.7 Read per-entity geometry/render state for both modes from the `render_snapshot() -> WorldSnapshot` consumed from `decouple-tick-snapshot`, adding ONLY the `view_clock` + interpolation layer (no redefinition of `tick`/`WorldSnapshot`/headless loop) (specs/agent-replay "Consume render_snapshot From decouple-tick-snapshot").
 
