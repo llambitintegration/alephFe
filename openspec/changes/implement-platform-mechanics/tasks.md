@@ -21,8 +21,8 @@
 
 ## 4. Re-Activation Logic in platforms.rs
 
-- [ ] 4.1 Extend `activate_platform()` in `marathon-sim/src/world_mechanics/platforms.rs` to handle re-activation: if state is `Extending`, transition to `Returning`; if state is `Returning`, transition to `Extending`; if state is `AtExtended`, transition to `Returning`.
-- [ ] 4.2 Add unit tests for re-activation: activate while Extending reverses, activate while Returning reverses, activate while AtExtended starts returning.
+- [x] 4.1 Extend `activate_platform()` in `marathon-sim/src/world_mechanics/platforms.rs` to handle re-activation: if state is `Extending`, transition to `Returning`; if state is `Returning`, transition to `Extending`; if state is `AtExtended`, transition to `Returning`.
+- [x] 4.2 Add unit tests for re-activation: activate while Extending reverses, activate while Returning reverses, activate while AtExtended starts returning.
 
 ## 5. World Mechanics Orchestration in tick.rs
 

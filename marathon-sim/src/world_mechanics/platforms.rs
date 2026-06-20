@@ -79,15 +79,29 @@ pub fn tick_platform(platform: &mut Platform) -> (f32, f32) {
 
 /// Activate a platform (trigger it to start extending).
 pub fn activate_platform(platform: &mut Platform) {
-    if platform.state == PlatformState::AtRest {
-        // Doors that start extended (closed) need to return (open).
-        // Check if we're at the extended position.
-        let at_extended = (platform.current_floor - platform.floor_extended).abs() < f32::EPSILON
-            && (platform.current_ceiling - platform.ceiling_extended).abs() < f32::EPSILON;
-        if at_extended {
+    match platform.state {
+        PlatformState::AtRest => {
+            // Doors that start extended (closed) need to return (open).
+            // Check if we're at the extended position.
+            let at_extended = (platform.current_floor - platform.floor_extended).abs()
+                < f32::EPSILON
+                && (platform.current_ceiling - platform.ceiling_extended).abs() < f32::EPSILON;
+            if at_extended {
+                platform.state = PlatformState::Returning;
+            } else {
+                platform.state = PlatformState::Extending;
+            }
+        }
+        // Re-activation of an already-moving platform reverses its direction.
+        PlatformState::Extending => {
             platform.state = PlatformState::Returning;
-        } else {
+        }
+        PlatformState::Returning => {
             platform.state = PlatformState::Extending;
+        }
+        // Re-activation while paused at the extended position starts the return.
+        PlatformState::AtExtended => {
+            platform.state = PlatformState::Returning;
         }
     }
 }
@@ -367,5 +381,32 @@ mod tests {
         p.state = PlatformState::Extending;
         let events = check_platform_triggers(&p, &[1], &[2]);
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn platform_reactivate_while_extending_reverses() {
+        let mut p = make_platform();
+        p.state = PlatformState::Extending;
+        p.current_floor = 0.5;
+        activate_platform(&mut p);
+        assert_eq!(p.state, PlatformState::Returning);
+    }
+
+    #[test]
+    fn platform_reactivate_while_returning_reverses() {
+        let mut p = make_platform();
+        p.state = PlatformState::Returning;
+        p.current_floor = 0.5;
+        activate_platform(&mut p);
+        assert_eq!(p.state, PlatformState::Extending);
+    }
+
+    #[test]
+    fn platform_reactivate_while_at_extended_returns() {
+        let mut p = make_platform();
+        p.state = PlatformState::AtExtended;
+        p.current_floor = 1.0;
+        activate_platform(&mut p);
+        assert_eq!(p.state, PlatformState::Returning);
     }
 }
