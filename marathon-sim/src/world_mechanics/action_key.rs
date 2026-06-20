@@ -186,6 +186,8 @@ mod tests {
             polygon_types: vec![0],
             polygon_permutations: vec![-1],
             line_side_indices: vec![(None, None), (None, None), (None, None), (None, None)],
+            changed_polygons: vec![false; 1],
+            has_changes: false,
         };
         let panels = ControlPanels::default();
         let result = find_action_key_target(Vec2::new(0.0, 0.0), 0.0, 0, &geometry, &panels);
@@ -246,6 +248,8 @@ mod tests {
                 (None, None),
                 (None, None),
             ],
+            changed_polygons: vec![false; 2],
+            has_changes: false,
         };
         let panels = ControlPanels::default();
 
@@ -294,6 +298,8 @@ mod tests {
             polygon_types: vec![0],
             polygon_permutations: vec![-1],
             line_side_indices: vec![(None, None), (Some(0), None), (None, None), (None, None)],
+            changed_polygons: vec![false; 1],
+            has_changes: false,
         };
 
         let panels = ControlPanels(vec![ControlPanel {

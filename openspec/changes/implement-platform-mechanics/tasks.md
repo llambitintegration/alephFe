@@ -14,15 +14,15 @@
 
 ## 3. MapGeometry Dirty Flag Extension
 
-- [ ] 3.1 Add `changed_polygons: Vec<bool>` and `has_changes: bool` fields to `MapGeometry` in `marathon-sim/src/world.rs`.
-- [ ] 3.2 Initialize `changed_polygons` to `vec![false; polygon_count]` and `has_changes` to `false` in `build_map_geometry()`.
-- [ ] 3.3 Add a `clear_changes(&mut self)` method on `MapGeometry` that sets `has_changes = false` and fills `changed_polygons` with `false`.
-- [ ] 3.4 Update the `MapGeometry` clone in `run_player_physics()` (tick.rs) to include the new fields.
+- [x] 3.1 Add `changed_polygons: Vec<bool>` and `has_changes: bool` fields to `MapGeometry` in `marathon-sim/src/world.rs`.
+- [x] 3.2 Initialize `changed_polygons` to `vec![false; polygon_count]` and `has_changes` to `false` in `build_map_geometry()`.
+- [x] 3.3 Add a `clear_changes(&mut self)` method on `MapGeometry` that sets `has_changes = false` and fills `changed_polygons` with `false`.
+- [x] 3.4 Update the `MapGeometry` clone in `run_player_physics()` (tick.rs) to include the new fields.
 
 ## 4. Re-Activation Logic in platforms.rs
 
-- [ ] 4.1 Extend `activate_platform()` in `marathon-sim/src/world_mechanics/platforms.rs` to handle re-activation: if state is `Extending`, transition to `Returning`; if state is `Returning`, transition to `Extending`; if state is `AtExtended`, transition to `Returning`.
-- [ ] 4.2 Add unit tests for re-activation: activate while Extending reverses, activate while Returning reverses, activate while AtExtended starts returning.
+- [x] 4.1 Extend `activate_platform()` in `marathon-sim/src/world_mechanics/platforms.rs` to handle re-activation: if state is `Extending`, transition to `Returning`; if state is `Returning`, transition to `Extending`; if state is `AtExtended`, transition to `Returning`.
+- [x] 4.2 Add unit tests for re-activation: activate while Extending reverses, activate while Returning reverses, activate while AtExtended starts returning.
 
 ## 5. World Mechanics Orchestration in tick.rs
 

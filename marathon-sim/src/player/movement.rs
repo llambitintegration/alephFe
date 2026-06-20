@@ -777,6 +777,8 @@ mod tests {
                 (None, None),
                 (None, None),
             ],
+            changed_polygons: vec![false; 2],
+            has_changes: false,
         }
     }
 
