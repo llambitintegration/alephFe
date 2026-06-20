@@ -2231,7 +2231,10 @@ impl SimWorld {
                     }
                 }
                 ItemEffect::AddInventoryItem { .. } => {
-                    // Inventory items tracked separately (keys, powerups) - stub for now
+                    // Inventory items tracked separately (keys, balls) - stub for now
+                }
+                ItemEffect::ActivatePowerup { .. } => {
+                    // Powerup timer activation wired in a later task (PowerupTimers) - stub for now
                 }
             }
         }

@@ -15,10 +15,10 @@
 
 ## 3. Fill Missing `item_effect()` Match Arms
 
-- [ ] 3.1 In `marathon-sim/src/world_mechanics/items.rs`, add match arms for `ITEM_FLAMETHROWER_AMMO`, `ITEM_ALIEN_AMMO`, and `ITEM_SMG_AMMO` returning `AddAmmo` with appropriate weapon indices and amounts.
-- [ ] 3.2 Add match arms for `ITEM_INVINCIBILITY`, `ITEM_INVISIBILITY`, `ITEM_INFRAVISION`, `ITEM_EXTRAVISION` returning `AddInventoryItem` (or a new `ActivatePowerup` variant if preferred) with the correct durations.
-- [ ] 3.3 Add `ActivatePowerup { powerup_type: i16, duration_ticks: u16 }` variant to `ItemEffect` enum if using a dedicated variant for powerups (alternative: handle powerup items as `AddInventoryItem` and check item type in the pickup system).
-- [ ] 3.4 Add unit tests for every new match arm: verify correct effect type, amounts, and weapon indices.
+- [x] 3.1 In `marathon-sim/src/world_mechanics/items.rs`, add match arms for `ITEM_FLAMETHROWER_AMMO`, `ITEM_ALIEN_AMMO`, and `ITEM_SMG_AMMO` returning `AddAmmo` with appropriate weapon indices and amounts.
+- [x] 3.2 Add match arms for `ITEM_INVINCIBILITY`, `ITEM_INVISIBILITY`, `ITEM_INFRAVISION`, `ITEM_EXTRAVISION` returning `AddInventoryItem` (or a new `ActivatePowerup` variant if preferred) with the correct durations.
+- [x] 3.3 Add `ActivatePowerup { powerup_type: i16, duration_ticks: u16 }` variant to `ItemEffect` enum if using a dedicated variant for powerups (alternative: handle powerup items as `AddInventoryItem` and check item type in the pickup system). [Chose dedicated `ActivatePowerup` variant; added non-breaking stub arm in `tick.rs` apply-pickup match pending PowerupTimers wiring (box 4.8/5.x).]
+- [x] 3.4 Add unit tests for every new match arm: verify correct effect type, amounts, and weapon indices.
 
 ## 4. Implement Core Pickup Logic
 
