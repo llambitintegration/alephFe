@@ -11,6 +11,7 @@ tests/fixtures/
 /marathon-*.png
 /s7-*.png
 .playwright-mcp/
+/logs/
 *.sceA
 *.shpA
 *.sndA
