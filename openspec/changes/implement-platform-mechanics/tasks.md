@@ -14,10 +14,10 @@
 
 ## 3. MapGeometry Dirty Flag Extension
 
-- [ ] 3.1 Add `changed_polygons: Vec<bool>` and `has_changes: bool` fields to `MapGeometry` in `marathon-sim/src/world.rs`.
-- [ ] 3.2 Initialize `changed_polygons` to `vec![false; polygon_count]` and `has_changes` to `false` in `build_map_geometry()`.
-- [ ] 3.3 Add a `clear_changes(&mut self)` method on `MapGeometry` that sets `has_changes = false` and fills `changed_polygons` with `false`.
-- [ ] 3.4 Update the `MapGeometry` clone in `run_player_physics()` (tick.rs) to include the new fields.
+- [x] 3.1 Add `changed_polygons: Vec<bool>` and `has_changes: bool` fields to `MapGeometry` in `marathon-sim/src/world.rs`.
+- [x] 3.2 Initialize `changed_polygons` to `vec![false; polygon_count]` and `has_changes` to `false` in `build_map_geometry()`.
+- [x] 3.3 Add a `clear_changes(&mut self)` method on `MapGeometry` that sets `has_changes = false` and fills `changed_polygons` with `false`.
+- [x] 3.4 Update the `MapGeometry` clone in `run_player_physics()` (tick.rs) to include the new fields.
 
 ## 4. Re-Activation Logic in platforms.rs
 

@@ -54,6 +54,22 @@ pub struct MapGeometry {
     pub polygon_permutations: Vec<i16>,
     /// Side indices per line: (clockwise_side, counterclockwise_side).
     pub line_side_indices: Vec<(Option<usize>, Option<usize>)>,
+    /// Per-polygon dirty flag: `true` if the polygon's geometry changed this
+    /// tick (floor/ceiling height moved). Sized to polygon_count.
+    pub changed_polygons: Vec<bool>,
+    /// Whether any polygon changed this tick. Lets the renderer skip mesh
+    /// rebuild work when nothing moved.
+    pub has_changes: bool,
+}
+
+impl MapGeometry {
+    /// Clear the dirty-polygon tracking, resetting `has_changes` to `false`
+    /// and every entry of `changed_polygons` to `false`. Called at the start
+    /// of each world-mechanics tick (and after the renderer consumes changes).
+    pub fn clear_changes(&mut self) {
+        self.has_changes = false;
+        self.changed_polygons.fill(false);
+    }
 }
 
 /// Physics tables resource (monster defs, weapon defs, etc.).
@@ -380,6 +396,7 @@ pub struct PolyDynamicData {
 }
 
 fn build_map_geometry(map_data: &MapData) -> MapGeometry {
+    let polygon_count = map_data.polygons.len();
     let endpoints: Vec<Vec2> = map_data
         .endpoints
         .iter()
@@ -512,6 +529,8 @@ fn build_map_geometry(map_data: &MapData) -> MapGeometry {
         polygon_types,
         polygon_permutations,
         line_side_indices,
+        changed_polygons: vec![false; polygon_count],
+        has_changes: false,
     }
 }
 
@@ -1796,5 +1815,46 @@ mod poly_dynamic_data_tests {
         for p in &platforms {
             assert!(p.linked_platforms.is_empty(), "tag 0 must not link");
         }
+    }
+
+    #[test]
+    fn map_geometry_dirty_flags_init_and_clear() {
+        // boxes 3.1-3.3: a freshly built MapGeometry has no changes and a
+        // changed_polygons vec sized to polygon_count, all false. After marking
+        // a polygon dirty and calling clear_changes(), everything resets.
+        let map = platform_map();
+        let polygon_count = map.polygons.len();
+        let mut geometry = build_map_geometry(&map);
+
+        // Fresh state: clean, correctly sized, all-false.
+        assert!(!geometry.has_changes, "fresh geometry must have no changes");
+        assert_eq!(
+            geometry.changed_polygons.len(),
+            polygon_count,
+            "changed_polygons must be sized to polygon_count"
+        );
+        assert!(
+            geometry.changed_polygons.iter().all(|&c| !c),
+            "fresh changed_polygons must all be false"
+        );
+
+        // Dirty one polygon, then clear.
+        geometry.changed_polygons[0] = true;
+        geometry.has_changes = true;
+        geometry.clear_changes();
+
+        assert!(
+            !geometry.has_changes,
+            "clear_changes must reset has_changes"
+        );
+        assert!(
+            geometry.changed_polygons.iter().all(|&c| !c),
+            "clear_changes must reset all changed_polygons to false"
+        );
+        assert_eq!(
+            geometry.changed_polygons.len(),
+            polygon_count,
+            "clear_changes must preserve changed_polygons length"
+        );
     }
 }
