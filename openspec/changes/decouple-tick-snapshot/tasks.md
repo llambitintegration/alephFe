@@ -24,30 +24,30 @@
 
 ## 4. Native migration + frozen-light fix (step 4 — native lane, riskiest)
 
-- [ ] 4.1 Replace the `snapshot()` + byte-offset update path in `marathon-game/src/render.rs:1250-1289` with whole-`PolygonGpuData`-struct writes built from `render_snapshot().poly_dynamic` for all polygons (floor/ceiling/media height + floor/ceiling light)
-- [ ] 4.2 Remove the dead light no-op stub (`render.rs:1282-1288`); confirm no `let _ = light;` or equivalent remains in the polygon-update path
-- [ ] 4.3 Keep/verify the `size_of::<PolygonGpuData>() == 48` assertion (`render.rs:1593`) as the layout guardrail; test it holds
-- [ ] 4.4 Headless/integration test: tick a sim with an animated light for N ticks and assert the native polygon buffer's floor/ceiling light entries change (lights no longer frozen)
-- [ ] 4.5 Native binary builds and its render/integration tests are green
+- [x] 4.1 Replace the `snapshot()` + byte-offset update path in `marathon-game/src/render.rs:1250-1289` with whole-`PolygonGpuData`-struct writes built from `render_snapshot().poly_dynamic` for all polygons (floor/ceiling/media height + floor/ceiling light)
+- [x] 4.2 Remove the dead light no-op stub (`render.rs:1282-1288`); confirm no `let _ = light;` or equivalent remains in the polygon-update path
+- [x] 4.3 Keep/verify the `size_of::<PolygonGpuData>() == 48` assertion (`render.rs:1593`) as the layout guardrail; test it holds
+- [x] 4.4 Headless/integration test: tick a sim with an animated light for N ticks and assert the native polygon buffer's floor/ceiling light entries change (lights no longer frozen)
+- [x] 4.5 Native binary builds and its render/integration tests are green
 
 ## 5. Wall-height fix, web (step 5 — web lane)
 
-- [ ] 5.1 Resolve the neighbor-index design question: decide whether wall vertices need one extra `u32` (neighbor polygon) or can derive both source polygons from `polygon_index` + side topology; document the choice
-- [ ] 5.2 In `marathon-web/src/mesh.rs` wall emission (`~432-433,456-457,482-483`), replace baked absolute top/bottom Y with a height-source discriminator + source polygon index (mirroring `SURFACE_FLOOR/CEILING/MEDIA`); test that wall vertices carry the discriminator and source index instead of absolute Y
+- [x] 5.1 Resolve the neighbor-index design question: decide whether wall vertices need one extra `u32` (neighbor polygon) or can derive both source polygons from `polygon_index` + side topology; document the choice
+- [x] 5.2 In `marathon-web/src/mesh.rs` wall emission (`~432-433,456-457,482-483`), replace baked absolute top/bottom Y with a height-source discriminator + source polygon index (mirroring `SURFACE_FLOOR/CEILING/MEDIA`); test that wall vertices carry the discriminator and source index instead of absolute Y
 - [ ] 5.3 In `marathon-web/src/shader.wgsl` `vs_main`, extend the discriminator branch (`~71-80`) to resolve wall Y from the data texture for the source polygon; verify the pipeline still builds under `downlevel_webgl2_defaults`
 - [ ] 5.4 Web E2E on a moving-platform/door level (door-anim scenario): assert the wall quads bordering the moving polygon stretch with it and leave no gap, while vertex/index buffers stay immutable
 
 ## 6. Wall-height fix, native (step 6 — native lane)
 
-- [ ] 6.1 Apply the same wall height-source discriminator in `marathon-game/src/mesh.rs`; test wall vertices carry the discriminator + source index
+- [x] 6.1 Apply the same wall height-source discriminator in `marathon-game/src/mesh.rs`; test wall vertices carry the discriminator + source index
 - [ ] 6.2 Extend `marathon-game/src/shader.wgsl` to resolve wall Y from the polygon buffer for the source polygon (consistent with the floor/ceiling read at `shader.wgsl:189`)
 - [ ] 6.3 Native integration/visual check: a moving platform stretches its native walls with no gap, buffers immutable
 
 ## 7. Headless determinism harness (step 7)
 
-- [ ] 7.1 Add a headless test that constructs a `SimWorld` with no GPU, ticks N times with a fixed `TickInput` sequence, and calls `render_snapshot()` after each tick without initializing any graphics backend
-- [ ] 7.2 Serialize each frame's `render_snapshot()`; assert two runs with the same seed/level/input sequence produce byte-identical per-tick streams
-- [ ] 7.3 Assert calling `render_snapshot()` between ticks does not perturb the deterministic tick sequence vs. a reference run that omits the snapshot calls
+- [x] 7.1 Add a headless test that constructs a `SimWorld` with no GPU, ticks N times with a fixed `TickInput` sequence, and calls `render_snapshot()` after each tick without initializing any graphics backend
+- [x] 7.2 Serialize each frame's `render_snapshot()`; assert two runs with the same seed/level/input sequence produce byte-identical per-tick streams
+- [x] 7.3 Assert calling `render_snapshot()` between ticks does not perturb the deterministic tick sequence vs. a reference run that omits the snapshot calls
 
 ## 8. Workspace verification
 

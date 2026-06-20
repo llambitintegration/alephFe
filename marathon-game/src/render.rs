@@ -402,6 +402,10 @@ pub struct App {
     sim: Option<SimWorld>,
     game_state: GameState,
 
+    // CPU-side mirror of the per-polygon GPU buffer, retained for
+    // read-modify-write whole-struct uploads each frame (see `apply_poly_dynamic`).
+    polygon_gpu_data: Vec<PolygonGpuData>,
+
     // Camera (double-buffered for interpolation)
     prev_camera: CameraState,
     curr_camera: CameraState,
@@ -451,6 +455,7 @@ impl App {
             audio_engine: None,
             sim: None,
             game_state: GameState::Playing,
+            polygon_gpu_data: Vec::new(),
             prev_camera: default_camera,
             curr_camera: default_camera,
             start_time: Instant::now(),
@@ -461,6 +466,26 @@ impl App {
             entity_snapshots: EntitySnapshots::new(),
             pending_level_load: None,
             window: None,
+        }
+    }
+
+    /// Copy the 5 per-polygon dynamic fields from a render snapshot's
+    /// `poly_dynamic` into the CPU-side `PolygonGpuData` mirror, leaving the
+    /// static fields (transfer modes, texture offsets) untouched.
+    ///
+    /// GPU-free and pure so it can be unit-tested without a graphics device:
+    /// proving that animated light values propagate end-to-end into the buffer
+    /// data (box 4.4) needs only this function plus a sim.
+    fn apply_poly_dynamic(
+        dst: &mut [PolygonGpuData],
+        poly: &[marathon_sim::world::PolyDynamicData],
+    ) {
+        for (gpu, dyn_data) in dst.iter_mut().zip(poly.iter()) {
+            gpu.floor_height = dyn_data.floor_height;
+            gpu.ceiling_height = dyn_data.ceiling_height;
+            gpu.media_height = dyn_data.media_height;
+            gpu.floor_light = dyn_data.floor_light;
+            gpu.ceiling_light = dyn_data.ceiling_light;
         }
     }
 
@@ -570,6 +595,11 @@ impl App {
                 }
             })
             .collect();
+
+        // Retain a CPU-side mirror so the per-frame update can do whole-struct
+        // read-modify-write (preserving static transfer modes + tex offsets while
+        // refreshing the dynamic height/light fields from `render_snapshot`).
+        self.polygon_gpu_data = polygon_data.clone();
 
         // Initialize simulation
         let physics = match &self.physics_data {
@@ -1247,44 +1277,22 @@ impl ApplicationHandler for App {
                                 );
                             }
 
-                            // Update GPU polygon buffer with platform/media/light state
+                            // Update GPU polygon buffer from the per-frame render
+                            // snapshot. Whole-struct writes: refresh the 5 dynamic
+                            // fields (floor/ceiling/media height + floor/ceiling
+                            // light) for every polygon while preserving the static
+                            // transfer-mode / texture-offset fields, then upload the
+                            // whole mirror contiguously. This unfreezes lights — the
+                            // old byte-offset path had a dead light no-op stub.
+                            let poly_dynamic = sim.render_snapshot().poly_dynamic;
+                            Self::apply_poly_dynamic(&mut self.polygon_gpu_data, &poly_dynamic);
                             if let Some(gpu) = &self.gpu {
-                                let snapshot = sim.snapshot();
-
-                                for platform in &snapshot.platforms {
-                                    let offset = platform.polygon_index
-                                        * std::mem::size_of::<PolygonGpuData>();
-                                    // Write floor_height (first field)
+                                if !self.polygon_gpu_data.is_empty() {
                                     gpu.queue.write_buffer(
                                         &gpu.polygon_buffer,
-                                        offset as u64,
-                                        bytemuck::bytes_of(&platform.current_floor),
+                                        0,
+                                        bytemuck::cast_slice(&self.polygon_gpu_data),
                                     );
-                                    // Write ceiling_height (second field, 4 bytes in)
-                                    gpu.queue.write_buffer(
-                                        &gpu.polygon_buffer,
-                                        (offset + 4) as u64,
-                                        bytemuck::bytes_of(&platform.current_ceiling),
-                                    );
-                                }
-
-                                for media in &snapshot.media {
-                                    let offset =
-                                        media.polygon_index * std::mem::size_of::<PolygonGpuData>();
-                                    // Write media_height (7th field, offset 24 bytes)
-                                    gpu.queue.write_buffer(
-                                        &gpu.polygon_buffer,
-                                        (offset + 24) as u64,
-                                        bytemuck::bytes_of(&media.current_height),
-                                    );
-                                }
-
-                                for light in &snapshot.lights {
-                                    // Update all polygons that reference this light
-                                    // (light_index maps to floor/ceiling lightsource indices)
-                                    // This is a simplified approach — write intensity
-                                    // for floor_light and ceiling_light fields
-                                    let _ = light; // Full light update requires polygon→light mapping
                                 }
                             }
                         }
@@ -1603,5 +1611,257 @@ mod tests {
     fn tick_timing_constants() {
         assert_eq!(TICKS_PER_SECOND, 30);
         assert_eq!(TICK_DURATION_MICROS, 33333);
+    }
+
+    // ──────────── Box 4.4: lights are no longer frozen ────────────
+    //
+    // This test lives here (not in `tests/`) because marathon-game is a binary
+    // crate: only an in-crate `#[cfg(test)]` module can reach the private
+    // `App::apply_poly_dynamic` and `PolygonGpuData`. It builds an animated
+    // (Smooth-ramp) light, ticks a real `SimWorld` headlessly (no GPU), feeds
+    // each tick's `render_snapshot().poly_dynamic` through the same
+    // `apply_poly_dynamic` the per-frame path uses, and asserts the floor/ceiling
+    // LIGHT fields of the GPU mirror CHANGE across ticks — proving the old
+    // frozen-light no-op stub is gone end-to-end at the data layer.
+    use marathon_formats::map::*;
+    use marathon_formats::*;
+    use marathon_sim::tick::ActionFlags;
+    use marathon_sim::world::SimConfig;
+
+    fn light_test_map() -> MapData {
+        // Two adjacent 1024x1024 squares; both polygons reference light 0 for
+        // floor + ceiling. Light 0 is a deterministic Smooth ramp 0.0 -> 1.0 over
+        // 60 ticks, so its intensity changes every tick.
+        let mk_ep = |x: i16, y: i16, owner: i16| Endpoint {
+            flags: 0,
+            highest_adjacent_floor_height: 0,
+            lowest_adjacent_ceiling_height: 2048,
+            vertex: WorldPoint2d { x, y },
+            transformed: WorldPoint2d { x, y },
+            supporting_polygon_index: owner,
+        };
+        let endpoints = vec![
+            mk_ep(0, 0, 0),
+            mk_ep(1024, 0, 0),
+            mk_ep(1024, 1024, 0),
+            mk_ep(0, 1024, 0),
+            mk_ep(2048, 0, 1),
+            mk_ep(2048, 1024, 1),
+        ];
+
+        let mk_line = |a: i16, b: i16, flags: u16, cw_owner: i16, ccw_owner: i16| Line {
+            endpoint_indexes: [a, b],
+            flags,
+            length: 1024,
+            highest_adjacent_floor: 0,
+            lowest_adjacent_ceiling: 2048,
+            clockwise_polygon_side_index: -1,
+            counterclockwise_polygon_side_index: -1,
+            clockwise_polygon_owner: cw_owner,
+            counterclockwise_polygon_owner: ccw_owner,
+        };
+        let lines = vec![
+            mk_line(1, 2, 0x0200, 0, 1),
+            mk_line(0, 1, 0x4000, 0, -1),
+            mk_line(3, 2, 0x4000, 0, -1),
+            mk_line(0, 3, 0x4000, 0, -1),
+            mk_line(1, 4, 0x4000, 1, -1),
+            mk_line(4, 5, 0x4000, 1, -1),
+            mk_line(5, 2, 0x4000, 1, -1),
+        ];
+
+        let sd_none = ShapeDescriptor(0xFFFF);
+        let wp_zero = WorldPoint2d { x: 0, y: 0 };
+        let mk_poly = |endpoint_indexes: [i16; 8],
+                       line_indexes: [i16; 8],
+                       adjacent: [i16; 8],
+                       center: WorldPoint2d| Polygon {
+            polygon_type: 0,
+            flags: 0,
+            permutation: 0,
+            vertex_count: 4,
+            endpoint_indexes,
+            line_indexes,
+            floor_texture: sd_none,
+            ceiling_texture: sd_none,
+            floor_height: 0,
+            ceiling_height: 2048,
+            floor_lightsource_index: 0,
+            ceiling_lightsource_index: 0,
+            area: 1024 * 1024,
+            floor_transfer_mode: 0,
+            ceiling_transfer_mode: 0,
+            adjacent_polygon_indexes: adjacent,
+            center,
+            side_indexes: [-1; 8],
+            floor_origin: wp_zero,
+            ceiling_origin: wp_zero,
+            media_index: -1,
+            media_lightsource_index: -1,
+            sound_source_indexes: -1,
+            ambient_sound_image_index: -1,
+            random_sound_image_index: -1,
+        };
+
+        let polygons = vec![
+            mk_poly(
+                [0, 1, 2, 3, -1, -1, -1, -1],
+                [1, 0, 2, 3, -1, -1, -1, -1],
+                [-1, 1, -1, -1, -1, -1, -1, -1],
+                WorldPoint2d { x: 512, y: 512 },
+            ),
+            mk_poly(
+                [1, 4, 5, 2, -1, -1, -1, -1],
+                [4, 5, 6, 0, -1, -1, -1, -1],
+                [-1, -1, -1, 0, -1, -1, -1, -1],
+                WorldPoint2d { x: 1536, y: 512 },
+            ),
+        ];
+
+        let player_obj = MapObject {
+            object_type: 3, // OBJECT_IS_PLAYER
+            index: 0,
+            facing: 0,
+            polygon_index: 0,
+            location: WorldPoint3d {
+                x: 512,
+                y: 512,
+                z: 0,
+            },
+            flags: 0,
+        };
+
+        let constant = |intensity: f32| LightingFunctionSpec {
+            function: 0,
+            period: 1,
+            delta_period: 0,
+            intensity,
+            delta_intensity: 0.0,
+        };
+
+        MapData {
+            endpoints,
+            lines,
+            sides: vec![],
+            polygons,
+            objects: vec![player_obj],
+            lights: LightData::Static(vec![StaticLightData {
+                light_type: 0,
+                flags: 1, // LIGHT_IS_INITIALLY_ACTIVE -> starts in BecomingActive
+                phase: 0,
+                becoming_active: LightingFunctionSpec {
+                    function: 2, // Smooth (cosine) ramp 0.0 -> 1.0 over 60 ticks
+                    period: 60,
+                    delta_period: 0,
+                    intensity: 1.0,
+                    delta_intensity: 0.0,
+                },
+                primary_active: constant(1.0),
+                secondary_active: constant(1.0),
+                primary_inactive: constant(0.0),
+                secondary_inactive: constant(0.0),
+                becoming_inactive: constant(0.0),
+                tag: 0,
+            }]),
+            platforms: vec![],
+            media: vec![],
+            annotations: vec![],
+            terminals: vec![],
+            ambient_sounds: vec![],
+            random_sounds: vec![],
+            map_info: None,
+            item_placement: vec![],
+            guard_paths: None,
+        }
+    }
+
+    fn light_test_physics() -> PhysicsData {
+        PhysicsData {
+            monsters: Some(vec![]),
+            effects: Some(vec![]),
+            projectiles: Some(vec![]),
+            physics: Some(vec![PhysicsConstants {
+                maximum_forward_velocity: 0.1,
+                maximum_backward_velocity: 0.05,
+                maximum_perpendicular_velocity: 0.08,
+                acceleration: 0.01,
+                deceleration: 0.005,
+                airborne_deceleration: 0.002,
+                gravitational_acceleration: 0.005,
+                climbing_acceleration: 0.01,
+                terminal_velocity: 0.5,
+                external_deceleration: 0.01,
+                angular_acceleration: 0.05,
+                angular_deceleration: 0.03,
+                maximum_angular_velocity: 0.2,
+                angular_recentering_velocity: 0.1,
+                fast_angular_velocity: 0.3,
+                fast_angular_maximum: 0.4,
+                maximum_elevation: 0.5,
+                external_angular_deceleration: 0.05,
+                step_delta: 0.25,
+                step_amplitude: 0.02,
+                radius: 0.25,
+                height: 0.8,
+                dead_height: 0.3,
+                camera_height: 0.6,
+                splash_height: 0.1,
+                half_camera_separation: 0.05,
+            }]),
+            weapons: Some(vec![]),
+        }
+    }
+
+    #[test]
+    fn animated_light_propagates_into_polygon_gpu_data_across_ticks() {
+        let map = light_test_map();
+        let physics = light_test_physics();
+        let config = SimConfig {
+            random_seed: 42,
+            difficulty: 2,
+        };
+        let mut sim = SimWorld::new(&map, &physics, &config).expect("world construction failed");
+
+        // Seed the CPU-side mirror exactly as the renderer would: one entry per
+        // polygon, with arbitrary (here zeroed) dynamic fields and distinctive
+        // static fields we expect to remain untouched.
+        let poly_count = map.polygons.len();
+        let mut polygon_gpu_data: Vec<PolygonGpuData> = (0..poly_count)
+            .map(|i| {
+                let mut p = PolygonGpuData::zeroed();
+                // Distinctive static markers per polygon.
+                p.floor_transfer_mode = 7 + i as u32;
+                p.ceiling_transfer_mode = 11 + i as u32;
+                p.floor_tex_offset_x = 0.25 * (i + 1) as f32;
+                p
+            })
+            .collect();
+
+        let mut floor_lights = Vec::new();
+        let mut ceiling_lights = Vec::new();
+        const N: usize = 60;
+        for _ in 0..N {
+            sim.tick(ActionFlags::default().into());
+            let poly_dynamic = sim.render_snapshot().poly_dynamic;
+            App::apply_poly_dynamic(&mut polygon_gpu_data, &poly_dynamic);
+            floor_lights.push(polygon_gpu_data[0].floor_light);
+            ceiling_lights.push(polygon_gpu_data[0].ceiling_light);
+        }
+
+        // Lights are no longer frozen: at least one of floor/ceiling light on
+        // polygon 0 takes on more than one distinct value across the run.
+        let floor_changed = floor_lights.windows(2).any(|w| w[0] != w[1]);
+        let ceiling_changed = ceiling_lights.windows(2).any(|w| w[0] != w[1]);
+        assert!(
+            floor_changed || ceiling_changed,
+            "expected floor/ceiling light to change across ticks (frozen-light \
+             regression); floor={floor_lights:?} ceiling={ceiling_lights:?}"
+        );
+
+        // Static fields must survive the whole-struct read-modify-write.
+        assert_eq!(polygon_gpu_data[0].floor_transfer_mode, 7);
+        assert_eq!(polygon_gpu_data[0].ceiling_transfer_mode, 11);
+        assert_eq!(polygon_gpu_data[1].floor_transfer_mode, 8);
+        assert!((polygon_gpu_data[1].floor_tex_offset_x - 0.5).abs() < 1e-6);
     }
 }

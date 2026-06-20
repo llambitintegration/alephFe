@@ -1,7 +1,47 @@
 use bytemuck::{Pod, Zeroable};
 use marathon_formats::MapData;
 
-/// GPU vertex format: position + UV + polygon index + texture descriptor.
+/// Wall vertex height-source surface selector (high bit of `Vertex::height_source`).
+///
+/// A wall vertex's top/bottom Y can be driven by either the floor or the ceiling
+/// of its *source* polygon (which may be the owning polygon or an adjacent
+/// neighbor — see design.md "Wall height-source representation (box 5.1)"). The
+/// 1-bit selector lives in bit 31; the source polygon index is the low 31 bits.
+pub const WALL_HEIGHT_FROM_FLOOR: u32 = 0;
+pub const WALL_HEIGHT_FROM_CEILING: u32 = 1;
+
+/// Bit position of the floor/ceiling selector inside `Vertex::height_source`.
+const HEIGHT_SOURCE_SELECTOR_SHIFT: u32 = 31;
+/// Mask covering the source-polygon-index bits of `Vertex::height_source`.
+pub const HEIGHT_SOURCE_INDEX_MASK: u32 = 0x7FFF_FFFF;
+
+/// Pack a height-source descriptor: which polygon's floor/ceiling drives this
+/// vertex's Y. Mirrors the floor/ceiling/media surface-discriminator pattern but
+/// uses a dedicated attribute because a wall vertex's `polygon_index` (kept for
+/// light/transfer-mode sampling = the owning polygon) is *not* necessarily the
+/// source polygon.
+pub fn pack_height_source(selector: u32, source_polygon_index: u32) -> u32 {
+    (selector << HEIGHT_SOURCE_SELECTOR_SHIFT) | (source_polygon_index & HEIGHT_SOURCE_INDEX_MASK)
+}
+
+/// Extract the floor/ceiling selector from a packed `height_source`.
+/// Used by tests and (structurally) mirrors the shader-side unpack in box 6.2.
+#[allow(dead_code)]
+pub fn height_source_selector(height_source: u32) -> u32 {
+    height_source >> HEIGHT_SOURCE_SELECTOR_SHIFT
+}
+
+/// Extract the source polygon index from a packed `height_source`.
+/// Used by tests and (structurally) mirrors the shader-side unpack in box 6.2.
+#[allow(dead_code)]
+pub fn height_source_index(height_source: u32) -> u32 {
+    height_source & HEIGHT_SOURCE_INDEX_MASK
+}
+
+/// GPU vertex format: position + UV + polygon index + texture descriptor +
+/// height source. `height_source` names the polygon (and floor-vs-ceiling
+/// surface) whose animated height drives this vertex's Y; box 6.2 resolves Y
+/// from `polygon_data[source]` in the shader instead of the baked `position.y`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Vertex {
@@ -9,14 +49,16 @@ pub struct Vertex {
     pub uv: [f32; 2],
     pub polygon_index: u32,
     pub texture_descriptor: u32,
+    pub height_source: u32,
 }
 
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 5] = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x2,
         2 => Uint32,
         3 => Uint32,
+        4 => Uint32,
     ];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -118,6 +160,7 @@ fn build_floor(
             uv: [u, v],
             polygon_index: poly_idx as u32,
             texture_descriptor: tex_desc,
+            height_source: pack_height_source(WALL_HEIGHT_FROM_FLOOR, poly_idx as u32),
         });
         actual_verts += 1;
     }
@@ -160,6 +203,7 @@ fn build_ceiling(
             uv: [u, v],
             polygon_index: poly_idx as u32,
             texture_descriptor: tex_desc,
+            height_source: pack_height_source(WALL_HEIGHT_FROM_CEILING, poly_idx as u32),
         });
         actual_verts += 1;
     }
@@ -198,11 +242,15 @@ fn build_media_surface(
         let u = (ep.vertex.x.wrapping_sub(media.origin.x)) as f32 / 1024.0;
         let v = (ep.vertex.y.wrapping_sub(media.origin.y)) as f32 / 1024.0;
 
+        // Media surfaces keep baked Y; box 6.2 only un-bakes walls. Tag with the
+        // owning polygon's floor selector for forward consistency (unused by the
+        // shader for media).
         vertices.push(Vertex {
             position: [wx, media_y, wz],
             uv: [u, v],
             polygon_index: poly_idx as u32,
             texture_descriptor: tex_desc,
+            height_source: pack_height_source(WALL_HEIGHT_FROM_FLOOR, poly_idx as u32),
         });
         actual_verts += 1;
     }
@@ -302,6 +350,7 @@ fn build_wall_side(
                 let bottom = world_to_f32(polygon.floor_height);
                 let top = world_to_f32(polygon.ceiling_height);
                 let tex = &side.primary_texture;
+                // Full wall: bottom = own floor, top = own ceiling.
                 emit_wall_quad(
                     vertices,
                     indices,
@@ -315,6 +364,8 @@ fn build_wall_side(
                     tex,
                     tex.texture.0 as u32,
                     poly_idx,
+                    pack_height_source(WALL_HEIGHT_FROM_FLOOR, poly_idx as u32),
+                    pack_height_source(WALL_HEIGHT_FROM_CEILING, poly_idx as u32),
                 );
             }
         }
@@ -325,6 +376,7 @@ fn build_wall_side(
                 let top = world_to_f32(polygon.ceiling_height);
                 if top > bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
+                    // High wall: bottom = neighbor ceiling, top = own ceiling.
                     emit_wall_quad(
                         vertices,
                         indices,
@@ -338,6 +390,8 @@ fn build_wall_side(
                         tex,
                         tex.texture.0 as u32,
                         poly_idx,
+                        pack_height_source(WALL_HEIGHT_FROM_CEILING, adj_idx as u32),
+                        pack_height_source(WALL_HEIGHT_FROM_CEILING, poly_idx as u32),
                     );
                 }
             }
@@ -349,6 +403,7 @@ fn build_wall_side(
                 let top = world_to_f32(adj.floor_height);
                 if top > bottom && !side.primary_texture.texture.is_none() {
                     let tex = &side.primary_texture;
+                    // Low wall: bottom = own floor, top = neighbor floor.
                     emit_wall_quad(
                         vertices,
                         indices,
@@ -362,6 +417,8 @@ fn build_wall_side(
                         tex,
                         tex.texture.0 as u32,
                         poly_idx,
+                        pack_height_source(WALL_HEIGHT_FROM_FLOOR, poly_idx as u32),
+                        pack_height_source(WALL_HEIGHT_FROM_FLOOR, adj_idx as u32),
                     );
                 }
             }
@@ -370,6 +427,7 @@ fn build_wall_side(
             if let Some(adj_idx) = adjacent_poly_idx {
                 let adj = &map.polygons[adj_idx];
 
+                // Split wall, low quad: bottom = own floor, top = neighbor floor.
                 let low_bottom = world_to_f32(polygon.floor_height);
                 let low_top = world_to_f32(adj.floor_height);
                 if low_top > low_bottom && !side.secondary_texture.texture.is_none() {
@@ -387,9 +445,13 @@ fn build_wall_side(
                         tex,
                         tex.texture.0 as u32,
                         poly_idx,
+                        pack_height_source(WALL_HEIGHT_FROM_FLOOR, poly_idx as u32),
+                        pack_height_source(WALL_HEIGHT_FROM_FLOOR, adj_idx as u32),
                     );
                 }
 
+                // Split wall, transparent (middle) quad: bottom = neighbor floor,
+                // top = neighbor ceiling.
                 let trans_bottom = world_to_f32(adj.floor_height);
                 let trans_top = world_to_f32(adj.ceiling_height);
                 if trans_top > trans_bottom && !side.transparent_texture.texture.is_none() {
@@ -407,9 +469,12 @@ fn build_wall_side(
                         tex,
                         tex.texture.0 as u32,
                         poly_idx,
+                        pack_height_source(WALL_HEIGHT_FROM_FLOOR, adj_idx as u32),
+                        pack_height_source(WALL_HEIGHT_FROM_CEILING, adj_idx as u32),
                     );
                 }
 
+                // Split wall, high quad: bottom = neighbor ceiling, top = own ceiling.
                 let high_bottom = world_to_f32(adj.ceiling_height);
                 let high_top = world_to_f32(polygon.ceiling_height);
                 if high_top > high_bottom && !side.primary_texture.texture.is_none() {
@@ -427,6 +492,8 @@ fn build_wall_side(
                         tex,
                         tex.texture.0 as u32,
                         poly_idx,
+                        pack_height_source(WALL_HEIGHT_FROM_CEILING, adj_idx as u32),
+                        pack_height_source(WALL_HEIGHT_FROM_CEILING, poly_idx as u32),
                     );
                 }
             }
@@ -449,6 +516,8 @@ fn emit_wall_quad(
     side_tex: &marathon_formats::SideTexture,
     tex_desc: u32,
     poly_idx: usize,
+    bottom_source: u32,
+    top_source: u32,
 ) {
     let base = vertices.len() as u32;
     let height = top - bottom;
@@ -460,24 +529,28 @@ fn emit_wall_quad(
         uv: [u_off, v_off + height],
         polygon_index: poly_idx as u32,
         texture_descriptor: tex_desc,
+        height_source: bottom_source,
     });
     vertices.push(Vertex {
         position: [x0, top, z0],
         uv: [u_off, v_off],
         polygon_index: poly_idx as u32,
         texture_descriptor: tex_desc,
+        height_source: top_source,
     });
     vertices.push(Vertex {
         position: [x1, top, z1],
         uv: [u_off + wall_len, v_off],
         polygon_index: poly_idx as u32,
         texture_descriptor: tex_desc,
+        height_source: top_source,
     });
     vertices.push(Vertex {
         position: [x1, bottom, z1],
         uv: [u_off + wall_len, v_off + height],
         polygon_index: poly_idx as u32,
         texture_descriptor: tex_desc,
+        height_source: bottom_source,
     });
 
     indices.push(base);
@@ -486,4 +559,267 @@ fn emit_wall_quad(
     indices.push(base);
     indices.push(base + 2);
     indices.push(base + 3);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use marathon_formats::map::LightData;
+    use marathon_formats::{
+        Endpoint, Line, Polygon, ShapeDescriptor, Side, SideTexture, WorldPoint2d,
+    };
+
+    fn make_endpoint(x: i16, y: i16) -> Endpoint {
+        Endpoint {
+            flags: 0,
+            highest_adjacent_floor_height: 0,
+            lowest_adjacent_ceiling_height: 0,
+            vertex: WorldPoint2d { x, y },
+            transformed: WorldPoint2d { x, y },
+            supporting_polygon_index: -1,
+        }
+    }
+
+    fn make_polygon(vertex_count: u16, endpoint_indexes: [i16; 8]) -> Polygon {
+        Polygon {
+            polygon_type: 0,
+            flags: 0,
+            permutation: 0,
+            vertex_count,
+            endpoint_indexes,
+            line_indexes: [-1; 8],
+            floor_texture: ShapeDescriptor(0x0100),
+            ceiling_texture: ShapeDescriptor(0x0100),
+            floor_height: 0,
+            ceiling_height: 1024,
+            floor_lightsource_index: 0,
+            ceiling_lightsource_index: 0,
+            area: 0,
+            floor_transfer_mode: 0,
+            ceiling_transfer_mode: 0,
+            adjacent_polygon_indexes: [-1; 8],
+            center: WorldPoint2d { x: 0, y: 0 },
+            side_indexes: [-1; 8],
+            floor_origin: WorldPoint2d { x: 0, y: 0 },
+            ceiling_origin: WorldPoint2d { x: 0, y: 0 },
+            media_index: -1,
+            media_lightsource_index: -1,
+            sound_source_indexes: -1,
+            ambient_sound_image_index: -1,
+            random_sound_image_index: -1,
+        }
+    }
+
+    fn make_side_texture(descriptor: u16) -> SideTexture {
+        SideTexture {
+            x0: 0,
+            y0: 0,
+            texture: ShapeDescriptor(descriptor),
+        }
+    }
+
+    fn make_side(side_type: i16, primary_desc: u16) -> Side {
+        Side {
+            side_type,
+            flags: 0,
+            primary_texture: make_side_texture(primary_desc),
+            secondary_texture: make_side_texture(0xFFFF),
+            transparent_texture: make_side_texture(0xFFFF),
+            exclusion_zone: [WorldPoint2d { x: 0, y: 0 }; 4],
+            control_panel_type: 0,
+            control_panel_permutation: 0,
+            primary_transfer_mode: 0,
+            secondary_transfer_mode: 0,
+            transparent_transfer_mode: 0,
+            polygon_index: 0,
+            line_index: 0,
+            primary_lightsource_index: 0,
+            secondary_lightsource_index: 0,
+            transparent_lightsource_index: 0,
+            ambient_delta: 0,
+        }
+    }
+
+    fn make_line(
+        endpoint_indexes: [i16; 2],
+        cw_side: i16,
+        ccw_side: i16,
+        cw_owner: i16,
+        ccw_owner: i16,
+    ) -> Line {
+        Line {
+            endpoint_indexes,
+            flags: 0,
+            length: 1024,
+            highest_adjacent_floor: 0,
+            lowest_adjacent_ceiling: 1024,
+            clockwise_polygon_side_index: cw_side,
+            counterclockwise_polygon_side_index: ccw_side,
+            clockwise_polygon_owner: cw_owner,
+            counterclockwise_polygon_owner: ccw_owner,
+        }
+    }
+
+    fn make_map_data(
+        endpoints: Vec<Endpoint>,
+        polygons: Vec<Polygon>,
+        lines: Vec<Line>,
+        sides: Vec<Side>,
+    ) -> MapData {
+        MapData {
+            endpoints,
+            lines,
+            sides,
+            polygons,
+            objects: vec![],
+            lights: LightData::None,
+            platforms: vec![],
+            media: vec![],
+            annotations: vec![],
+            terminals: vec![],
+            ambient_sounds: vec![],
+            random_sounds: vec![],
+            map_info: None,
+            item_placement: vec![],
+            guard_paths: None,
+        }
+    }
+
+    #[test]
+    fn height_source_packing_round_trips() {
+        let f = pack_height_source(WALL_HEIGHT_FROM_FLOOR, 7);
+        assert_eq!(height_source_selector(f), WALL_HEIGHT_FROM_FLOOR);
+        assert_eq!(height_source_index(f), 7);
+
+        let c = pack_height_source(WALL_HEIGHT_FROM_CEILING, 12345);
+        assert_eq!(height_source_selector(c), WALL_HEIGHT_FROM_CEILING);
+        assert_eq!(height_source_index(c), 12345);
+    }
+
+    /// Box 6.1 (red-green): a full wall (side_type 0) must emit vertices that
+    /// carry the height-source discriminator + the owning polygon's index — the
+    /// bottom edge sourced from the floor of polygon 0, the top edge from the
+    /// ceiling of polygon 0 — rather than relying solely on baked absolute Y.
+    #[test]
+    fn full_wall_vertices_carry_height_source_discriminator() {
+        let endpoints = vec![make_endpoint(0, 0), make_endpoint(1024, 0)];
+        let polygon = make_polygon(4, [0, 1, -1, -1, -1, -1, -1, -1]);
+        let side = make_side(0, 0x0100);
+        let line = make_line([0, 1], 0, -1, 0, -1);
+        let map = make_map_data(endpoints, vec![polygon], vec![line], vec![side]);
+
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        build_walls_for_line(&mut vertices, &mut indices, &map, &map.lines[0]);
+
+        assert_eq!(vertices.len(), 4, "full wall emits one quad (4 vertices)");
+
+        let expect_bottom = pack_height_source(WALL_HEIGHT_FROM_FLOOR, 0);
+        let expect_top = pack_height_source(WALL_HEIGHT_FROM_CEILING, 0);
+
+        for v in &vertices {
+            // Bottom vertices sit at floor_height (0.0), top at ceiling (1.0).
+            if v.position[1] == 0.0 {
+                assert_eq!(
+                    v.height_source, expect_bottom,
+                    "bottom wall vertex must source polygon 0's floor"
+                );
+                assert_eq!(
+                    height_source_selector(v.height_source),
+                    WALL_HEIGHT_FROM_FLOOR
+                );
+                assert_eq!(height_source_index(v.height_source), 0);
+            } else {
+                assert_eq!(
+                    v.height_source, expect_top,
+                    "top wall vertex must source polygon 0's ceiling"
+                );
+                assert_eq!(
+                    height_source_selector(v.height_source),
+                    WALL_HEIGHT_FROM_CEILING
+                );
+                assert_eq!(height_source_index(v.height_source), 0);
+            }
+        }
+    }
+
+    /// Box 5.1 / 6.1 (red-green): a high wall (side_type 1) sources its BOTTOM
+    /// edge from the *adjacent* (neighbor) polygon's ceiling, not the owning
+    /// polygon. This proves the neighbor index is carried explicitly (a wall
+    /// vertex's source polygon is not always `polygon_index`).
+    #[test]
+    fn high_wall_bottom_sources_neighbor_polygon() {
+        let endpoints = vec![make_endpoint(0, 0), make_endpoint(1024, 0)];
+        // Owning polygon 0: ceiling at 2048. Neighbor polygon 1: ceiling at 1024.
+        let mut p0 = make_polygon(4, [0, 1, -1, -1, -1, -1, -1, -1]);
+        p0.ceiling_height = 2048;
+        let mut p1 = make_polygon(4, [0, 1, -1, -1, -1, -1, -1, -1]);
+        p1.ceiling_height = 1024;
+        let side = make_side(1, 0x0100);
+        // cw side 0 owned by poly 0; ccw owner is the neighbor poly 1.
+        let line = make_line([0, 1], 0, -1, 0, 1);
+        let map = make_map_data(endpoints, vec![p0, p1], vec![line], vec![side]);
+
+        let mut vertices = Vec::new();
+        let mut indices = Vec::new();
+        build_walls_for_line(&mut vertices, &mut indices, &map, &map.lines[0]);
+
+        assert_eq!(vertices.len(), 4, "high wall emits one quad (4 vertices)");
+
+        // bottom = neighbor (poly 1) ceiling; top = own (poly 0) ceiling.
+        let expect_bottom = pack_height_source(WALL_HEIGHT_FROM_CEILING, 1);
+        let expect_top = pack_height_source(WALL_HEIGHT_FROM_CEILING, 0);
+        let bottom_y = world_to_f32(1024); // neighbor ceiling
+        for v in &vertices {
+            // polygon_index always names the owner (for light), never the source.
+            assert_eq!(v.polygon_index, 0, "owner polygon_index unchanged");
+            if (v.position[1] - bottom_y).abs() < 1e-6 {
+                assert_eq!(
+                    v.height_source, expect_bottom,
+                    "high-wall bottom must source NEIGHBOR polygon 1's ceiling"
+                );
+                assert_eq!(height_source_index(v.height_source), 1);
+            } else {
+                assert_eq!(
+                    v.height_source, expect_top,
+                    "high-wall top must source OWN polygon 0's ceiling"
+                );
+                assert_eq!(height_source_index(v.height_source), 0);
+            }
+        }
+    }
+
+    /// The new attribute must not disturb floor/ceiling emission: those vertices
+    /// carry their own surface selector + own polygon index.
+    #[test]
+    fn floor_and_ceiling_carry_own_height_source() {
+        let endpoints = vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+            make_endpoint(1024, 1024),
+            make_endpoint(0, 1024),
+        ];
+        let polygon = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        let map = make_map_data(endpoints, vec![polygon], vec![], vec![]);
+
+        let mut vf = Vec::new();
+        let mut idx = Vec::new();
+        build_floor(&mut vf, &mut idx, &map, &map.polygons[0], 0, 4);
+        for v in &vf {
+            assert_eq!(
+                v.height_source,
+                pack_height_source(WALL_HEIGHT_FROM_FLOOR, 0)
+            );
+        }
+
+        let mut vc = Vec::new();
+        let mut idc = Vec::new();
+        build_ceiling(&mut vc, &mut idc, &map, &map.polygons[0], 0, 4);
+        for v in &vc {
+            assert_eq!(
+                v.height_source,
+                pack_height_source(WALL_HEIGHT_FROM_CEILING, 0)
+            );
+        }
+    }
 }
