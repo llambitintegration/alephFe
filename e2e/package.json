@@ -3,7 +3,13 @@
   "private": true,
   "scripts": {
     "test": "playwright test",
-    "test:headed": "playwright test --headed"
+    "test:headed": "playwright test --headed",
+    "gpu:probe": "playwright test -c investigation/playwright.gpu.config.ts",
+    "gpu:headed": "HEADED=1 playwright test -c investigation/playwright.gpu.config.ts",
+    "gpu:container": "bash investigation/gpu-container.sh",
+    "test:ui": "HEADED=1 playwright test -c investigation/playwright.gpu.config.ts --ui",
+    "trace": "HEADED=1 playwright test -c investigation/playwright.gpu.config.ts --trace on",
+    "codegen": "playwright codegen http://localhost:${WEB_PORT:-8090}"
   },
   "devDependencies": {
     "@playwright/test": "1.48.0",

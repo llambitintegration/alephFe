@@ -118,3 +118,16 @@ If a builder is missing a feature you need, extend the builder rather than falli
 ## Synthetic Data Only
 
 All test data is constructed programmatically via builders. No binary fixture files. No copyrighted Marathon game data in the repository.
+
+## Browser e2e and GPU investigation
+
+- **CI e2e** (`e2e/`, `playwright.config.ts` → `tests/`): Playwright against the
+  WASM build served by `docker-compose.e2e.yml`, software-rendered (SwiftShader).
+  Runs in GitHub CI as a no-GPU floor.
+- **Local GPU / rendering investigation** (`e2e/investigation/`): an opt-in
+  harness that serves marathon-web locally and drives Chromium against a real
+  NVIDIA GPU (GPU-passthrough container is the primary path; host-headed is
+  deferred where there's no graphical session). See
+  [`e2e/investigation/README.md`](e2e/investigation/README.md) for the dev compose
+  profile, the GPU verification probe, and the WebGL2-reliable / WebGPU-stretch
+  expectation.
