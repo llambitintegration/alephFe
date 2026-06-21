@@ -1,8 +1,11 @@
-## ADDED Requirements
+# shape-collections Specification
 
+## Purpose
+TBD - created by archiving change marathon-formats. Update Purpose after archive.
+## Requirements
 ### Requirement: Parse Collection Headers Array
 
-A Shapes file begins with an array of exactly 32 collection headers (MAXIMUM_COLLECTIONS), each 32 bytes, read in big-endian byte order. Each header contains a status field, flags, an offset and length for 8-bit color data, and an offset16 and length16 for 16-bit color data, followed by 12 bytes of padding. An offset value of -1 indicates no data is present for that bit depth.
+The parser SHALL read the array of collection headers at the start of a Shapes file. A Shapes file begins with an array of exactly 32 collection headers (MAXIMUM_COLLECTIONS), each 32 bytes, read in big-endian byte order. Each header contains a status field, flags, an offset and length for 8-bit color data, and an offset16 and length16 for 16-bit color data, followed by 12 bytes of padding. An offset value of -1 indicates no data is present for that bit depth.
 
 #### Scenario: Read all 32 collection headers from a valid Shapes file
 
@@ -25,7 +28,7 @@ A Shapes file begins with an array of exactly 32 collection headers (MAXIMUM_COL
 
 ### Requirement: Parse Collection Definitions with Version Validation
 
-Each loaded collection begins with a collection_definition structure of 544 bytes. The version field must equal 3 (COLLECTION_VERSION). The type field identifies the collection kind: unused (0), wall (1), object (2), interface (3), or scenery (4). The definition contains counts and offsets for color tables, high-level shapes, low-level shapes, and bitmaps, plus a pixels_to_world scale factor.
+Each loaded collection begins with a collection_definition structure of 544 bytes. The version field MUST equal 3 (COLLECTION_VERSION). The type field identifies the collection kind: unused (0), wall (1), object (2), interface (3), or scenery (4). The definition contains counts and offsets for color tables, high-level shapes, low-level shapes, and bitmaps, plus a pixels_to_world scale factor.
 
 #### Scenario: Parse a valid collection definition
 
@@ -47,7 +50,7 @@ Each loaded collection begins with a collection_definition structure of 544 byte
 
 ### Requirement: Parse Color Tables (CLUTs)
 
-Color tables are stored as contiguous arrays of rgb_color_value entries (8 bytes each). A collection contains clut_count CLUTs, each consisting of color_count entries. The total number of color entries is clut_count * color_count. Each rgb_color_value contains a flags byte (with bit 0x80 indicating self-luminescent), a value byte, and red/green/blue fields as big-endian u16 values.
+The parser SHALL parse color tables (CLUTs). Color tables are stored as contiguous arrays of rgb_color_value entries (8 bytes each). A collection contains clut_count CLUTs, each consisting of color_count entries. The total number of color entries is clut_count * color_count. Each rgb_color_value contains a flags byte (with bit 0x80 indicating self-luminescent), a value byte, and red/green/blue fields as big-endian u16 values.
 
 #### Scenario: Parse color tables from a collection with multiple CLUTs
 
@@ -67,7 +70,7 @@ Color tables are stored as contiguous arrays of rgb_color_value entries (8 bytes
 
 ### Requirement: Parse High-Level Shape Definitions
 
-High-level shapes define animation sequences. Each has a fixed 90-byte header (SIZEOF_high_level_shape_definition) followed by a variable-length array of low_level_shape_indexes. The number of indexes equals the actual view count (derived from the number_of_views field) multiplied by frames_per_view. High-level shapes are located via an offset table: an array of big-endian i32 offsets at high_level_shape_offset_table_offset, one per high_level_shape_count entry.
+The parser SHALL parse high-level shape definitions. High-level shapes define animation sequences. Each has a fixed 90-byte header (SIZEOF_high_level_shape_definition) followed by a variable-length array of low_level_shape_indexes. The number of indexes equals the actual view count (derived from the number_of_views field) multiplied by frames_per_view. High-level shapes are located via an offset table: an array of big-endian i32 offsets at high_level_shape_offset_table_offset, one per high_level_shape_count entry.
 
 #### Scenario: Parse high-level shape offset table and definitions
 
@@ -94,7 +97,7 @@ High-level shapes define animation sequences. Each has a fixed 90-byte header (S
 
 ### Requirement: Parse Low-Level Shape Definitions
 
-Low-level shapes define individual frames with spatial metadata. Each is exactly 36 bytes (SIZEOF_low_level_shape_definition). They are located via an offset table: an array of big-endian i32 offsets at low_level_shape_offset_table_offset, one per low_level_shape_count entry.
+The parser SHALL parse low-level shape definitions. Low-level shapes define individual frames with spatial metadata. Each is exactly 36 bytes (SIZEOF_low_level_shape_definition). They are located via an offset table: an array of big-endian i32 offsets at low_level_shape_offset_table_offset, one per low_level_shape_count entry.
 
 #### Scenario: Parse low-level shape offset table and definitions
 
@@ -117,7 +120,7 @@ Low-level shapes define individual frames with spatial metadata. Each is exactly
 
 ### Requirement: Parse and Decompress Bitmap Data
 
-Bitmaps have a 30-byte header (SIZEOF_bitmap_definition) followed by row/column address pointers (skipped during parsing) and pixel data. Bitmaps are located via an offset table at bitmap_offset_table_offset. The bytes_per_row field determines the storage format: when it equals -1 (NONE), the bitmap uses RLE compression; otherwise, it uses raw uncompressed storage. The flags field bit 15 (0x8000, _COLUMN_ORDER_BIT) indicates column-major storage order.
+The parser SHALL parse and decompress bitmap data. Bitmaps have a 30-byte header (SIZEOF_bitmap_definition) followed by row/column address pointers (skipped during parsing) and pixel data. Bitmaps are located via an offset table at bitmap_offset_table_offset. The bytes_per_row field determines the storage format: when it equals -1 (NONE), the bitmap uses RLE compression; otherwise, it uses raw uncompressed storage. The flags field bit 15 (0x8000, _COLUMN_ORDER_BIT) indicates column-major storage order.
 
 #### Scenario: Parse bitmap offset table and headers
 
@@ -147,7 +150,7 @@ Bitmaps have a 30-byte header (SIZEOF_bitmap_definition) followed by row/column 
 
 ### Requirement: Decode Shape Descriptor Packed Values
 
-A shape_descriptor is a 16-bit packed value encoding a CLUT index, collection index, and shape index. Bits 0-7 (8 bits) encode the shape index within the collection. Bits 8-12 (5 bits) encode the collection index (0-31). Bits 13-15 (3 bits) encode the CLUT index (0-7).
+The parser SHALL decode shape descriptor packed values. A shape_descriptor is a 16-bit packed value encoding a CLUT index, collection index, and shape index. Bits 0-7 (8 bits) encode the shape index within the collection. Bits 8-12 (5 bits) encode the collection index (0-31). Bits 13-15 (3 bits) encode the CLUT index (0-7).
 
 #### Scenario: Extract fields from a shape descriptor
 
@@ -171,7 +174,7 @@ A shape_descriptor is a 16-bit packed value encoding a CLUT index, collection in
 
 ### Requirement: Handle Both 8-bit and 16-bit Collection Data Paths
 
-Each collection header stores separate offset/length pairs for 8-bit and 16-bit color depth data. The parser must select the appropriate data path based on the requested bit depth, falling back to 8-bit if 16-bit data is not available.
+Each collection header stores separate offset/length pairs for 8-bit and 16-bit color depth data. The parser MUST select the appropriate data path based on the requested bit depth, falling back to 8-bit if 16-bit data is not available.
 
 #### Scenario: Load 8-bit collection data
 
@@ -190,3 +193,4 @@ Each collection header stores separate offset/length pairs for 8-bit and 16-bit 
 - **WHEN** 16-bit color depth is requested but offset16 equals -1
 - **THEN** the parser falls back to using the 8-bit offset and length fields
 - **AND** if the 8-bit offset is also -1, the collection is treated as unavailable
+

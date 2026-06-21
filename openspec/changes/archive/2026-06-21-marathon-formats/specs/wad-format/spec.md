@@ -153,7 +153,7 @@ AND the parser SHALL return an error if no directory entry has a matching `index
 
 ### Requirement: Extract tagged entries by tag code
 
-Within each WAD entry (the data region referenced by a directory entry), data is organized as a linked list of tagged chunks. Each chunk has a header containing a 4-byte tag code, and chunks are chained via the `next_offset` field.
+The parser SHALL extract tagged entries from each WAD entry by walking its chunk list. Within each WAD entry (the data region referenced by a directory entry), data is organized as a linked list of tagged chunks. Each chunk has a header containing a 4-byte tag code, and chunks are chained via the `next_offset` field.
 
 #### Scenario: Reading entry headers in old format (version 0 or 1)
 
@@ -220,7 +220,7 @@ AND the error SHALL include the tag code of the current entry and the out-of-bou
 
 ### Requirement: Handle overlay and patch WADs
 
-A WAD file with a non-zero `parent_checksum` in its header is an overlay (patch) WAD. Overlay WADs contain modifications that are applied on top of a parent WAD file identified by checksum.
+The parser SHALL recognize and handle overlay (patch) WADs. A WAD file with a non-zero `parent_checksum` in its header is an overlay (patch) WAD. Overlay WADs contain modifications that are applied on top of a parent WAD file identified by checksum.
 
 #### Scenario: Identifying an overlay WAD
 
@@ -250,7 +250,7 @@ AND the `offset` field in entry headers SHALL indicate the byte offset for in-pl
 
 ### Requirement: Validate checksums
 
-The WAD file checksum is a CRC-32 computed over the entire file contents with the `checksum` header field temporarily set to zero during computation. The CRC-32 uses polynomial `0xEDB88320` (reflected/LSB-first form of the standard CRC-32 polynomial), initial value `0xFFFFFFFF`, and final XOR of `0xFFFFFFFF`.
+The parser SHALL validate the WAD file checksum. The WAD file checksum is a CRC-32 computed over the entire file contents with the `checksum` header field temporarily set to zero during computation. The CRC-32 uses polynomial `0xEDB88320` (reflected/LSB-first form of the standard CRC-32 polynomial), initial value `0xFFFFFFFF`, and final XOR of `0xFFFFFFFF`.
 
 #### Scenario: Computing the file checksum
 
