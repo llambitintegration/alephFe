@@ -1,10 +1,10 @@
 ## 1. Add New Components and Resources
 
-- [ ] 1.1 Add `PowerupTimers` component to `marathon-sim/src/components.rs` with fields: `invincibility: u16`, `invisibility: u16`, `infravision: u16`, `extravision: u16` (all default 0). Derive `Component, Debug, Clone, Copy, Default, Serialize, Deserialize`.
-- [ ] 1.2 Add `InventoryItems` component to `marathon-sim/src/components.rs` with a `HashMap<i16, u16>` tracking item type to count. Derive `Component, Debug, Clone, Default, Serialize, Deserialize`.
-- [ ] 1.3 Add `ItemRespawnQueue` resource to `marathon-sim/src/world.rs` as a `Vec<ItemRespawnEntry>` where `ItemRespawnEntry` has `item_type: i16`, `position: Vec3`, `polygon_index: usize`, `remaining_ticks: u16`. Derive `Resource, Debug, Default, Clone, Serialize, Deserialize`.
+- [x] 1.1 Add `PowerupTimers` component to `marathon-sim/src/components.rs` with fields: `invincibility: u16`, `invisibility: u16`, `infravision: u16`, `extravision: u16` (all default 0). Derive `Component, Debug, Clone, Copy, Default, Serialize, Deserialize`.
+- [x] 1.2 Add `InventoryItems` component to `marathon-sim/src/components.rs` with a `HashMap<i16, u16>` tracking item type to count. Derive `Component, Debug, Clone, Default, Serialize, Deserialize`.
+- [x] 1.3 Add `ItemRespawnQueue` resource to `marathon-sim/src/world.rs` as a `Vec<ItemRespawnEntry>` where `ItemRespawnEntry` has `item_type: i16`, `position: Vec3`, `polygon_index: usize`, `remaining_ticks: u16`. Derive `Resource, Debug, Default, Clone, Serialize, Deserialize`.
 - [x] 1.4 Add `SimEvent::ItemPickedUp { item_type: i16 }` variant to the `SimEvent` enum in `marathon-sim/src/world.rs`.
-- [ ] 1.5 Add unit tests: verify `PowerupTimers::default()` has all zeros, verify `InventoryItems::default()` is empty.
+- [x] 1.5 Add unit tests: verify `PowerupTimers::default()` has all zeros, verify `InventoryItems::default()` is empty.
 
 ## 2. Attach Components at Player Spawn
 
@@ -15,10 +15,10 @@
 
 ## 3. Fill Missing `item_effect()` Match Arms
 
-- [ ] 3.1 In `marathon-sim/src/world_mechanics/items.rs`, add match arms for `ITEM_FLAMETHROWER_AMMO`, `ITEM_ALIEN_AMMO`, and `ITEM_SMG_AMMO` returning `AddAmmo` with appropriate weapon indices and amounts.
-- [ ] 3.2 Add match arms for `ITEM_INVINCIBILITY`, `ITEM_INVISIBILITY`, `ITEM_INFRAVISION`, `ITEM_EXTRAVISION` returning `AddInventoryItem` (or a new `ActivatePowerup` variant if preferred) with the correct durations.
-- [ ] 3.3 Add `ActivatePowerup { powerup_type: i16, duration_ticks: u16 }` variant to `ItemEffect` enum if using a dedicated variant for powerups (alternative: handle powerup items as `AddInventoryItem` and check item type in the pickup system).
-- [ ] 3.4 Add unit tests for every new match arm: verify correct effect type, amounts, and weapon indices.
+- [x] 3.1 In `marathon-sim/src/world_mechanics/items.rs`, add match arms for `ITEM_FLAMETHROWER_AMMO`, `ITEM_ALIEN_AMMO`, and `ITEM_SMG_AMMO` returning `AddAmmo` with appropriate weapon indices and amounts.
+- [x] 3.2 Add match arms for `ITEM_INVINCIBILITY`, `ITEM_INVISIBILITY`, `ITEM_INFRAVISION`, `ITEM_EXTRAVISION` returning `AddInventoryItem` (or a new `ActivatePowerup` variant if preferred) with the correct durations.
+- [x] 3.3 Add `ActivatePowerup { powerup_type: i16, duration_ticks: u16 }` variant to `ItemEffect` enum if using a dedicated variant for powerups (alternative: handle powerup items as `AddInventoryItem` and check item type in the pickup system). [Chose dedicated `ActivatePowerup` variant; added non-breaking stub arm in `tick.rs` apply-pickup match pending PowerupTimers wiring (box 4.8/5.x).]
+- [x] 3.4 Add unit tests for every new match arm: verify correct effect type, amounts, and weapon indices.
 
 ## 4. Implement Core Pickup Logic
 

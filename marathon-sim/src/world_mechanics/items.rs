@@ -67,6 +67,16 @@ impl ItemRespawnState {
     }
 }
 
+/// Number of simulation ticks per second (Marathon canonical).
+pub const TICKS_PER_SECOND: u16 = 30;
+
+/// Powerup durations in ticks (Marathon canonical: invincibility/invisibility
+/// last 30 seconds, infravision/extravision last 1 minute).
+pub const INVINCIBILITY_DURATION_TICKS: u16 = 30 * TICKS_PER_SECOND;
+pub const INVISIBILITY_DURATION_TICKS: u16 = 30 * TICKS_PER_SECOND;
+pub const INFRAVISION_DURATION_TICKS: u16 = 60 * TICKS_PER_SECOND;
+pub const EXTRAVISION_DURATION_TICKS: u16 = 60 * TICKS_PER_SECOND;
+
 /// Effect of picking up an item.
 #[derive(Debug, Clone)]
 pub enum ItemEffect {
@@ -84,8 +94,13 @@ pub enum ItemEffect {
     RestoreShield { amount: i16 },
     /// Restore oxygen.
     RestoreOxygen { amount: i16 },
-    /// Add an inventory item (keycard, powerup).
+    /// Add an inventory item (keycard, ball).
     AddInventoryItem { item_type: i16 },
+    /// Activate a timed powerup (invincibility, invisibility, infravision, extravision).
+    ActivatePowerup {
+        powerup_type: i16,
+        duration_ticks: u16,
+    },
 }
 
 /// Determine what happens when an item is picked up.
@@ -138,10 +153,42 @@ pub fn item_effect(item_type: i16) -> Option<ItemEffect> {
             is_primary: true,
             amount: 2,
         }),
+        ITEM_FLAMETHROWER_AMMO => Some(ItemEffect::AddAmmo {
+            weapon_definition_index: 5,
+            is_primary: true,
+            amount: 60,
+        }),
+        ITEM_ALIEN_AMMO => Some(ItemEffect::AddAmmo {
+            weapon_definition_index: 6,
+            is_primary: true,
+            amount: 100,
+        }),
         ITEM_SHOTGUN_AMMO => Some(ItemEffect::AddAmmo {
             weapon_definition_index: 7,
             is_primary: true,
             amount: 2,
+        }),
+        ITEM_SMG_AMMO => Some(ItemEffect::AddAmmo {
+            weapon_definition_index: 8,
+            is_primary: true,
+            amount: 32,
+        }),
+
+        ITEM_INVINCIBILITY => Some(ItemEffect::ActivatePowerup {
+            powerup_type: ITEM_INVINCIBILITY,
+            duration_ticks: INVINCIBILITY_DURATION_TICKS,
+        }),
+        ITEM_INVISIBILITY => Some(ItemEffect::ActivatePowerup {
+            powerup_type: ITEM_INVISIBILITY,
+            duration_ticks: INVISIBILITY_DURATION_TICKS,
+        }),
+        ITEM_INFRAVISION => Some(ItemEffect::ActivatePowerup {
+            powerup_type: ITEM_INFRAVISION,
+            duration_ticks: INFRAVISION_DURATION_TICKS,
+        }),
+        ITEM_EXTRAVISION => Some(ItemEffect::ActivatePowerup {
+            powerup_type: ITEM_EXTRAVISION,
+            duration_ticks: EXTRAVISION_DURATION_TICKS,
         }),
 
         ITEM_HEALTH_MINOR => Some(ItemEffect::RestoreHealth { amount: 20 }),
@@ -202,6 +249,110 @@ mod tests {
     #[test]
     fn unknown_item_type() {
         assert!(item_effect(999).is_none());
+    }
+
+    #[test]
+    fn flamethrower_ammo_pickup_effect() {
+        match item_effect(ITEM_FLAMETHROWER_AMMO) {
+            Some(ItemEffect::AddAmmo {
+                weapon_definition_index,
+                is_primary,
+                amount,
+            }) => {
+                assert_eq!(weapon_definition_index, 5);
+                assert!(is_primary);
+                assert_eq!(amount, 60);
+            }
+            other => panic!("expected AddAmmo, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn alien_ammo_pickup_effect() {
+        match item_effect(ITEM_ALIEN_AMMO) {
+            Some(ItemEffect::AddAmmo {
+                weapon_definition_index,
+                is_primary,
+                amount,
+            }) => {
+                assert_eq!(weapon_definition_index, 6);
+                assert!(is_primary);
+                assert_eq!(amount, 100);
+            }
+            other => panic!("expected AddAmmo, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn smg_ammo_pickup_effect() {
+        match item_effect(ITEM_SMG_AMMO) {
+            Some(ItemEffect::AddAmmo {
+                weapon_definition_index,
+                is_primary,
+                amount,
+            }) => {
+                assert_eq!(weapon_definition_index, 8);
+                assert!(is_primary);
+                assert_eq!(amount, 32);
+            }
+            other => panic!("expected AddAmmo, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invincibility_pickup_effect() {
+        match item_effect(ITEM_INVINCIBILITY) {
+            Some(ItemEffect::ActivatePowerup {
+                powerup_type,
+                duration_ticks,
+            }) => {
+                assert_eq!(powerup_type, ITEM_INVINCIBILITY);
+                assert_eq!(duration_ticks, INVINCIBILITY_DURATION_TICKS);
+            }
+            other => panic!("expected ActivatePowerup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invisibility_pickup_effect() {
+        match item_effect(ITEM_INVISIBILITY) {
+            Some(ItemEffect::ActivatePowerup {
+                powerup_type,
+                duration_ticks,
+            }) => {
+                assert_eq!(powerup_type, ITEM_INVISIBILITY);
+                assert_eq!(duration_ticks, INVISIBILITY_DURATION_TICKS);
+            }
+            other => panic!("expected ActivatePowerup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn infravision_pickup_effect() {
+        match item_effect(ITEM_INFRAVISION) {
+            Some(ItemEffect::ActivatePowerup {
+                powerup_type,
+                duration_ticks,
+            }) => {
+                assert_eq!(powerup_type, ITEM_INFRAVISION);
+                assert_eq!(duration_ticks, INFRAVISION_DURATION_TICKS);
+            }
+            other => panic!("expected ActivatePowerup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extravision_pickup_effect() {
+        match item_effect(ITEM_EXTRAVISION) {
+            Some(ItemEffect::ActivatePowerup {
+                powerup_type,
+                duration_ticks,
+            }) => {
+                assert_eq!(powerup_type, ITEM_EXTRAVISION);
+                assert_eq!(duration_ticks, EXTRAVISION_DURATION_TICKS);
+            }
+            other => panic!("expected ActivatePowerup, got {other:?}"),
+        }
     }
 
     #[test]
