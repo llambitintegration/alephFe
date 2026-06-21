@@ -43,7 +43,7 @@ Sound definition (64 bytes each, repeated source_count * sound_count times):
 
 ### Requirement: Parse sound file header with tag and version validation
 
-The parser shall read the 260-byte sound file header and validate the tag and version fields before proceeding to sound definitions.
+The parser SHALL read the 260-byte sound file header and validate the tag and version fields before proceeding to sound definitions.
 
 #### Scenario: Valid sound file with tag 'snd2' and version 1
 
@@ -79,7 +79,7 @@ THEN the parser interprets the file using the legacy layout: sound_count is set 
 
 ### Requirement: Parse sound definition array with all behavioral fields
 
-The parser shall read source_count * sound_count sound definition structures (64 bytes each) immediately following the file header, preserving all metadata fields.
+The parser SHALL read source_count * sound_count sound definition structures (64 bytes each) immediately following the file header, preserving all metadata fields.
 
 #### Scenario: Parse a single sound definition with default values
 
@@ -115,7 +115,7 @@ THEN the parser skips these 12 bytes, as they are runtime-only values not meanin
 
 ### Requirement: Parse permutation metadata (offsets and lengths)
 
-Each sound definition contains up to 5 permutation slots. The parser shall read the sound_offsets array and use permutation_count to determine how many are valid.
+Each sound definition contains up to 5 permutation slots. The parser SHALL read the sound_offsets array and use permutation_count to determine how many are valid.
 
 #### Scenario: Sound with 3 permutations
 
@@ -146,7 +146,7 @@ THEN the length of permutation 0 is 4000 (offset[1] - offset[0]), the length of 
 
 ### Requirement: Extract raw audio data for individual permutations
 
-The parser shall provide access to the raw audio bytes for any valid permutation of a sound definition by seeking to group_offset + sound_offsets[i] in the file.
+The parser SHALL provide access to the raw audio bytes for any valid permutation of a sound definition by seeking to group_offset + sound_offsets[i] in the file.
 
 #### Scenario: Extract audio data for a single permutation
 
@@ -172,7 +172,7 @@ THEN the parser returns an error indicating the permutation index is out of rang
 
 ### Requirement: Decode behavioral flags into typed enum and bitflags
 
-The parser shall decode the 16-bit flags field and the behavior_index into strongly typed representations rather than exposing raw integer values.
+The parser SHALL decode the 16-bit flags field and the behavior_index into strongly typed representations rather than exposing raw integer values.
 
 #### Scenario: Decode behavior_index values
 
@@ -239,7 +239,7 @@ THEN the parser preserves the raw flags value and decodes the known bits (is_amb
 
 ### Requirement: Handle missing or empty sound slots gracefully
 
-Sound files may contain unused entries or definitions that reference no audio data. The parser shall handle these without errors.
+Sound files may contain unused entries or definitions that reference no audio data. The parser SHALL handle these without errors.
 
 #### Scenario: Sound definition with sound_code of NONE (-1)
 
