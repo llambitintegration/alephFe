@@ -281,6 +281,16 @@ impl SimWorld {
     }
 
     fn update_media(&mut self) {
+        self.run_media_updates();
+    }
+
+    /// Query all `Media` entities, look up each one's associated `Light` by
+    /// `light_index`, and recompute `current_height` via `compute_media_height()`.
+    ///
+    /// Media surfaces (water, lava, …) rise and fall in lockstep with the
+    /// intensity of the light they are linked to, mirroring Alephone's
+    /// `update_medias()` pass over the light table.
+    fn run_media_updates(&mut self) {
         // Build light intensity lookup by light_index
         let light_intensities: std::collections::HashMap<usize, f32> = {
             let mut map = std::collections::HashMap::new();
@@ -2551,6 +2561,154 @@ mod tests {
         assert!(flags.contains(ActionFlags::MOVE_FORWARD));
         assert!(flags.contains(ActionFlags::FIRE_PRIMARY));
         assert!(!flags.contains(ActionFlags::STRAFE_LEFT));
+    }
+
+    /// Build a minimal single-square SimWorld (no lights/media in the map) so we
+    /// can spawn `Light`/`Media` entities directly and exercise a single system.
+    fn minimal_sim_world() -> SimWorld {
+        use marathon_formats::map::LightData;
+        use marathon_formats::{Endpoint, Line, MapData, Polygon, ShapeDescriptor, WorldPoint2d};
+        use marathon_formats::physics::PhysicsData;
+
+        let mk_endpoint = |x: i16, y: i16| Endpoint {
+            flags: 0,
+            highest_adjacent_floor_height: 0,
+            lowest_adjacent_ceiling_height: 2048,
+            vertex: WorldPoint2d { x, y },
+            transformed: WorldPoint2d { x, y },
+            supporting_polygon_index: 0,
+        };
+        let mk_line = |a: i16, b: i16| Line {
+            endpoint_indexes: [a, b],
+            flags: 0x4000, // SOLID
+            length: 1024,
+            highest_adjacent_floor: 0,
+            lowest_adjacent_ceiling: 2048,
+            clockwise_polygon_side_index: -1,
+            counterclockwise_polygon_side_index: -1,
+            clockwise_polygon_owner: -1,
+            counterclockwise_polygon_owner: -1,
+        };
+        let wp_zero = WorldPoint2d { x: 0, y: 0 };
+        let poly = Polygon {
+            polygon_type: 0,
+            flags: 0,
+            permutation: 0,
+            vertex_count: 4,
+            endpoint_indexes: [0, 1, 2, 3, -1, -1, -1, -1],
+            line_indexes: [0, 1, 2, 3, -1, -1, -1, -1],
+            floor_texture: ShapeDescriptor(0xFFFF),
+            ceiling_texture: ShapeDescriptor(0xFFFF),
+            floor_height: 0,
+            ceiling_height: 2048,
+            floor_lightsource_index: 0,
+            ceiling_lightsource_index: 0,
+            area: 1024 * 1024,
+            floor_transfer_mode: 0,
+            ceiling_transfer_mode: 0,
+            adjacent_polygon_indexes: [-1; 8],
+            center: wp_zero,
+            side_indexes: [-1; 8],
+            floor_origin: wp_zero,
+            ceiling_origin: wp_zero,
+            media_index: -1,
+            media_lightsource_index: -1,
+            sound_source_indexes: -1,
+            ambient_sound_image_index: -1,
+            random_sound_image_index: -1,
+        };
+        let map = MapData {
+            endpoints: vec![
+                mk_endpoint(0, 0),
+                mk_endpoint(1024, 0),
+                mk_endpoint(1024, 1024),
+                mk_endpoint(0, 1024),
+            ],
+            lines: vec![mk_line(0, 1), mk_line(1, 2), mk_line(2, 3), mk_line(3, 0)],
+            sides: vec![],
+            polygons: vec![poly],
+            objects: vec![],
+            lights: LightData::Static(vec![]),
+            platforms: vec![],
+            media: vec![],
+            annotations: vec![],
+            terminals: vec![],
+            ambient_sounds: vec![],
+            random_sounds: vec![],
+            map_info: None,
+            item_placement: vec![],
+            guard_paths: None,
+        };
+        let physics = PhysicsData {
+            monsters: None,
+            effects: None,
+            projectiles: None,
+            physics: None,
+            weapons: None,
+        };
+        SimWorld::new(&map, &physics, &crate::world::SimConfig::default())
+            .expect("minimal world construction")
+    }
+
+    /// Box 4.3: `run_media_updates()` must query every `Media`, look up its
+    /// linked `Light` by `light_index`, and recompute `current_height` from the
+    /// light's `current_intensity` via `compute_media_height()`.
+    #[test]
+    fn run_media_updates_tracks_linked_light_intensity() {
+        use crate::components::{
+            Light, LightFunction, LightFunctionSpec, LightState, LightType, Media,
+        };
+
+        let mut world = minimal_sim_world();
+
+        // Spawn a light (index 7) sitting at half intensity, and a media entity
+        // (range 0..=2 WU) linked to it whose current_height starts stale.
+        let spec = LightFunctionSpec {
+            function: LightFunction::Constant,
+            period: 1,
+            delta_period: 0,
+            intensity: 0.5,
+            delta_intensity: 0.0,
+        };
+        {
+            let ecs = world.ecs_world_mut();
+            ecs.spawn(Light {
+                light_index: 7,
+                light_type: LightType::Normal,
+                state: LightState::PrimaryActive,
+                flags: 0,
+                phase: 0,
+                period: 1,
+                current_intensity: 0.5,
+                initial_intensity: 0.5,
+                final_intensity: 0.5,
+                functions: [spec; 6],
+                tag: 0,
+            });
+            ecs.spawn(Media {
+                index: 0,
+                polygon_index: 0,
+                media_type: 0,
+                height_low: 0.0,
+                height_high: 2.0,
+                light_index: 7,
+                current_height: 99.0, // stale sentinel; must be overwritten
+                current_direction: 0.0,
+                current_magnitude: 0.0,
+            });
+        }
+
+        world.run_media_updates();
+
+        // height_low + (height_high - height_low) * intensity = 0 + 2 * 0.5 = 1.0
+        let ecs = world.ecs_world_mut();
+        let mut q = ecs.query::<&Media>();
+        let media = q.iter(ecs).next().expect("media entity present");
+        assert!(
+            (media.current_height - 1.0).abs() < 1e-6,
+            "media height should track linked light (expected 1.0, got {})",
+            media.current_height
+        );
     }
 
     #[test]

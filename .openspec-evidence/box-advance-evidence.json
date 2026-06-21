@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "changeId": "implement-light-state-machine",
+  "boxId": "implement-light-state-machine#L44",
+  "testFilePath": "marathon-sim/src/tick.rs",
+  "testName": "tick::tests::run_media_updates_tracks_linked_light_intensity",
+  "testStatus": "passed",
+  "filesModified": [
+    "marathon-sim/src/tick.rs",
+    "openspec/changes/implement-light-state-machine/tasks.md"
+  ],
+  "writtenPaths": [
+    "marathon-sim/src/tick.rs",
+    "openspec/changes/implement-light-state-machine/tasks.md",
+    ".openspec-evidence/box-advance-evidence.json"
+  ],
+  "tasksMdBefore": "cf2a4ac6b8e643cd9c89059efbfb125e20eccbd0c0aa37019bf536f94acae434",
+  "tasksMdAfter": "0aa1a0284a459ef2d62ef75784d406b203dc3bd08b9ed907ee472df4ce04389e",
+  "generatedAt": "2026-06-21T00:00:00.000Z"
+}
