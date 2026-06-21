@@ -10,6 +10,8 @@ The blocker is that interactive investigation of rendering bugs has been attempt
 
 Conclusion: the wall is **browser launch configuration**, not host hardware. IO has the hardware to fix it — 3× NVIDIA GPUs (2× Tesla P40, 1× Quadro M2000), driver 580, `/dev/dri` render nodes, and `nvidia-container-toolkit` 1.19 already wired into Docker via CDI (`nvidia.com/gpu=all`).
 
+> **Empirical update (2026-06-20, validated on IO).** IO is **SSH-only — no graphical session**. The GPU-passthrough **container path (Path 3) reaches a real GPU headless** (`ANGLE (NVIDIA, Vulkan 1.4.312 (NVIDIA Tesla P40))`, hardware WebGL2; WebGPU `requestAdapter()` → NULL — the expected Pascal-class limit). The host-headed path (Path 1) requires an X session that does not exist today. **Therefore Path 3 is the day-one primary path and Path 1 is deferred/optional** — the inverse of the original Decision 3/4 priority. The decisions below are annotated accordingly.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -41,7 +43,7 @@ Conclusion: the wall is **browser launch configuration**, not host hardware. IO 
 
 **Why**: Phase 0 hit `Bind for 127.0.0.1:8080 failed: port is already allocated` — the host runs another service there. A default that "just works" plus an override covers contention.
 
-### 3. Host-headed Chromium is the primary GPU path (Path 1)
+### 3. Host-headed Chromium (Path 1) — **deferred/optional** (was primary; no X session on IO as of 2026-06-20)
 
 **Choice**: Add a Playwright project / config variant with `headless: false` and `BASE_URL=http://localhost:${WEB_PORT}`, run via host Node (v24 present) directly against `e2e/`. Provide npm scripts: `test:headed`, `test:ui` (`--ui`), `trace`, `codegen`.
 
@@ -49,7 +51,7 @@ Conclusion: the wall is **browser launch configuration**, not host hardware. IO 
 
 **Alternative considered**: xvfb + host Chromium — gives software GL again (defeats the purpose).
 
-### 4. GPU-passthrough container is the optional secondary path (Path 3)
+### 4. GPU-passthrough container (Path 3) — **primary path** (promoted from optional; validated headless on IO 2026-06-20)
 
 **Choice**: An optional Playwright runner variant that requests `gpus: all` (or a specific CDI device), injects the NVIDIA userspace/Vulkan ICD into the `mcr.microsoft.com/playwright` image, and launches Chromium with `--use-gl=angle --use-angle=vulkan --enable-features=Vulkan --ignore-gpu-blocklist --no-sandbox`. "Seeing" happens via trace viewer / video / screenshots (optionally a noVNC sidecar).
 
@@ -73,7 +75,7 @@ Conclusion: the wall is **browser launch configuration**, not host hardware. IO 
 
 - **WebGPU may not enable on Pascal/Maxwell (Tesla P40 / Quadro M2000)** → Treat hardware **WebGL2** as the success criterion; verify WebGPU per-environment via `chrome://gpu` in Phase 0/2 and document the result. The app's maintained WebGL2 fallback means hardware WebGL2 already satisfies the investigation goal.
 - **Container-GPU path: missing NVIDIA libs / wrong flags → silent SwiftShader fallback** → Make the verification probe a gating step of the container path; fail loud if the unmasked renderer is SwiftShader.
-- **Host-headed path requires a graphical session** → That's why Path 3 exists as the SSH-only fallback; "both/flexible" host access makes this acceptable.
+- **Host-headed path requires a graphical session** → **Realized: IO is SSH-only, no X session.** Path 3 (container) is therefore the primary path, not a fallback; Path 1 is deferred until a desktop/X session exists on IO.
 - **Port contention recurs** → `WEB_PORT` override + `127.0.0.1` binding; document how to pick a free port.
 - **Old GPUs / driver 580 quirks under headless EGL** → Tesla P40 has no display engine; prefer the Quadro for headed, use `renderD*` nodes for the container EGL path; capture working flag set in docs.
 
@@ -90,7 +92,7 @@ CI and netcup are untouched at every step; the harness can be removed by deletin
 
 ## Open Questions
 
-- Does WebGPU actually initialize on the Quadro M2000 / Tesla P40 under driver 580, or do we settle on hardware WebGL2? (Resolve empirically in Phase 2 via `chrome://gpu`.)
-- Headed primary path: Quadro M2000 X session confirmed available, or is the container path the day-one default until a graphical session is set up?
-- Is a noVNC sidecar wanted for the container path, or are trace viewer + screenshots sufficient for "interactive enough"?
+- ~~Does WebGPU actually initialize on the Quadro M2000 / Tesla P40 under driver 580, or do we settle on hardware WebGL2?~~ **Resolved (2026-06-20, Tesla P40):** WebGPU `requestAdapter()` → NULL; hardware WebGL2 present. **Settle on hardware WebGL2.** Quadro M2000 not yet measured (no X session; pin via a device-specific container run if needed).
+- ~~Headed primary path: Quadro M2000 X session confirmed available, or is the container path the day-one default?~~ **Resolved: no X session on IO → the container path is the day-one default.**
+- Is a noVNC sidecar wanted for the container path, or are trace viewer + screenshots sufficient for "interactive enough"? *(Now the deciding factor for the interactive surface, since headed-on-host is unavailable — see box 5.5 / 3.4.)*
 - Should the dev compose profile live in a new file or as a `profiles:` block inside the existing e2e compose?

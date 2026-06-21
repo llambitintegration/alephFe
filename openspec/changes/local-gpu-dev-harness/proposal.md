@@ -24,5 +24,5 @@ Interactive Playwright investigation of `marathon-web` rendering bugs is blocked
 - **New files**: a dev compose file/profile (e.g. `docker-compose.dev.yml`), an `e2e/` headed/UI Playwright project + npm scripts, dev/GPU documentation.
 - **Host prerequisites (already satisfied on IO)**: Docker 29 + Compose v5, Node 24, NVIDIA driver 580, `nvidia-container-toolkit` 1.19 with Docker CDI runtime, `/dev/dri` render nodes, 3× NVIDIA GPUs (2× Tesla P40, 1× Quadro M2000).
 - **Crates affected**: `marathon-web` (investigation target only — no source changes).
-- **Risk to validate**: WebGPU may not enable on Pascal/Maxwell GPUs (Tesla P40 / Quadro M2000); **hardware WebGL2 is the reliable target**, WebGPU a stretch to confirm via `chrome://gpu` in Phase 0/2.
+- **Risk to validate** *(resolved 2026-06-20)*: WebGPU does **not** enable on the Tesla P40 (`requestAdapter()` → NULL); **hardware WebGL2 is the confirmed reliable target** (`ANGLE (NVIDIA, Vulkan 1.4.312 …)`). Also resolved: IO is **SSH-only**, so the **GPU-passthrough container path is the day-one primary** and the host-headed path is deferred until a graphical session exists (inverts the original path priority).
 - **Incidental findings to triage separately**: `Failed to load sprite collection 13 / 20 / 25 — out of range (0-31)` surfaced during the spike (not in scope here).

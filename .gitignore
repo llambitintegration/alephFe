@@ -12,6 +12,13 @@ tests/fixtures/
 /s7-*.png
 .playwright-mcp/
 /logs/
+# local human-gated GPU verification workspace (scripts + per-run evidence);
+# the box 4.3 write-up is committed under openspec/.../evidence/, not here
+/scratch/
+# e2e local install + Playwright run artifacts (traces, screenshots, reports)
+/e2e/node_modules/
+/e2e/test-results/
+/e2e/playwright-report/
 *.sceA
 *.shpA
 *.sndA

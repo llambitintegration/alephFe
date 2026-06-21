@@ -26,11 +26,11 @@ The harness SHALL provide a documented, repeatable way to verify whether the bro
 - **THEN** it reports whether `navigator.gpu.requestAdapter()` returns an adapter or NULL
 - **AND** it reports the unmasked WebGL2 renderer string, making a SwiftShader (software) result distinguishable from an NVIDIA (hardware) result
 
-### Requirement: Host-headed Playwright investigation harness
+### Requirement: Optional host-headed Playwright investigation harness
 
-The harness SHALL provide a Playwright configuration variant and npm scripts that run Chromium on the IO workstation's graphical session in headed and UI modes against the locally served app, such that a real GPU adapter is available to the browser.
+The harness MAY provide a Playwright configuration variant and npm scripts that run Chromium in headed and UI modes against the locally served app. This path requires a graphical (X/Wayland) session on the host; where none exists (e.g. the SSH-only IO workstation), the GPU-passthrough container path is the primary GPU path and this host-headed path is deferred until a graphical session is available. When a graphical session is present, the headed variant SHALL make a real GPU adapter available to the browser.
 
-#### Scenario: Headed investigation surfaces a hardware GPU adapter
+#### Scenario: Headed investigation surfaces a hardware GPU adapter (when a graphical session exists)
 
 - **WHEN** the developer runs the headed/UI investigation script against `http://localhost:<port>` from a graphical session on the IO workstation
 - **THEN** Playwright launches a visible Chromium instance pointed at the locally served app
@@ -41,15 +41,20 @@ The harness SHALL provide a Playwright configuration variant and npm scripts tha
 - **WHEN** the developer invokes the trace, UI, or codegen scripts
 - **THEN** Playwright produces an inspectable trace / UI session / generated script enabling step-by-step investigation of the WASM rendering pipeline
 
-### Requirement: Optional GPU-passthrough container path
+### Requirement: GPU-passthrough container path (primary GPU path)
 
-The GPU-passthrough container variant of the Playwright runner is optional. When the harness provides it, that variant MUST use the host's NVIDIA Container Toolkit / CDI and ANGLE/Vulkan Chromium flags to run headless with hardware acceleration, so it is usable in environments without a graphical session.
+The harness SHALL provide a GPU-passthrough Playwright runner that uses the host's NVIDIA Container Toolkit / CDI and ANGLE/Vulkan Chromium flags to run headless with hardware acceleration, so it is usable in environments without a graphical session. This is the primary path for obtaining a real GPU adapter on hosts that lack a graphical session (such as the SSH-only IO workstation). The GPU verification probe SHALL gate this path, failing loudly when the unmasked renderer is software (SwiftShader) rather than NVIDIA.
 
 #### Scenario: Headless container obtains a hardware adapter
 
 - **WHEN** the GPU-passthrough Playwright container is run with NVIDIA devices exposed and ANGLE/Vulkan flags set
 - **THEN** the GPU verification probe reports a hardware WebGL2 renderer (NVIDIA) rather than SwiftShader
 - **AND** the run does not require a graphical desktop session on the host
+
+#### Scenario: Probe gates against a silent software fallback
+
+- **WHEN** the GPU-passthrough container runs but the NVIDIA Vulkan ICD is not injected or the flags are wrong, so Chromium falls back to SwiftShader
+- **THEN** the gating GPU probe fails the run rather than reporting a passing software render
 
 ### Requirement: WebGL2 reliability with WebGPU as a stretch target
 
