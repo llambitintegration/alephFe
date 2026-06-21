@@ -13,6 +13,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 WEB_PORT="${WEB_PORT:-8090}"
 GPU="${GPU:-all}"
+TRACE="${TRACE:-0}"   # TRACE=1 -> record a Playwright trace headless and copy it out (box 3.4)
 PW_IMAGE="${PW_IMAGE:-mcr.microsoft.com/playwright:v1.48.0-jammy}"
 
 # Reachability check for the dev server (must be up: docker-compose.dev.yml).
@@ -30,10 +31,13 @@ fi
 STAMP="$(date +%Y%m%d-%H%M%S)"
 EVID_REL="investigation/evidence/container-${STAMP}"
 mkdir -p "$REPO_ROOT/e2e/${EVID_REL}"
+PW_TRACE_ARG=""
+[ "$TRACE" = 1 ] && { PW_TRACE_ARG="--trace on"; echo ">> TRACE on (box 3.4): recording a Playwright trace headless"; }
 echo ">> Container GPU probe via $PW_IMAGE (GPU=$GPU); evidence -> e2e/${EVID_REL}"
 
 # --gpus exposes NVIDIA devices; CDI alternative: --device nvidia.com/gpu=all
 # --network host so localhost:${WEB_PORT} (the dev server) is reachable.
+set +e
 docker run --rm \
   --gpus "$GPU" \
   -e NVIDIA_DRIVER_CAPABILITIES=all \
@@ -51,9 +55,24 @@ docker run --rm \
   -v "$REPO_ROOT:/work" \
   -w /work/e2e \
   "$PW_IMAGE" \
-  npx playwright test -c /work/e2e/investigation/playwright.gpu.config.ts
+  npx playwright test -c /work/e2e/investigation/playwright.gpu.config.ts $PW_TRACE_ARG
+RC=$?
+set -e
+
+# Copy the trace out of test-results into the evidence dir (box 3.4).
+if [ "$TRACE" = 1 ]; then
+  TRACE_ZIP="$(find "$REPO_ROOT/e2e/test-results" -name trace.zip -print 2>/dev/null | head -1)"
+  if [ -n "$TRACE_ZIP" ]; then
+    cp "$TRACE_ZIP" "$REPO_ROOT/e2e/${EVID_REL}/trace.zip"
+    echo ">> trace -> e2e/${EVID_REL}/trace.zip   view: npx playwright show-trace e2e/${EVID_REL}/trace.zip"
+    echo "   (remote: npx playwright show-trace --host 0.0.0.0 --port 9323 e2e/${EVID_REL}/trace.zip, then port-forward 9323)"
+  else
+    echo "!! TRACE=1 but no trace.zip found under e2e/test-results" >&2
+  fi
+fi
 
 echo
 echo ">> PASS = hardware NVIDIA confirmed headless. FAIL ('SOFTWARE' verdict) =>"
 echo "   NVIDIA Vulkan ICD not injected or flags wrong (check NVIDIA_DRIVER_CAPABILITIES / CDI)."
 echo "   Evidence: e2e/${EVID_REL}/gpu-probe.json"
+exit $RC

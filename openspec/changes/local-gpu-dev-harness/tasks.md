@@ -30,7 +30,7 @@
 - [x] 3.1 **[agent]** Add a headed/UI Playwright project variant in `e2e/` with `headless: false` and `BASE_URL=http://localhost:${WEB_PORT}` *(for future graphical-session use)*
 - [x] 3.2 **[agent]** Add npm scripts: `test:headed`, `test:ui` (`--ui`), `trace`, `codegen` *(for future graphical-session use)*
 - [x] 3.3 **[human-gated]** ~~Verify: run the headed script from a graphical session on IO; confirm a visible Chromium opens…~~ **Re-scoped to the container path:** the hardware-NVIDIA-adapter confirmation is satisfied by box 5.4 (done 2026-06-20: Tesla P40, hardware WebGL2). The literal visible-window run is deferred until IO has a graphical session.
-- [ ] 3.4 **[human-gated]** Verify via the container path: generate a Playwright **trace** headless on the real GPU (probe with `--trace on`), copy `trace.zip` out, and step through it with `playwright show-trace` (remote-viewable). `test:ui` (remote-served) optional; `codegen` (needs a visible window) is deferred to the host-headed path.
+- [x] 3.4 **[human-gated]** Verify via the container path: generate a Playwright **trace** headless on the real GPU (probe with `--trace on`), copy `trace.zip` out, and step through it with `playwright show-trace` (remote-viewable). **Done 2026-06-21** via `TRACE=1 npm run gpu:container`: hardware NVIDIA (Tesla P40), 8 MB `trace.zip` + screenshot recorded headless (`e2e/investigation/evidence/container-20260621-170520/`). `test:ui` (remote-served) and `codegen` (needs a visible window) deferred to the host-headed path.
 
 ## 4. Documentation & expectations (Phase 2)
 

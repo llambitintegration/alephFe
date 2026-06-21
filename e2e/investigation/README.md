@@ -62,6 +62,15 @@ NVIDIA Vulkan ICD and sets ANGLE/Vulkan Chromium flags; the probe gates the run
 ```bash
 npm run gpu:container              # all GPUs
 GPU=2 npm run gpu:container        # pin a specific GPU (e.g. the Quadro)
+TRACE=1 npm run gpu:container      # also record a Playwright trace headless
+```
+
+With `TRACE=1`, a `trace.zip` is recorded on the real GPU and copied into the
+run's evidence dir. Step through it (locally or remotely) with:
+
+```bash
+npx playwright show-trace e2e/investigation/evidence/<run>/trace.zip
+# remote (SSH-only): add --host 0.0.0.0 --port 9323, then port-forward 9323
 ```
 
 Requires the dev server up (step 1) and `nvidia-container-toolkit`/CDI on the
