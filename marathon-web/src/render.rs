@@ -6,9 +6,10 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wgpu::util::DeviceExt;
 
-use marathon_formats::{MapData, PhysicsData, ShapesFile, WadFile};
+use marathon_formats::{PhysicsData, ShapesFile, WadFile};
 use marathon_sim::tick::{ActionFlags, TickInput};
 use marathon_sim::world::{SimConfig, SimWorld};
+use marathon_sim::WorldSnapshot;
 
 use crate::level;
 use crate::mesh;
@@ -207,6 +208,10 @@ struct GameState {
     sprite_renderer: SpriteRenderer,
     weapon_overlay: crate::sprites::WeaponOverlayRenderer,
     sim: Option<SimWorld>,
+    /// Most recent per-frame render snapshot (box 3.1). Taken once per sim tick
+    /// in `frame()` and consumed by the camera, entity, weapon-overlay,
+    /// data-texture, and HUD paths in place of scattered per-frame accessors.
+    latest_snapshot: Option<WorldSnapshot>,
     shapes_file: ShapesFile,
     prev_camera: CameraState,
     curr_camera: CameraState,
@@ -242,18 +247,22 @@ impl GameState {
             };
             if let Some(ref mut sim) = self.sim {
                 sim.tick(tick_input);
-                if let Some(pos) = sim.player_position() {
+                // Box 3.1: a single render_snapshot() per frame replaces the
+                // scattered player_*/entities()/drain_events() accessor calls.
+                // Camera, entity snapshots, weapon overlay, the data-texture
+                // upload, and the HUD all read from this one snapshot below
+                // (drain_events runs inside render_snapshot, matching the old
+                // once-per-frame drain).
+                let snapshot = sim.render_snapshot();
+                if let Some(ref player) = snapshot.player {
+                    let pos = player.position;
                     self.curr_camera.position = Vec3::new(pos.x, pos.z + EYE_HEIGHT, -pos.y);
+                    self.curr_camera.yaw = -player.facing;
+                    self.curr_camera.pitch = player.vertical_look;
                 }
-                if let Some(f) = sim.player_facing() {
-                    self.curr_camera.yaw = -f;
-                }
-                if let Some(v) = sim.player_vertical_look() {
-                    self.curr_camera.pitch = v;
-                }
-                let entities: Vec<RenderableEntity> = sim
-                    .entities()
-                    .into_iter()
+                let entities: Vec<RenderableEntity> = snapshot
+                    .entities
+                    .iter()
                     .map(|e| RenderableEntity {
                         position: Vec3::new(e.position.x, e.position.z, -e.position.y), // sim→render: negate Z to fix mirror
                         facing: -e.facing,
@@ -262,7 +271,7 @@ impl GameState {
                     })
                     .collect();
                 self.entity_snapshots.advance(entities);
-                let _ = sim.drain_events();
+                self.latest_snapshot = Some(snapshot);
             }
         }
 
@@ -305,27 +314,32 @@ impl GameState {
             })
             .collect();
 
-        // Resolve weapon sprite for screen-space overlay (rendered after main pass)
-        let weapon_sprite = self.sim.as_mut().and_then(|sim| {
-            let ws = sim.player_weapon_state()?;
-            let (bi, wl, wr, wt, wb) = crate::sprites::resolve_entity_sprite(
-                &self.shapes_file,
-                ws.collection,
-                ws.shape,
-                ws.frame,
-                0,
-            )?;
-            Some((
-                ws.collection,
-                bi,
-                wl,
-                wr,
-                wt,
-                wb,
-                ws.vertical_position,
-                ws.horizontal_position,
-            ))
-        });
+        // Resolve weapon sprite for screen-space overlay (rendered after main
+        // pass). Box 3.1: sourced from the per-frame snapshot's weapon field
+        // instead of a separate player_weapon_state() accessor call.
+        let weapon_sprite = self
+            .latest_snapshot
+            .as_ref()
+            .and_then(|s| s.weapon.as_ref())
+            .and_then(|ws| {
+                let (bi, wl, wr, wt, wb) = crate::sprites::resolve_entity_sprite(
+                    &self.shapes_file,
+                    ws.collection,
+                    ws.shape,
+                    ws.frame,
+                    0,
+                )?;
+                Some((
+                    ws.collection,
+                    bi,
+                    wl,
+                    wr,
+                    wt,
+                    wb,
+                    ws.vertical_position,
+                    ws.horizontal_position,
+                ))
+            });
 
         // Render
         self.queue
@@ -439,18 +453,19 @@ impl GameState {
                 self.config.height as f32,
             );
         }
-        // Per-frame dynamic poly-data upload (box 4.2). Gather the sim's final
-        // per-polygon floor/ceiling/media heights and animated light intensities
-        // for this frame (after the tick loop above) and rewrite the data
-        // texture, so doors/platforms/light/media animate without re-baking
-        // geometry. This is the ONLY per-frame geometry-driving GPU write:
-        // the vertex and index buffers are created once in `load_level_into`
-        // and are NEVER recreated here in `frame()` — only `write_texture`
-        // (inside `write_poly_data_texture`) runs per frame. Box 4.2's
-        // buffer-stability constraint is enforced by that invariant.
-        if let Some(ref mut sim) = self.sim {
-            let sim_data = sim.poly_dynamic_data();
-            let mapped = crate::poly_data::poly_dyn_data_from_sim_slice(&sim_data);
+        // Per-frame dynamic poly-data upload (box 4.2). Fed from the single
+        // `render_snapshot().poly_dynamic` taken in the tick loop above (box
+        // 3.1) instead of a separate `poly_dynamic_data()` accessor call. The
+        // snapshot's per-polygon floor/ceiling/media heights and animated light
+        // intensities rewrite the data texture, so doors/platforms/light/media
+        // animate without re-baking geometry. This is the ONLY per-frame
+        // geometry-driving GPU write: the vertex and index buffers are created
+        // once in `load_level_into` and are NEVER recreated here in `frame()` —
+        // only `write_texture` (inside `write_poly_data_texture`) runs per
+        // frame. Box 4.2's buffer-stability constraint is enforced by that
+        // invariant.
+        if let Some(ref snapshot) = self.latest_snapshot {
+            let mapped = crate::poly_data::poly_dyn_data_from_snapshot(snapshot);
             crate::poly_data::write_poly_data_texture(
                 &self.queue,
                 &self.poly_data_texture,
@@ -461,17 +476,26 @@ impl GameState {
         self.queue.submit(std::iter::once(enc.finish()));
         output.present();
 
-        // HUD update (throttled to ~10fps = every 3 ticks at 30fps)
+        // HUD update (throttled to ~10fps = every 3 ticks at 30fps). Box 3.1:
+        // player health/shield/oxygen/facing come from the per-frame snapshot's
+        // player view. `player_weapon_info` and `nearby_entities` are not part
+        // of the WorldSnapshot contract, so they remain direct sim queries.
         self.hud_update_counter += 1;
         if self.hud_update_counter.is_multiple_of(3) {
-            if let Some(ref mut sim) = self.sim {
-                let health = sim.player_health().unwrap_or(0);
-                let shield = sim.player_shield().unwrap_or(0);
-                let oxygen = sim.player_oxygen().unwrap_or(600);
+            if let (Some(player), Some(sim)) = (
+                self.latest_snapshot.as_ref().and_then(|s| s.player.clone()),
+                self.sim.as_mut(),
+            ) {
                 let weapon_info = sim.player_weapon_info();
                 let entities = sim.nearby_entities(8.0);
-                let player_yaw = sim.player_facing().unwrap_or(0.0);
-                update_hud(health, shield, oxygen, weapon_info, player_yaw, &entities);
+                update_hud(
+                    player.health,
+                    player.shield,
+                    player.oxygen,
+                    weapon_info,
+                    player.facing,
+                    &entities,
+                );
             }
         }
 
@@ -893,6 +917,7 @@ pub async fn run_web(
         sprite_renderer,
         weapon_overlay,
         sim: None,
+        latest_snapshot: None,
         shapes_file,
         prev_camera: cam,
         curr_camera: cam,

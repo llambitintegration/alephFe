@@ -267,6 +267,21 @@ pub fn poly_dyn_data_from_sim_slice(
     data.iter().map(poly_dyn_data_from_sim).collect()
 }
 
+/// Map a frame's [`marathon_sim::WorldSnapshot`]`.poly_dynamic` directly into the
+/// web [`PolyDynData`] slice the data-texture upload consumes.
+///
+/// This is the seam box 3.1 introduces: `render.rs::frame()` now takes a single
+/// `SimWorld::render_snapshot()` per frame and feeds the per-polygon data
+/// texture from `snapshot.poly_dynamic` through this helper, instead of issuing
+/// a separate `poly_dynamic_data()` accessor call. Since `WorldSnapshot.poly_dynamic`
+/// is exactly the value `poly_dynamic_data()` returns, this is identical in
+/// output to `poly_dyn_data_from_sim_slice(&snapshot.poly_dynamic)` — the helper
+/// exists to make the snapshot-driven upload path explicit at the call site and
+/// directly testable without a live GPU.
+pub fn poly_dyn_data_from_snapshot(snapshot: &marathon_sim::WorldSnapshot) -> Vec<PolyDynData> {
+    poly_dyn_data_from_sim_slice(&snapshot.poly_dynamic)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
