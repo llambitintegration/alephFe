@@ -1,0 +1,16 @@
+# Local dev profile for marathon-web GPU / rendering investigation.
+#
+# Composes with docker-compose.e2e.yml (it does NOT stand alone): it reuses the
+# prod-parity `data` + `web` services and only adds a localhost-published port to
+# `web`. The `tests` service is excluded from the dev path by naming `data web`.
+#
+# Bring up:   docker compose -f docker-compose.e2e.yml -f docker-compose.dev.yml up -d data web
+# Tear down:  docker compose -f docker-compose.e2e.yml -f docker-compose.dev.yml down
+#
+# Port: defaults to 8090 (the host's :8080 is already allocated). Override with
+#   WEB_PORT=9001 docker compose -f docker-compose.e2e.yml -f docker-compose.dev.yml up -d data web
+# Bound to 127.0.0.1 so the dev server stays off the network.
+services:
+  web:
+    ports:
+      - "127.0.0.1:${WEB_PORT:-8090}:80"
