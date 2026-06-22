@@ -78,9 +78,115 @@ pub struct ActiveFader {
     pub tag: FaderTag,
 }
 
+/// Owns and drives the set of active full-screen faders.
+///
+/// The manager holds a flat `Vec<ActiveFader>` that the game loop drives each
+/// frame: `trigger()` adds a fader (replacing any existing fader with a matching
+/// dedup tag), `tick()` ages faders down and removes expired ones, and
+/// `active_faders()` exposes the live set for the renderer to composite. See
+/// `openspec/changes/implement-fullscreen-effects/design.md` (Decision 1).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FaderManager {
+    /// All currently-active faders, oldest first.
+    faders: Vec<ActiveFader>,
+}
+
+impl FaderManager {
+    /// Create an empty `FaderManager`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a new active fader.
+    ///
+    /// NOTE (box 1.3): this is a minimal skeleton. The tag-aware dedup/replace
+    /// behaviour (replace an existing fader sharing the same `FaderTag` instead
+    /// of accumulating duplicates) is implemented in box 1.5; for now this only
+    /// appends so the manager surface compiles and links.
+    pub fn trigger(&mut self, fader: ActiveFader) {
+        // Deferred to box 1.5: dedup-by-tag replace logic.
+        self.faders.push(fader);
+    }
+
+    /// Advance all active faders by one tick and drop expired ones.
+    ///
+    /// NOTE (box 1.3): this is a no-op skeleton. The intensity-decay ramp
+    /// (`initial_intensity * remaining / total`), `remaining_ticks` decrement,
+    /// and expiry removal are implemented in box 1.4.
+    pub fn tick(&mut self) {
+        // Deferred to box 1.4: decrement, recompute intensity, remove expired.
+    }
+
+    /// The currently-active faders, for the renderer to composite.
+    pub fn active_faders(&self) -> &[ActiveFader] {
+        &self.faders
+    }
+
+    /// Remove every active fader carrying the given dedup tag.
+    pub fn remove_by_tag(&mut self, tag: FaderTag) {
+        self.faders.retain(|f| f.tag != tag);
+    }
+
+    /// Remove all active faders.
+    pub fn clear(&mut self) {
+        self.faders.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Box 1.3: the `FaderManager` surface exists and the trivial accessors
+    /// behave. `tick()`/`trigger()` behaviour is deferred to boxes 1.4/1.5; here
+    /// we only assert the method surface is present and `clear()`/`active_faders()`/
+    /// `remove_by_tag()` are usable.
+    #[test]
+    fn test_fader_manager_surface() {
+        // Construct an empty manager.
+        let mut manager = FaderManager::default();
+        assert!(
+            manager.active_faders().is_empty(),
+            "a fresh FaderManager has no active faders"
+        );
+
+        // `remove_by_tag()` is callable on an empty manager (no-op, no panic).
+        manager.remove_by_tag(FaderTag::Oxygen);
+        assert!(manager.active_faders().is_empty());
+
+        // Seed a fader directly so we can prove `clear()` empties the store.
+        manager.faders.push(ActiveFader {
+            color: [1.0, 0.0, 0.0, 1.0],
+            blend_mode: FaderBlendMode::Tint,
+            initial_intensity: 1.0,
+            remaining_ticks: 5,
+            total_ticks: 5,
+            tag: FaderTag::Damage,
+        });
+        assert_eq!(manager.active_faders().len(), 1);
+
+        // `remove_by_tag()` drops the matching fader.
+        manager.remove_by_tag(FaderTag::Damage);
+        assert!(
+            manager.active_faders().is_empty(),
+            "remove_by_tag drops the matching fader"
+        );
+
+        // `clear()` empties any remaining faders.
+        manager.faders.push(ActiveFader {
+            color: [0.0, 0.0, 1.0, 1.0],
+            blend_mode: FaderBlendMode::SoftTint,
+            initial_intensity: 0.5,
+            remaining_ticks: 3,
+            total_ticks: 3,
+            tag: FaderTag::Oxygen,
+        });
+        manager.clear();
+        assert!(
+            manager.active_faders().is_empty(),
+            "clear empties the store"
+        );
+    }
 
     #[test]
     fn test_fader_blend_mode_six_distinct_variants() {
