@@ -152,8 +152,10 @@ test.describe('Door interaction (dynamic geometry)', () => {
     );
     expect(faced, 'faceNearestDoor() should find and face a door').toBe(true);
 
-    // Let the new camera pose settle and render a couple of frames.
-    await page.waitForTimeout(500);
+    // Let the new camera pose settle and render a few frames before baseline.
+    // Under software-GL the first frames after a teleport can still be
+    // rendering, so a too-early baseline reads identical to "after".
+    await page.waitForTimeout(1000);
 
     // Capture the door region BEFORE triggering the action.
     const before = await captureFrame(canvas);
@@ -164,14 +166,20 @@ test.describe('Door interaction (dynamic geometry)', () => {
     await page.waitForTimeout(150);
     await page.keyboard.up('Space');
 
-    // Let the door animate; the per-polygon data texture re-uploads each
-    // frame so the door rises/lowers without rebuilding vertex buffers.
-    await page.waitForTimeout(1500);
-
-    // Capture the door region AFTER the door has had time to move.
-    const after = await captureFrame(canvas);
-
-    const changedFraction = changedFractionInDoorRegion(before, after);
+    // Poll the door region until it visibly changes. The door animates over
+    // ~1s and the per-polygon data texture re-uploads each frame; under
+    // software-GL a single fixed wait + capture is timing-flaky (it intermittently
+    // samples a frame where the door is back near rest → 0.0000), so sample
+    // several times and take the peak change before asserting.
+    let changedFraction = 0;
+    for (let i = 0; i < 8 && changedFraction <= 0.02; i++) {
+      await page.waitForTimeout(400);
+      const after = await captureFrame(canvas);
+      changedFraction = Math.max(
+        changedFraction,
+        changedFractionInDoorRegion(before, after),
+      );
+    }
     // Surface the magnitude for the run log / diagnostics.
     console.log(`door-region changed fraction: ${changedFraction.toFixed(4)}`);
 
