@@ -78,6 +78,21 @@ pub struct ActiveFader {
     pub tag: FaderTag,
 }
 
+impl ActiveFader {
+    /// The fader's live intensity, decayed from `initial_intensity` as the
+    /// fader ages: `initial_intensity * (remaining_ticks / total_ticks)`.
+    ///
+    /// Ramps linearly from `initial_intensity` (when freshly triggered) down to
+    /// `0.0` (when `remaining_ticks` reaches `0`). A fader with `total_ticks == 0`
+    /// has no lifetime, so its current intensity is `0.0`.
+    pub fn current_intensity(&self) -> f32 {
+        if self.total_ticks == 0 {
+            return 0.0;
+        }
+        self.initial_intensity * (self.remaining_ticks as f32 / self.total_ticks as f32)
+    }
+}
+
 /// Owns and drives the set of active full-screen faders.
 ///
 /// The manager holds a flat `Vec<ActiveFader>` that the game loop drives each
@@ -110,11 +125,15 @@ impl FaderManager {
 
     /// Advance all active faders by one tick and drop expired ones.
     ///
-    /// NOTE (box 1.3): this is a no-op skeleton. The intensity-decay ramp
-    /// (`initial_intensity * remaining / total`), `remaining_ticks` decrement,
-    /// and expiry removal are implemented in box 1.4.
+    /// Each surviving fader has its `remaining_ticks` decremented (saturating at
+    /// `0`); the live intensity ramp is `initial_intensity * remaining / total`,
+    /// recomputed on demand by [`ActiveFader::current_intensity`]. Faders whose
+    /// `remaining_ticks` reaches `0` are expired and removed from the active set.
     pub fn tick(&mut self) {
-        // Deferred to box 1.4: decrement, recompute intensity, remove expired.
+        for fader in &mut self.faders {
+            fader.remaining_ticks = fader.remaining_ticks.saturating_sub(1);
+        }
+        self.faders.retain(|fader| fader.remaining_ticks > 0);
     }
 
     /// The currently-active faders, for the renderer to composite.
@@ -185,6 +204,59 @@ mod tests {
         assert!(
             manager.active_faders().is_empty(),
             "clear empties the store"
+        );
+    }
+
+    /// Box 1.4: `tick()` decays intensity. A fader with `total_ticks = 10` and
+    /// `initial_intensity = 1.0`, ticked 5 times, has `remaining_ticks = 5` and a
+    /// current intensity of `1.0 * (5 / 10) = 0.5`. (Mirrors box 1.6.)
+    #[test]
+    fn test_tick_decays_intensity_to_half() {
+        let mut manager = FaderManager::new();
+        manager.trigger(ActiveFader {
+            color: [1.0, 0.0, 0.0, 1.0],
+            blend_mode: FaderBlendMode::Tint,
+            initial_intensity: 1.0,
+            remaining_ticks: 10,
+            total_ticks: 10,
+            tag: FaderTag::Damage,
+        });
+
+        for _ in 0..5 {
+            manager.tick();
+        }
+
+        let faders = manager.active_faders();
+        assert_eq!(faders.len(), 1, "fader is still active after 5 of 10 ticks");
+        assert_eq!(faders[0].remaining_ticks, 5);
+        let intensity = faders[0].current_intensity();
+        assert!(
+            (intensity - 0.5).abs() < 1e-6,
+            "intensity should be ~0.5 after 5/10 ticks, got {intensity}"
+        );
+    }
+
+    /// Box 1.4: a fader with `total_ticks = 3`, ticked 4 times, expires and is
+    /// removed from `active_faders()`. (Mirrors box 1.7.)
+    #[test]
+    fn test_tick_removes_expired_fader() {
+        let mut manager = FaderManager::new();
+        manager.trigger(ActiveFader {
+            color: [0.0, 0.0, 1.0, 1.0],
+            blend_mode: FaderBlendMode::SoftTint,
+            initial_intensity: 0.8,
+            remaining_ticks: 3,
+            total_ticks: 3,
+            tag: FaderTag::Oxygen,
+        });
+
+        for _ in 0..4 {
+            manager.tick();
+        }
+
+        assert!(
+            manager.active_faders().is_empty(),
+            "a fader of duration 3 is removed after 4 ticks"
         );
     }
 
