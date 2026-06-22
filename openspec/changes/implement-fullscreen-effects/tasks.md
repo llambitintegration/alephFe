@@ -1,6 +1,6 @@
 ## 1. Fader State Manager
 
-- [ ] 1.1 Create `FaderBlendMode` enum with variants: Tint, Randomize, Negate, Dodge, Burn, SoftTint
+- [x] 1.1 Create `FaderBlendMode` enum with variants: Tint, Randomize, Negate, Dodge, Burn, SoftTint
 - [ ] 1.2 Create `ActiveFader` struct with fields: color ([f32; 4]), blend_mode, initial_intensity (f32), remaining_ticks (u16), total_ticks (u16), tag (enum for dedup: Damage, Teleport, Invincibility, Oxygen, Shield, Lava, Infravision, None)
 - [ ] 1.3 Create `FaderManager` struct with `faders: Vec<ActiveFader>` and methods: `trigger()`, `tick()`, `active_faders()`, `remove_by_tag()`, `clear()`
 - [ ] 1.4 Implement `FaderManager::tick()`: decrement remaining_ticks, recompute intensity as `initial_intensity * (remaining / total)`, remove expired faders

@@ -18,7 +18,7 @@
 ## 3. Web migration (step 3 — web lane, parallel with step 4 after step 2)
 
 - [x] 3.1 Replace the scattered per-frame accessor calls in `marathon-web/src/render.rs` (`~245-265,309,451-459,467-473`) with a single `render_snapshot()` per frame, feeding the data-texture upload from `snapshot.poly_dynamic`
-- [ ] 3.2 Assert the web vertex/index buffers are still never recreated in the frame path (buffer-stability invariant, `render.rs:447-450`); test that buffer handles are unchanged across frames
+- [x] 3.2 Assert the web vertex/index buffers are still never recreated in the frame path (buffer-stability invariant, `render.rs:447-450`); test that buffer handles are unchanged across frames
 - [ ] 3.3 Web E2E visual-regression: a static scene renders pixel-equivalent (within tolerance) to pre-migration output
 - [ ] 3.4 `wasm-pack build` for `marathon-web` succeeds; web tests green
 
