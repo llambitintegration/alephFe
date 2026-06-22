@@ -112,14 +112,19 @@ impl FaderManager {
         Self::default()
     }
 
-    /// Add a new active fader.
+    /// Add a new active fader, replacing any existing fader with the same tag.
     ///
-    /// NOTE (box 1.3): this is a minimal skeleton. The tag-aware dedup/replace
-    /// behaviour (replace an existing fader sharing the same `FaderTag` instead
-    /// of accumulating duplicates) is implemented in box 1.5; for now this only
-    /// appends so the manager surface compiles and links.
+    /// For a tagged fader (`tag != FaderTag::None`), any existing fader carrying
+    /// the same tag is removed before the new one is pushed, so sustained effects
+    /// that re-trigger every frame (oxygen, invincibility, lava, infravision)
+    /// never accumulate duplicates. Untagged faders (`FaderTag::None`) are one-shot
+    /// and always appended, allowing multiple concurrent one-shots (e.g. stacked
+    /// damage flashes). The new fader is appended last, preserving oldest-first
+    /// insertion order for the renderer.
     pub fn trigger(&mut self, fader: ActiveFader) {
-        // Deferred to box 1.5: dedup-by-tag replace logic.
+        if fader.tag != FaderTag::None {
+            self.faders.retain(|f| f.tag != fader.tag);
+        }
         self.faders.push(fader);
     }
 
@@ -257,6 +262,77 @@ mod tests {
         assert!(
             manager.active_faders().is_empty(),
             "a fader of duration 3 is removed after 4 ticks"
+        );
+    }
+
+    /// Box 1.5: `trigger()` dedups by tag. Triggering a tagged fader (Oxygen)
+    /// twice replaces the older with the newer, leaving exactly one Oxygen fader.
+    /// Untagged faders (`FaderTag::None`) are never deduped: two None triggers
+    /// produce two faders.
+    #[test]
+    fn test_trigger_dedups_tagged_keeps_untagged() {
+        let mut manager = FaderManager::new();
+
+        // First Oxygen fader.
+        manager.trigger(ActiveFader {
+            color: [0.5, 0.5, 0.6, 1.0],
+            blend_mode: FaderBlendMode::SoftTint,
+            initial_intensity: 0.3,
+            remaining_ticks: 5,
+            total_ticks: 5,
+            tag: FaderTag::Oxygen,
+        });
+        // Second Oxygen fader with distinct values — should REPLACE the first.
+        manager.trigger(ActiveFader {
+            color: [0.5, 0.5, 0.6, 1.0],
+            blend_mode: FaderBlendMode::SoftTint,
+            initial_intensity: 0.9,
+            remaining_ticks: 12,
+            total_ticks: 12,
+            tag: FaderTag::Oxygen,
+        });
+
+        let oxygen: Vec<_> = manager
+            .active_faders()
+            .iter()
+            .filter(|f| f.tag == FaderTag::Oxygen)
+            .collect();
+        assert_eq!(
+            oxygen.len(),
+            1,
+            "a second Oxygen trigger must replace the first, not duplicate"
+        );
+        assert_eq!(
+            oxygen[0].remaining_ticks, 12,
+            "the surviving Oxygen fader is the newer one"
+        );
+        assert_eq!(oxygen[0].initial_intensity, 0.9);
+
+        // Untagged faders are never deduped.
+        manager.trigger(ActiveFader {
+            color: [1.0, 0.0, 0.0, 1.0],
+            blend_mode: FaderBlendMode::Tint,
+            initial_intensity: 1.0,
+            remaining_ticks: 4,
+            total_ticks: 4,
+            tag: FaderTag::None,
+        });
+        manager.trigger(ActiveFader {
+            color: [1.0, 0.0, 0.0, 1.0],
+            blend_mode: FaderBlendMode::Tint,
+            initial_intensity: 1.0,
+            remaining_ticks: 4,
+            total_ticks: 4,
+            tag: FaderTag::None,
+        });
+        let untagged = manager
+            .active_faders()
+            .iter()
+            .filter(|f| f.tag == FaderTag::None)
+            .count();
+        assert_eq!(
+            untagged, 2,
+            "untagged (None) faders are never deduped: two triggers -> two faders"
         );
     }
 
