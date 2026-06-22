@@ -107,6 +107,13 @@ test.describe('Door interaction (dynamic geometry)', () => {
   test('pressing the action key at a door changes the door-region pixels', async ({
     page,
   }) => {
+    // This test loads the full WASM game, waits for first render, repositions
+    // via the debug hook, then animates a door — heavy enough that CI's
+    // software-GL environment runs it in ~95s (vs ~47s locally), exceeding the
+    // 60s suite default. Give it explicit headroom; the waits below are fixed,
+    // so the cost is CI render speed, not flakiness.
+    test.setTimeout(150_000);
+
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
       if (msg.type() === 'error') consoleErrors.push(msg.text());
