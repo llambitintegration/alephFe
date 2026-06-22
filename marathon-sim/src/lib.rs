@@ -1,6 +1,7 @@
 pub mod collision;
 pub mod combat;
 pub mod components;
+pub mod fader;
 pub mod monster;
 pub mod player;
 pub mod render_snapshot;
