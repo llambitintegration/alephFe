@@ -103,8 +103,9 @@ test.describe('Action key functional verification', () => {
     page,
   }) => {
     // Loads the full WASM game, repositions twice, animates a door, and toggles
-    // a light. Heavy on CI's software-GL; match door-interaction.spec.ts.
-    test.setTimeout(150_000);
+    // a light — heavier than the door-only spec. With the suite now serial
+    // (workers:1) this runs solo; 180s gives CI's software-GL env headroom.
+    test.setTimeout(180_000);
 
     const consoleErrors: string[] = [];
     page.on('console', (msg) => {
