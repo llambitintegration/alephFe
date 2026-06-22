@@ -157,6 +157,27 @@ impl FaderManager {
     }
 }
 
+/// Per-fader-type default parameters used when triggering a fader.
+///
+/// A `FaderConfig` carries the canonical defaults for one fader type (the
+/// values used unless a trigger overrides them): the overlay `color`, the
+/// compositing `blend_mode`, the `duration` in ticks, and the `base_intensity`
+/// at trigger time. Box 2.2 collects these into a `FaderConfigTable` keyed by
+/// fader-type index (hardcoded Marathon 2 defaults), and box 2.3 lets the MML
+/// `faders` section override individual fields. See
+/// `openspec/changes/implement-fullscreen-effects/design.md` (Decision 6).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaderConfig {
+    /// Default RGBA overlay color for this fader type.
+    pub color: [f32; 4],
+    /// Default compositing mode applied in the fader fragment shader.
+    pub blend_mode: FaderBlendMode,
+    /// Default lifetime in ticks (maps to `ActiveFader::total_ticks`).
+    pub duration: u16,
+    /// Default intensity at trigger time (1.0 = full strength).
+    pub base_intensity: f32,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,6 +355,31 @@ mod tests {
             untagged, 2,
             "untagged (None) faders are never deduped: two triggers -> two faders"
         );
+    }
+
+    /// Box 2.1: `FaderConfig` holds the per-fader-type default parameters
+    /// (color, blend mode, duration, base intensity) used when triggering a
+    /// fader of a given type. This test constructs one and asserts its fields
+    /// round-trip; box 2.2 (FaderConfigTable) and 2.3 (MML override) build on it.
+    #[test]
+    fn test_fader_config_fields() {
+        let config = FaderConfig {
+            color: [1.0, 0.0, 0.0, 1.0],
+            blend_mode: FaderBlendMode::Tint,
+            duration: 12,
+            base_intensity: 0.75,
+        };
+
+        assert_eq!(config.color, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(config.blend_mode, FaderBlendMode::Tint);
+        assert_eq!(config.duration, 12u16);
+        assert_eq!(config.base_intensity, 0.75);
+
+        // Copy + Clone + Debug derives are usable.
+        let cloned = config.clone();
+        let copied = config;
+        let _ = format!("{copied:?}");
+        assert_eq!(cloned, copied);
     }
 
     #[test]
