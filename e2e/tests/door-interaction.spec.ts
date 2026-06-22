@@ -9,22 +9,21 @@ import { test, expect } from '@playwright/test';
  * the sim, per-polygon data-texture upload each frame, shader height/light
  * offset) against the proxy-net container.
  *
- * STATUS: marked `test.fixme` — see the block comment on the test below.
- * The capture/diff machinery and interaction sequence are verified working
- * against the proxy-net stack (movement provably changes the composited
- * frame, screenshots capture real pixels). What is NOT yet satisfiable in the
- * headless e2e environment is DETERMINISTICALLY reaching an
- * action-activatable door: in marathon-sim, the action key only activates a
- * platform when the player is within a control panel's `max_distance` and
- * facing its line within ~60° (marathon-sim/src/world_mechanics/panels.rs::
- * can_activate_panel). From the real Marathon 2 spawn point, blind navigation
- * (forward walks + yaw sweeps across multiple rings) never lands on such a
- * panel — a 12-probe sweep produced 0.0000 door-region change at every probe —
- * and the WASM exposes no debug hook to position the player at a known door.
- * Flipping box 7.2 would therefore require either a player-teleport/debug API
- * (`window.__marathonDebug.faceNearestDoor()` or similar) or a level fixture
- * with a door panel adjacent to spawn. Until one exists, this test stays
- * `fixme` rather than falsely green.
+ * UNBLOCKED: the capture/diff machinery and interaction sequence were always
+ * verified working against the proxy-net stack (movement provably changes the
+ * composited frame, screenshots capture real pixels). What was missing was a
+ * DETERMINISTIC way to reach an action-activatable door: in marathon-sim, the
+ * action key only activates a platform when the player is within a control
+ * panel's `max_distance` and facing its line within ~60°
+ * (marathon-sim/src/world_mechanics/panels.rs::can_activate_panel), and from
+ * the real Marathon 2 spawn point blind navigation never landed there.
+ *
+ * The marathon-web build now exposes a debug hook,
+ * `window.__marathonDebug.faceNearestDoor()` (wasm-bindgen export
+ * `debug_face_nearest_door` → `SimWorld::debug_face_nearest_door`), which
+ * repositions and re-faces the player directly in front of the nearest
+ * activatable door so the action-key raycast hits it. This test calls that
+ * hook, then presses Space and asserts the door-region pixels change.
  */
 
 interface SampledFrame {
@@ -105,62 +104,77 @@ function changedFractionInDoorRegion(
 }
 
 test.describe('Door interaction (dynamic geometry)', () => {
-  // See the file-level STATUS note. Verified against the proxy-net stack as far
-  // as movement/screenshot/diff; gated only on a deterministic way to face an
-  // action-activatable door from spawn.
-  test.fixme(
-    'pressing the action key at a door changes the door-region pixels',
-    async ({ page }) => {
-      const consoleErrors: string[] = [];
-      page.on('console', (msg) => {
-        if (msg.type() === 'error') consoleErrors.push(msg.text());
-      });
+  test('pressing the action key at a door changes the door-region pixels', async ({
+    page,
+  }) => {
+    const consoleErrors: string[] = [];
+    page.on('console', (msg) => {
+      if (msg.type() === 'error') consoleErrors.push(msg.text());
+    });
 
-      await page.goto('/');
-      await expect(page.locator('#loading')).toBeHidden({ timeout: 45_000 });
-      const canvas = page.locator('#marathon-canvas');
-      await expect(canvas).toBeVisible();
-      await page.waitForTimeout(2000);
+    await page.goto('/');
+    await expect(page.locator('#loading')).toBeHidden({ timeout: 45_000 });
+    const canvas = page.locator('#marathon-canvas');
+    await expect(canvas).toBeVisible();
+    await page.waitForTimeout(2000);
 
-      // Focus the canvas (the game's key listeners live on it) the same way a
-      // player does — click to capture the mouse.
-      await canvas.click();
-      await page.waitForTimeout(200);
+    // Focus the canvas (the game's key listeners live on it) the same way a
+    // player does — click to capture the mouse.
+    await canvas.click();
+    await page.waitForTimeout(200);
 
-      // Walk forward to the door ahead of the spawn point.
-      // NOTE: once a deterministic door-facing hook exists, replace this blind
-      // walk with a call that positions the player at a known door panel.
-      await page.keyboard.down('w');
-      await page.waitForTimeout(1500);
-      await page.keyboard.up('w');
-      await page.waitForTimeout(500);
+    // Deterministically face the nearest activatable door via the debug hook
+    // shipped in the marathon-web build (wasm-bindgen export
+    // debug_face_nearest_door → SimWorld::debug_face_nearest_door). This
+    // repositions + re-faces the player so the action-key raycast lands on a
+    // door, which blind keyboard nav from the Marathon 2 spawn never achieves.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              typeof (window as any).__marathonDebug?.faceNearestDoor ===
+              'function',
+          ),
+        { timeout: 10_000 },
+      )
+      .toBe(true);
 
-      // Capture the door region BEFORE triggering the action.
-      const before = await captureFrame(canvas);
+    const faced = await page.evaluate(() =>
+      (window as any).__marathonDebug.faceNearestDoor(),
+    );
+    expect(faced, 'faceNearestDoor() should find and face a door').toBe(true);
 
-      // Edge-triggered action key: a clean press-release activates the
-      // platform exactly once (sim box 6.x).
-      await page.keyboard.down('Space');
-      await page.waitForTimeout(150);
-      await page.keyboard.up('Space');
+    // Let the new camera pose settle and render a couple of frames.
+    await page.waitForTimeout(500);
 
-      // Let the door animate; the per-polygon data texture re-uploads each
-      // frame so the door rises/lowers without rebuilding vertex buffers.
-      await page.waitForTimeout(1500);
+    // Capture the door region BEFORE triggering the action.
+    const before = await captureFrame(canvas);
 
-      // Capture the door region AFTER the door has had time to move.
-      const after = await captureFrame(canvas);
+    // Edge-triggered action key: a clean press-release activates the
+    // platform exactly once (sim box 6.x).
+    await page.keyboard.down('Space');
+    await page.waitForTimeout(150);
+    await page.keyboard.up('Space');
 
-      const changedFraction = changedFractionInDoorRegion(before, after);
+    // Let the door animate; the per-polygon data texture re-uploads each
+    // frame so the door rises/lowers without rebuilding vertex buffers.
+    await page.waitForTimeout(1500);
 
-      // The animating door must visibly alter the central region. A static
-      // scene (the failure mode this change fixes) leaves this at ~0.
-      expect(changedFraction).toBeGreaterThan(0.02);
+    // Capture the door region AFTER the door has had time to move.
+    const after = await captureFrame(canvas);
 
-      // The interaction must not have crashed the game loop.
-      await expect(canvas).toBeVisible();
-      const gameErrors = consoleErrors.filter((e) => e.includes('Game error'));
-      expect(gameErrors).toHaveLength(0);
-    },
-  );
+    const changedFraction = changedFractionInDoorRegion(before, after);
+    // Surface the magnitude for the run log / diagnostics.
+    console.log(`door-region changed fraction: ${changedFraction.toFixed(4)}`);
+
+    // The animating door must visibly alter the central region. A static
+    // scene (the failure mode this change fixes) leaves this at ~0.
+    expect(changedFraction).toBeGreaterThan(0.02);
+
+    // The interaction must not have crashed the game loop.
+    await expect(canvas).toBeVisible();
+    const gameErrors = consoleErrors.filter((e) => e.includes('Game error'));
+    expect(gameErrors).toHaveLength(0);
+  });
 });
