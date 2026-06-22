@@ -2570,8 +2570,8 @@ mod tests {
     /// can spawn `Light`/`Media` entities directly and exercise a single system.
     fn minimal_sim_world() -> SimWorld {
         use marathon_formats::map::LightData;
-        use marathon_formats::{Endpoint, Line, MapData, Polygon, ShapeDescriptor, WorldPoint2d};
         use marathon_formats::physics::PhysicsData;
+        use marathon_formats::{Endpoint, Line, MapData, Polygon, ShapeDescriptor, WorldPoint2d};
 
         let mk_endpoint = |x: i16, y: i16| Endpoint {
             flags: 0,
