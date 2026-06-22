@@ -425,6 +425,152 @@ impl SimWorld {
         }
     }
 
+    /// DEBUG-ONLY. End-to-end exercise of the action-key → light-switch path,
+    /// measured atomically so the result is deterministic regardless of a
+    /// light's own animation.
+    ///
+    /// Marathon lights auto-cycle every tick (`update_single_light` advances the
+    /// state machine unconditionally), so a switch-driven light never holds a
+    /// steady value an e2e can poll for. But the *effect* of the action key is
+    /// real and immediate: in the toggle tick, `update_lights` runs first, then
+    /// `process_action_key` → `execute_panel_action` snaps the controlled
+    /// light's `current_intensity` to the opposite extreme (`tick.rs`
+    /// `PanelAction::ToggleLight`). On the next tick the cycle resumes.
+    ///
+    /// This helper drives the *real* path: it faces the nearest light switch,
+    /// records the controlled light's intensity, runs one tick with the ACTION
+    /// flag set as a clean rising edge (the same `find_action_key_target` →
+    /// `ToggleLight` chain a Space press triggers), and records the post-tick
+    /// intensity. Returns `Some((light_index, before, after))`, where `before`
+    /// and `after` straddle the toggle, or `None` when there is no light switch.
+    /// Used by the `__marathonDebug.toggleNearestLightSwitch()` web hook so the
+    /// door-interaction e2e can assert a genuine light toggle.
+    pub fn debug_toggle_nearest_light_switch(&mut self) -> Option<(usize, f32, f32)> {
+        use crate::tick::{ActionFlags, TickInput};
+
+        let light_index = self.debug_face_nearest_light_switch()?;
+
+        let intensity_of = |w: &mut Self| -> f32 {
+            let mut q = w.world.query::<&crate::components::Light>();
+            q.iter(&w.world)
+                .find(|l| l.light_index == light_index)
+                .map(|l| l.current_intensity)
+                .unwrap_or(1.0)
+        };
+
+        // Ensure the next ACTION press registers as a rising edge: clear the
+        // stored previous-ACTION state, then run one no-action tick so any
+        // prior edge is fully disarmed (and the light is in a known phase).
+        if let Some(mut prev) = self.world.get_resource_mut::<crate::tick::PrevActionKey>() {
+            prev.0 = false;
+        }
+        self.tick(TickInput::default());
+
+        let before = intensity_of(self);
+
+        // One tick with ACTION held: update_lights advances the cycle one step,
+        // then process_action_key fires the rising edge and snaps the light.
+        self.tick(TickInput::from(ActionFlags::new(ActionFlags::ACTION)));
+
+        let after = intensity_of(self);
+        Some((light_index, before, after))
+    }
+
+    /// DEBUG-ONLY. Reposition and re-face the player directly in front of the
+    /// nearest light-switch control panel (a panel whose action toggles a
+    /// light) so that a subsequent ACTION-key press flips that light. Returns
+    /// the `light_index` the switch controls, or `None` when the level has no
+    /// light-switch panel.
+    ///
+    /// Mirror of [`Self::debug_face_nearest_door`] but specifically targeting a
+    /// light switch, so the door-interaction e2e can verify the
+    /// action-key → `ToggleLight` path: it reads that light's intensity via
+    /// [`Self::light_intensities`] before/after pressing Space. Never invoked by
+    /// normal gameplay.
+    pub fn debug_face_nearest_light_switch(&mut self) -> Option<usize> {
+        let geometry = self.world.resource::<MapGeometry>().clone();
+        let panels = self
+            .world
+            .get_resource::<crate::world_mechanics::panels::ControlPanels>()
+            .cloned()
+            .unwrap_or_default();
+
+        let player_pos = {
+            let mut q = self
+                .world
+                .query_filtered::<&Position, bevy_ecs::prelude::With<crate::Player>>();
+            let p = q.iter(&self.world).next()?;
+            glam::Vec2::new(p.0.x, p.0.y)
+        };
+
+        let candidates = crate::world_mechanics::panels::debug_poses_facing_light_switches(
+            player_pos,
+            &geometry.polygon_vertices,
+            &geometry.polygon_adjacency,
+            &geometry.line_endpoints,
+            &panels.0,
+        );
+        if candidates.is_empty() {
+            return None;
+        }
+
+        // Collect, per light_index, whether that light is *observably*
+        // togglable: its lit/dark hold states must settle to clearly different,
+        // steady values. A light that oscillates in its hold state (Flicker /
+        // Random / Fluorescent) re-animates away from the action-key snap within
+        // a tick or two, so a test would see no stable change.
+        let observable: std::collections::HashSet<usize> = {
+            use crate::components::{LightFunction, LightState};
+            let mut set = std::collections::HashSet::new();
+            let mut q = self.world.query::<&crate::components::Light>();
+            for light in q.iter(&self.world) {
+                let steady = |f: LightFunction| {
+                    matches!(
+                        f,
+                        LightFunction::Constant | LightFunction::Linear | LightFunction::Smooth
+                    )
+                };
+                let active = light.functions[LightState::PrimaryActive.as_index()];
+                let inactive = light.functions[LightState::PrimaryInactive.as_index()];
+                if steady(active.function)
+                    && steady(inactive.function)
+                    && (active.intensity - inactive.intensity).abs() > 0.4
+                {
+                    set.insert(light.light_index);
+                }
+            }
+            set
+        };
+
+        // Prefer the nearest switch whose light is observably togglable; fall
+        // back to the nearest switch overall so the hook still positions the
+        // player even on maps where every light oscillates.
+        let switch = candidates
+            .iter()
+            .find(|c| observable.contains(&c.light_index))
+            .copied()
+            .unwrap_or(candidates[0]);
+        let pose = switch.pose;
+
+        let mut q = self.world.query_filtered::<(
+            &mut Position,
+            &mut crate::Facing,
+            &mut crate::PolygonIndex,
+        ), bevy_ecs::prelude::With<crate::Player>>();
+        if let Some((mut pos, mut facing, mut poly)) = q.iter_mut(&mut self.world).next() {
+            pos.0.x = pose.position.x;
+            pos.0.y = pose.position.y;
+            if let Some(&fh) = geometry.floor_heights.get(pose.polygon) {
+                pos.0.z = fh;
+            }
+            facing.0 = pose.facing;
+            poly.0 = pose.polygon;
+            Some(switch.light_index)
+        } else {
+            None
+        }
+    }
+
     /// Return current per-polygon dynamic geometry/lighting data for every
     /// polygon in the level, indexed by polygon.
     ///

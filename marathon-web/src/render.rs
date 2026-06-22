@@ -47,6 +47,89 @@ pub fn debug_face_nearest_door() -> bool {
     })
 }
 
+/// DEBUG-ONLY WASM hook: reposition + re-face the player in front of the
+/// nearest light-switch control panel so a subsequent action-key (Space) press
+/// toggles its light. Exposed to JS as
+/// `window.__marathonDebug.faceNearestLightSwitch()`. Returns the `light_index`
+/// the switch controls (>= 0) so the test can watch that light, or `-1` when
+/// the level has no light switch / no live sim. Never invoked by gameplay.
+#[wasm_bindgen]
+pub fn debug_face_nearest_light_switch() -> i32 {
+    GAME_STATE.with(|cell| {
+        let handle = cell.borrow().clone();
+        match handle {
+            Some(state_rc) => {
+                let mut state = state_rc.borrow_mut();
+                match state.sim.as_mut() {
+                    Some(sim) => sim
+                        .debug_face_nearest_light_switch()
+                        .map(|idx| idx as i32)
+                        .unwrap_or(-1),
+                    None => -1,
+                }
+            }
+            None => -1,
+        }
+    })
+}
+
+/// DEBUG-ONLY WASM hook: read the current intensity (0.0..=1.0) of a light by
+/// `light_index`. Exposed as `window.__marathonDebug.lightIntensity(idx)`.
+/// Returns `1.0` (the renderer's no-light fallback) for unknown indices and
+/// when there is no live sim, so the e2e compares the *delta* across an
+/// action-key press rather than an absolute value.
+#[wasm_bindgen]
+pub fn debug_light_intensity(light_index: u32) -> f32 {
+    GAME_STATE.with(|cell| {
+        let handle = cell.borrow().clone();
+        match handle {
+            Some(state_rc) => {
+                let mut state = state_rc.borrow_mut();
+                match state.sim.as_mut() {
+                    Some(sim) => sim
+                        .light_intensities()
+                        .get(light_index as usize)
+                        .copied()
+                        .unwrap_or(1.0),
+                    None => 1.0,
+                }
+            }
+            None => 1.0,
+        }
+    })
+}
+
+/// DEBUG-ONLY WASM hook: drive the action-key → light-switch toggle through the
+/// real sim path and report the controlled light's intensity straddling the
+/// toggle. Exposed as `window.__marathonDebug.toggleNearestLightSwitch()`,
+/// returning `[light_index, intensity_before, intensity_after]` (length 3) on
+/// success, or an empty array when there is no light switch / no live sim.
+///
+/// Marathon lights auto-cycle every tick, so a switch-driven light never holds
+/// a value an e2e can poll between presses; this measures the toggle atomically
+/// in the sim (faces the switch, runs one ACTION-rising-edge tick, reads the
+/// snapped intensity) so the assertion is deterministic. The full action path
+/// (find_action_key_target → ToggleLight) is exercised exactly as a Space press
+/// would, and the door half of the same test proves the keyboard→action wiring.
+#[wasm_bindgen]
+pub fn debug_toggle_nearest_light_switch() -> js_sys::Array {
+    let out = js_sys::Array::new();
+    GAME_STATE.with(|cell| {
+        let handle = cell.borrow().clone();
+        if let Some(state_rc) = handle {
+            let mut state = state_rc.borrow_mut();
+            if let Some(sim) = state.sim.as_mut() {
+                if let Some((idx, before, after)) = sim.debug_toggle_nearest_light_switch() {
+                    out.push(&JsValue::from_f64(idx as f64));
+                    out.push(&JsValue::from_f64(before as f64));
+                    out.push(&JsValue::from_f64(after as f64));
+                }
+            }
+        }
+    });
+    out
+}
+
 /// Install the `window.__marathonDebug` namespace (creating it if absent) and
 /// attach `faceNearestDoor` so e2e tests can deterministically face a door.
 fn install_debug_hooks() {
@@ -72,6 +155,33 @@ fn install_debug_hooks() {
     );
     // Leak the closure so it stays alive for the lifetime of the page.
     closure.forget();
+
+    // __marathonDebug.faceNearestLightSwitch = () => debug_face_nearest_light_switch()
+    let ls_closure = Closure::<dyn Fn() -> i32>::new(debug_face_nearest_light_switch);
+    let _ = js_sys::Reflect::set(
+        &ns_obj,
+        &JsValue::from_str("faceNearestLightSwitch"),
+        ls_closure.as_ref().unchecked_ref(),
+    );
+    ls_closure.forget();
+
+    // __marathonDebug.lightIntensity = (idx) => debug_light_intensity(idx)
+    let li_closure = Closure::<dyn Fn(u32) -> f32>::new(debug_light_intensity);
+    let _ = js_sys::Reflect::set(
+        &ns_obj,
+        &JsValue::from_str("lightIntensity"),
+        li_closure.as_ref().unchecked_ref(),
+    );
+    li_closure.forget();
+
+    // __marathonDebug.toggleNearestLightSwitch = () => [idx, before, after]
+    let tl_closure = Closure::<dyn Fn() -> js_sys::Array>::new(debug_toggle_nearest_light_switch);
+    let _ = js_sys::Reflect::set(
+        &ns_obj,
+        &JsValue::from_str("toggleNearestLightSwitch"),
+        tl_closure.as_ref().unchecked_ref(),
+    );
+    tl_closure.forget();
 }
 
 #[repr(C)]

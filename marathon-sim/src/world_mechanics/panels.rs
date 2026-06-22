@@ -172,6 +172,124 @@ pub fn debug_pose_facing_nearest_door(
     best.map(|(_, pose)| pose)
 }
 
+/// A debug-positioning result for a light-switch panel: where to stand/face so
+/// the action key activates the switch, plus the `light_index` that switch
+/// toggles (so an e2e test can read that specific light's intensity before and
+/// after the press).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LightSwitchPose {
+    /// Where to stand and which way to face to activate the switch.
+    pub pose: DoorFacingPose,
+    /// The light index the switch's [`PanelAction::ToggleLight`] flips.
+    pub light_index: usize,
+}
+
+/// DEBUG-ONLY. Compute a pose that places the player in front of the nearest
+/// *light-switch* control panel (a panel whose action is
+/// [`PanelAction::ToggleLight`]) so that the action-key raycast activates it.
+///
+/// Unlike [`debug_pose_facing_nearest_door`] (which prefers platform doors and
+/// only falls back to panels), this deliberately targets light switches so an
+/// e2e test can verify the light-toggle path. Returns the standoff pose plus
+/// the `light_index` the switch controls, or `None` when the level has no
+/// light-switch panel.
+pub fn debug_pose_facing_nearest_light_switch(
+    player_pos: Vec2,
+    polygon_vertices: &[Vec<Vec2>],
+    polygon_adjacency: &[Vec<(usize, Option<usize>)>],
+    line_endpoints: &[(Vec2, Vec2)],
+    panels: &[ControlPanel],
+) -> Option<LightSwitchPose> {
+    debug_poses_facing_light_switches(
+        player_pos,
+        polygon_vertices,
+        polygon_adjacency,
+        line_endpoints,
+        panels,
+    )
+    .into_iter()
+    .next()
+}
+
+/// DEBUG-ONLY. Like [`debug_pose_facing_nearest_light_switch`] but returns
+/// EVERY light-switch panel's standoff pose, sorted nearest-first. The caller
+/// (which has ECS access to the actual `Light` components) can then pick the
+/// nearest switch whose controlled light is *observably* togglable — some
+/// lights run a continuously-oscillating function in their hold states, so the
+/// action-key snap is immediately re-animated away and no steady change is
+/// visible. The geometry-only layer here cannot see that, so it offers all
+/// candidates and lets the sim layer choose.
+pub fn debug_poses_facing_light_switches(
+    player_pos: Vec2,
+    polygon_vertices: &[Vec<Vec2>],
+    polygon_adjacency: &[Vec<(usize, Option<usize>)>],
+    line_endpoints: &[(Vec2, Vec2)],
+    panels: &[ControlPanel],
+) -> Vec<LightSwitchPose> {
+    /// Standoff distance back from the panel line; must be < the panel
+    /// activation range (1.5 WU) and > the raycast near epsilon.
+    const STANDOFF: f32 = 0.75;
+
+    let mut candidates: Vec<(f32, LightSwitchPose)> = Vec::new();
+
+    for panel in panels {
+        let light_index = match panel.action {
+            PanelAction::ToggleLight { light_index } => light_index,
+            _ => continue,
+        };
+
+        let (la, lb) = match line_endpoints.get(panel.line_index) {
+            Some(&pair) => pair,
+            None => continue,
+        };
+        let line_center = (la + lb) * 0.5;
+
+        // Find the polygon that borders this panel's line so the standoff lands
+        // inside a real room.
+        let neighbour_poly = match polygon_adjacency
+            .iter()
+            .position(|adj| adj.iter().any(|&(l, _)| l == panel.line_index))
+        {
+            Some(p) => p,
+            None => continue,
+        };
+        let verts = match polygon_vertices.get(neighbour_poly) {
+            Some(v) if !v.is_empty() => v,
+            _ => continue,
+        };
+        let centroid = verts.iter().copied().fold(Vec2::ZERO, |a, b| a + b) / verts.len() as f32;
+        let mut inward = centroid - line_center;
+        if inward.length() < 1e-4 {
+            let edge = lb - la;
+            inward = Vec2::new(-edge.y, edge.x);
+        }
+        let inward = inward.normalize_or_zero();
+        if inward == Vec2::ZERO {
+            continue;
+        }
+
+        let position = line_center + inward * STANDOFF;
+        let to_line = line_center - position;
+        let facing = to_line.y.atan2(to_line.x);
+        let dist = (line_center - player_pos).length();
+
+        candidates.push((
+            dist,
+            LightSwitchPose {
+                pose: DoorFacingPose {
+                    position,
+                    facing,
+                    polygon: neighbour_poly,
+                },
+                light_index,
+            },
+        ));
+    }
+
+    candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.into_iter().map(|(_, r)| r).collect()
+}
+
 fn normalize_angle(angle: f32) -> f32 {
     let mut a = angle % std::f32::consts::TAU;
     if a > std::f32::consts::PI {
@@ -346,6 +464,93 @@ mod tests {
             pose.position,
             pose.facing,
         );
+    }
+
+    #[test]
+    fn debug_light_switch_pose_activates_a_toggle_light_panel() {
+        // Single room; a light switch (ToggleLight) on the east wall (line 1),
+        // plus a non-light panel that must NOT be selected.
+        let polygon_vertices = vec![vec![
+            Vec2::new(-2.0, -1.0),
+            Vec2::new(1.0, -1.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(-2.0, 1.0),
+        ]];
+        let polygon_adjacency = vec![vec![(0, None), (1, None), (2, None), (3, None)]];
+        let line_endpoints = vec![
+            (Vec2::new(-2.0, -1.0), Vec2::new(1.0, -1.0)),
+            (Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0)), // line 1: east wall
+            (Vec2::new(-2.0, 1.0), Vec2::new(1.0, 1.0)),
+            (Vec2::new(-2.0, -1.0), Vec2::new(-2.0, 1.0)),
+        ];
+        let panels = vec![
+            ControlPanel {
+                line_index: 3, // a non-light panel (west wall) — must be ignored
+                side: 0,
+                action: PanelAction::ActivateTerminal { terminal_index: 2 },
+                max_distance: 1.5,
+            },
+            ControlPanel {
+                line_index: 1,
+                side: 0,
+                action: PanelAction::ToggleLight { light_index: 7 },
+                max_distance: 1.5,
+            },
+        ];
+
+        let result = debug_pose_facing_nearest_light_switch(
+            Vec2::new(-1.0, 0.0),
+            &polygon_vertices,
+            &polygon_adjacency,
+            &line_endpoints,
+            &panels,
+        )
+        .expect("a light-switch pose should be found");
+
+        // It must select the light-switch panel, reporting its light index.
+        assert_eq!(result.light_index, 7);
+        assert_eq!(result.pose.polygon, 0);
+
+        // The computed pose must satisfy can_activate_panel for that switch.
+        let switch = &panels[1];
+        assert!(
+            can_activate_panel(
+                result.pose.position,
+                result.pose.facing,
+                switch,
+                &line_endpoints
+            ),
+            "light-switch debug pose at {:?} facing {} should activate the switch",
+            result.pose.position,
+            result.pose.facing,
+        );
+    }
+
+    #[test]
+    fn debug_light_switch_pose_none_when_no_light_panel() {
+        let polygon_vertices = vec![vec![
+            Vec2::new(-1.0, -1.0),
+            Vec2::new(1.0, -1.0),
+            Vec2::new(1.0, 1.0),
+            Vec2::new(-1.0, 1.0),
+        ]];
+        let polygon_adjacency = vec![vec![(0, None)]];
+        let line_endpoints = vec![(Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0))];
+        let panels = vec![ControlPanel {
+            line_index: 0,
+            side: 0,
+            action: PanelAction::ActivatePlatform { platform_index: 0 },
+            max_distance: 1.5,
+        }];
+
+        assert!(debug_pose_facing_nearest_light_switch(
+            Vec2::ZERO,
+            &polygon_vertices,
+            &polygon_adjacency,
+            &line_endpoints,
+            &panels,
+        )
+        .is_none());
     }
 
     #[test]
