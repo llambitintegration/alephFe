@@ -118,6 +118,9 @@ impl SimWorld {
         self.run_player_weapons();
         // 6. Update monsters (depends on player position)
         self.update_monsters();
+        // 6b. Update agents (reconcile the daemon-fed desired-set, parallel to
+        //     monsters; box 1.5 call seam — no agent behavior yet)
+        self.update_agents();
         // 7. Update projectiles (processes monster-spawned projectiles)
         self.update_projectiles();
         // 8. Update effects (cleanup)
@@ -1120,6 +1123,40 @@ impl SimWorld {
                 crate::PolygonIndex(poly),
             ));
         }
+    }
+
+    /// Per-tick agent reconcile seam (box 1.5), called from `tick()` after
+    /// [`Self::update_monsters`].
+    ///
+    /// This is the call seam parallel to `update_monsters()` that the agent
+    /// reconciler (boxes 4.x) and the interaction surface (boxes 6.x) hang off.
+    /// Each tick it reads the latest desired-set off the installed
+    /// [`crate::fleet_bridge::SimBridge`] (latest-wins `watch`, so N publishes
+    /// between ticks coalesce into one snapshot) and emits agent
+    /// [`marathon_fleet::event::GameAction`]s onto the bridge's outbound sender.
+    ///
+    /// Box 1.5 deliberately ships ONLY the seam: no diff, no spawn/update/despawn,
+    /// no `GameAction` emission. With no bridge installed, or with the seeded empty
+    /// desired-set a dead/absent daemon leaves, this is a no-op — the sim keeps
+    /// ticking with nothing to reconcile. Real agent behavior lands in later boxes.
+    fn update_agents(&mut self) {
+        // No bridge installed → nothing to reconcile; the sim ticks on.
+        let Some(bridge) = self.fleet_bridge.as_ref() else {
+            return;
+        };
+
+        // Read the latest desired-set (latest-wins; coalesces intervening
+        // publishes). An empty set is the dead/absent-daemon case and is tolerated.
+        let desired = bridge.desired.borrow();
+        if desired.is_empty() {
+            return;
+        }
+
+        // Box 1.5 is the call seam only: the diff/spawn/despawn reconcile and the
+        // outbound `GameAction` emission land in later boxes (4.x/6.x). For now a
+        // non-empty desired-set is observed but drives no behavior.
+        let _ = &*desired;
+        let _outbound = &bridge.actions;
     }
 
     fn update_projectiles(&mut self) {
@@ -2557,6 +2594,36 @@ pub struct WeaponRenderState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Box 1.5: the per-tick `update_agents()` seam exists parallel to
+    /// `update_monsters()`, is wired into `tick()` after the monster pass, reads
+    /// the latest desired-set off the installed [`crate::fleet_bridge::SimBridge`],
+    /// and — with an EMPTY desired-set (the seeded dead/absent-daemon case) —
+    /// emits ZERO `GameAction`s and never panics. No agent behavior yet; this only
+    /// proves the call seam is present and plumbed.
+    #[test]
+    fn update_agents_seam_empty_desired_set_emits_nothing() {
+        let (sim_bridge, mut daemon_bridge) = crate::fleet_bridge::channel();
+        let mut world = minimal_sim_world();
+        world.set_fleet_bridge(sim_bridge);
+
+        // Drive a full tick: `tick()` must invoke `update_agents()` after the
+        // monster pass. With the seeded empty desired-set, the seam is a no-op.
+        world.tick(TickInput::default());
+
+        // The seam emitted no outbound actions for an empty desired-set.
+        assert!(
+            daemon_bridge.actions.try_recv().is_err(),
+            "empty desired-set must drive zero agent GameActions through the seam"
+        );
+
+        // Calling the seam directly is also a no-op and does not panic.
+        world.update_agents();
+        assert!(
+            daemon_bridge.actions.try_recv().is_err(),
+            "direct update_agents() call on empty desired-set must emit nothing"
+        );
+    }
 
     #[test]
     fn action_flags_contains() {

@@ -185,6 +185,12 @@ pub struct ItemRespawnQueue(pub Vec<ItemRespawnEntry>);
 /// constructing, advancing, and querying the simulation.
 pub struct SimWorld {
     pub(crate) world: World,
+    /// Sim-side endpoints of the fleet bridge (box 1.4/1.5). `None` until a
+    /// daemon-fed bridge is installed via [`SimWorld::set_fleet_bridge`]; when
+    /// absent the per-tick `update_agents()` seam reconciles nothing. Even when
+    /// present, a dead/absent daemon leaves the seeded empty desired-set, so the
+    /// seam stays a no-op until real agents are published.
+    pub(crate) fleet_bridge: Option<crate::fleet_bridge::SimBridge>,
 }
 
 /// Convert a Marathon world coordinate (i16, 1024 = 1 WU) to f32.
@@ -297,7 +303,19 @@ impl SimWorld {
         }
         world.insert_resource(weapon_inventory);
 
-        Ok(Self { world })
+        Ok(Self {
+            world,
+            fleet_bridge: None,
+        })
+    }
+
+    /// Install the sim-side [`crate::fleet_bridge::SimBridge`] the out-of-process
+    /// fleet daemon feeds (box 1.5). Once installed, the per-tick `update_agents()`
+    /// seam reads the latest desired-set off this bridge and emits agent
+    /// `GameAction`s onto its outbound sender. A dead/absent daemon leaves the
+    /// seeded empty desired-set, so the seam remains a no-op until agents publish.
+    pub fn set_fleet_bridge(&mut self, bridge: crate::fleet_bridge::SimBridge) {
+        self.fleet_bridge = Some(bridge);
     }
 
     /// Get the current tick count.
@@ -1351,7 +1369,10 @@ impl SimWorld {
             world.spawn(media);
         }
 
-        Ok(Self { world })
+        Ok(Self {
+            world,
+            fleet_bridge: None,
+        })
     }
 }
 

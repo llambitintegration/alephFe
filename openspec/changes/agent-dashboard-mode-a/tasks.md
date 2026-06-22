@@ -14,7 +14,7 @@
 - [x] 1.2 Add a new `marathon-fleet` daemon crate (out-of-process binary + lib) to the workspace `members` in `Cargo.toml` with a `lib.rs` module skeleton for `transport`, `event`, `projection`, `reconciler`, `interaction`, and `replay`; the daemon runs out-of-process and must never block the sim (proposal Impact).
 - [x] 1.3 Define the shared cross-stage types in `marathon-fleet`: the CloudEvents-shaped event envelope `{id, seq, time, ingest_time, subject, type, data, correlation_id, causation_id}`, `EntityDesc{ laneId, kind, label, state, meta }`, `GameAction{ Inspect{id}, Poke{id}, Kill{id} }`, and `EntityKind`/`EntityState` enums (design Decision 2, Decision 4).
 - [x] 1.4 Add a `marathon-sim` reconciler-bridge module (`marathon-sim/src/fleet_bridge.rs` or equiv.) exposing the channel endpoints the daemon feeds — an inbound latest-wins `watch::Receiver<Vec<EntityDesc>>` and an outbound `mpsc::Sender<GameAction>` — wired so a dead/absent daemon leaves the sim running with an empty desired-set (proposal Impact; design Decision 4).
-- [ ] 1.5 Stub a per-tick `update_agents()` entry point in `marathon-sim/src/tick.rs` parallel to `update_monsters()`, called from `tick()` after monster updates, taking the latest desired-set and emitting agent `GameAction`s; no behavior yet beyond the call seam (proposal Impact; design data-flow).
+- [x] 1.5 Stub a per-tick `update_agents()` entry point in `marathon-sim/src/tick.rs` parallel to `update_monsters()`, called from `tick()` after monster updates, taking the latest desired-set and emitting agent `GameAction`s; no behavior yet beyond the call seam (proposal Impact; design data-flow).
 
 ## 2. event-capture-daemon
 
