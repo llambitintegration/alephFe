@@ -16,6 +16,64 @@ use crate::mesh;
 use crate::sprites::{SpriteDrawCall, SpriteRenderer};
 use crate::texture::TextureManager;
 
+thread_local! {
+    /// Handle to the live game state, stashed so the debug WASM hooks
+    /// (`__marathonDebug.*`) can reach the running sim from a plain exported
+    /// function. Set once in `run_web`; never touched by normal gameplay.
+    static GAME_STATE: RefCell<Option<Rc<RefCell<GameState>>>> = const { RefCell::new(None) };
+}
+
+/// DEBUG-ONLY WASM hook: reposition + re-face the player directly in front of
+/// the nearest activatable door so that a subsequent action-key (Space) press
+/// activates it. Exposed to JS as `window.__marathonDebug.faceNearestDoor()`
+/// (see [`install_debug_hooks`]). Returns `true` when a door was found and the
+/// player was moved; used to make door-interaction e2e tests deterministic.
+///
+/// This is never invoked by gameplay — only by the test harness / debug console.
+#[wasm_bindgen]
+pub fn debug_face_nearest_door() -> bool {
+    GAME_STATE.with(|cell| {
+        let handle = cell.borrow().clone();
+        match handle {
+            Some(state_rc) => {
+                let mut state = state_rc.borrow_mut();
+                match state.sim.as_mut() {
+                    Some(sim) => sim.debug_face_nearest_door().is_some(),
+                    None => false,
+                }
+            }
+            None => false,
+        }
+    })
+}
+
+/// Install the `window.__marathonDebug` namespace (creating it if absent) and
+/// attach `faceNearestDoor` so e2e tests can deterministically face a door.
+fn install_debug_hooks() {
+    let global = js_sys::global();
+    let window: JsValue = global.into();
+    // window.__marathonDebug ||= {}
+    let key = JsValue::from_str("__marathonDebug");
+    let ns = js_sys::Reflect::get(&window, &key).unwrap_or(JsValue::UNDEFINED);
+    let ns_obj: js_sys::Object = if ns.is_object() {
+        ns.unchecked_into()
+    } else {
+        let o = js_sys::Object::new();
+        let _ = js_sys::Reflect::set(&window, &key, &o);
+        o
+    };
+
+    // __marathonDebug.faceNearestDoor = () => debug_face_nearest_door()
+    let closure = Closure::<dyn Fn() -> bool>::new(debug_face_nearest_door);
+    let _ = js_sys::Reflect::set(
+        &ns_obj,
+        &JsValue::from_str("faceNearestDoor"),
+        closure.as_ref().unchecked_ref(),
+    );
+    // Leak the closure so it stays alive for the lifetime of the page.
+    closure.forget();
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Pod, Zeroable)]
 struct CameraUniform {
@@ -938,6 +996,11 @@ pub async fn run_web(
     // Set up input handlers on canvas
     let state = Rc::new(RefCell::new(state));
     setup_input_handlers(&canvas, state.clone());
+
+    // Stash the state handle and install the debug WASM hooks
+    // (window.__marathonDebug.faceNearestDoor) for deterministic e2e tests.
+    GAME_STATE.with(|cell| *cell.borrow_mut() = Some(state.clone()));
+    install_debug_hooks();
 
     // Start render loop via requestAnimationFrame
     start_render_loop(state);

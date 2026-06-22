@@ -368,6 +368,63 @@ impl SimWorld {
         &mut self.world
     }
 
+    /// DEBUG-ONLY. Reposition and re-face the player directly in front of the
+    /// nearest activatable door so that a subsequent ACTION-key press will
+    /// activate it. Returns the polygon the player was placed in, or `None`
+    /// when the level has no activatable door/control panel.
+    ///
+    /// This exists solely to make door-interaction e2e tests deterministic
+    /// (the `window.__marathonDebug.faceNearestDoor()` web hook). From the real
+    /// spawn point, blind keyboard navigation never reliably lands the player
+    /// within a control panel's activation cone, so the test harness calls this
+    /// to teleport the player onto a known door before pressing the action key.
+    /// It is never invoked by normal gameplay systems.
+    pub fn debug_face_nearest_door(&mut self) -> Option<usize> {
+        let geometry = self.world.resource::<MapGeometry>().clone();
+        let panels = self
+            .world
+            .get_resource::<crate::world_mechanics::panels::ControlPanels>()
+            .cloned()
+            .unwrap_or_default();
+
+        let player_pos = {
+            let mut q = self
+                .world
+                .query_filtered::<&Position, bevy_ecs::prelude::With<crate::Player>>();
+            let p = q.iter(&self.world).next()?;
+            glam::Vec2::new(p.0.x, p.0.y)
+        };
+
+        let pose = crate::world_mechanics::panels::debug_pose_facing_nearest_door(
+            player_pos,
+            &geometry.polygon_vertices,
+            &geometry.polygon_adjacency,
+            &geometry.polygon_types,
+            &geometry.line_endpoints,
+            &panels.0,
+        )?;
+
+        // Apply the pose to the player entity (keep current Z / height).
+        let mut q = self.world.query_filtered::<(
+            &mut Position,
+            &mut crate::Facing,
+            &mut crate::PolygonIndex,
+        ), bevy_ecs::prelude::With<crate::Player>>();
+        if let Some((mut pos, mut facing, mut poly)) = q.iter_mut(&mut self.world).next() {
+            pos.0.x = pose.position.x;
+            pos.0.y = pose.position.y;
+            // Snap to the room's floor so the player is grounded in the new poly.
+            if let Some(&fh) = geometry.floor_heights.get(pose.polygon) {
+                pos.0.z = fh;
+            }
+            facing.0 = pose.facing;
+            poly.0 = pose.polygon;
+            Some(pose.polygon)
+        } else {
+            None
+        }
+    }
+
     /// Return current per-polygon dynamic geometry/lighting data for every
     /// polygon in the level, indexed by polygon.
     ///

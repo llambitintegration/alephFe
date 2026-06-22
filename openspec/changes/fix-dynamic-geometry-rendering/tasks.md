@@ -37,6 +37,6 @@
 ## 7. Verification & regression
 
 - [ ] 7.1 Regenerate `marathon-web` visual-regression baselines; assert a fully static scene is pixel-equivalent (within tolerance) to pre-change output
-- [ ] 7.2 Add an e2e test (Playwright, against the proxy-net container): load a level, walk to a door, press the action key, screenshot before/after, assert the door-region pixels change
+- [x] 7.2 Add an e2e test (Playwright, against the proxy-net container): load a level, walk to a door, press the action key, screenshot before/after, assert the door-region pixels change
 - [ ] 7.3 Functionally verify and tick `fix-weapon-sprites-interactions` task 5.4 (door opens; light switch toggles a visible light) — record evidence
 - [ ] 7.4 `cargo test` workspace-green in Docker (`rust:slim`); `wasm-pack build` for `marathon-web` succeeds; redeploy and capture a moving-door screenshot via the live endpoint
