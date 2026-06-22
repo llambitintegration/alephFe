@@ -78,9 +78,187 @@ pub struct ActiveFader {
     pub tag: FaderTag,
 }
 
+impl ActiveFader {
+    /// The fader's live intensity, decayed from `initial_intensity` as the
+    /// fader ages: `initial_intensity * (remaining_ticks / total_ticks)`.
+    ///
+    /// Ramps linearly from `initial_intensity` (when freshly triggered) down to
+    /// `0.0` (when `remaining_ticks` reaches `0`). A fader with `total_ticks == 0`
+    /// has no lifetime, so its current intensity is `0.0`.
+    pub fn current_intensity(&self) -> f32 {
+        if self.total_ticks == 0 {
+            return 0.0;
+        }
+        self.initial_intensity * (self.remaining_ticks as f32 / self.total_ticks as f32)
+    }
+}
+
+/// Owns and drives the set of active full-screen faders.
+///
+/// The manager holds a flat `Vec<ActiveFader>` that the game loop drives each
+/// frame: `trigger()` adds a fader (replacing any existing fader with a matching
+/// dedup tag), `tick()` ages faders down and removes expired ones, and
+/// `active_faders()` exposes the live set for the renderer to composite. See
+/// `openspec/changes/implement-fullscreen-effects/design.md` (Decision 1).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FaderManager {
+    /// All currently-active faders, oldest first.
+    faders: Vec<ActiveFader>,
+}
+
+impl FaderManager {
+    /// Create an empty `FaderManager`.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Add a new active fader.
+    ///
+    /// NOTE (box 1.3): this is a minimal skeleton. The tag-aware dedup/replace
+    /// behaviour (replace an existing fader sharing the same `FaderTag` instead
+    /// of accumulating duplicates) is implemented in box 1.5; for now this only
+    /// appends so the manager surface compiles and links.
+    pub fn trigger(&mut self, fader: ActiveFader) {
+        // Deferred to box 1.5: dedup-by-tag replace logic.
+        self.faders.push(fader);
+    }
+
+    /// Advance all active faders by one tick and drop expired ones.
+    ///
+    /// Each surviving fader has its `remaining_ticks` decremented (saturating at
+    /// `0`); the live intensity ramp is `initial_intensity * remaining / total`,
+    /// recomputed on demand by [`ActiveFader::current_intensity`]. Faders whose
+    /// `remaining_ticks` reaches `0` are expired and removed from the active set.
+    pub fn tick(&mut self) {
+        for fader in &mut self.faders {
+            fader.remaining_ticks = fader.remaining_ticks.saturating_sub(1);
+        }
+        self.faders.retain(|fader| fader.remaining_ticks > 0);
+    }
+
+    /// The currently-active faders, for the renderer to composite.
+    pub fn active_faders(&self) -> &[ActiveFader] {
+        &self.faders
+    }
+
+    /// Remove every active fader carrying the given dedup tag.
+    pub fn remove_by_tag(&mut self, tag: FaderTag) {
+        self.faders.retain(|f| f.tag != tag);
+    }
+
+    /// Remove all active faders.
+    pub fn clear(&mut self) {
+        self.faders.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Box 1.3: the `FaderManager` surface exists and the trivial accessors
+    /// behave. `tick()`/`trigger()` behaviour is deferred to boxes 1.4/1.5; here
+    /// we only assert the method surface is present and `clear()`/`active_faders()`/
+    /// `remove_by_tag()` are usable.
+    #[test]
+    fn test_fader_manager_surface() {
+        // Construct an empty manager.
+        let mut manager = FaderManager::default();
+        assert!(
+            manager.active_faders().is_empty(),
+            "a fresh FaderManager has no active faders"
+        );
+
+        // `remove_by_tag()` is callable on an empty manager (no-op, no panic).
+        manager.remove_by_tag(FaderTag::Oxygen);
+        assert!(manager.active_faders().is_empty());
+
+        // Seed a fader directly so we can prove `clear()` empties the store.
+        manager.faders.push(ActiveFader {
+            color: [1.0, 0.0, 0.0, 1.0],
+            blend_mode: FaderBlendMode::Tint,
+            initial_intensity: 1.0,
+            remaining_ticks: 5,
+            total_ticks: 5,
+            tag: FaderTag::Damage,
+        });
+        assert_eq!(manager.active_faders().len(), 1);
+
+        // `remove_by_tag()` drops the matching fader.
+        manager.remove_by_tag(FaderTag::Damage);
+        assert!(
+            manager.active_faders().is_empty(),
+            "remove_by_tag drops the matching fader"
+        );
+
+        // `clear()` empties any remaining faders.
+        manager.faders.push(ActiveFader {
+            color: [0.0, 0.0, 1.0, 1.0],
+            blend_mode: FaderBlendMode::SoftTint,
+            initial_intensity: 0.5,
+            remaining_ticks: 3,
+            total_ticks: 3,
+            tag: FaderTag::Oxygen,
+        });
+        manager.clear();
+        assert!(
+            manager.active_faders().is_empty(),
+            "clear empties the store"
+        );
+    }
+
+    /// Box 1.4: `tick()` decays intensity. A fader with `total_ticks = 10` and
+    /// `initial_intensity = 1.0`, ticked 5 times, has `remaining_ticks = 5` and a
+    /// current intensity of `1.0 * (5 / 10) = 0.5`. (Mirrors box 1.6.)
+    #[test]
+    fn test_tick_decays_intensity_to_half() {
+        let mut manager = FaderManager::new();
+        manager.trigger(ActiveFader {
+            color: [1.0, 0.0, 0.0, 1.0],
+            blend_mode: FaderBlendMode::Tint,
+            initial_intensity: 1.0,
+            remaining_ticks: 10,
+            total_ticks: 10,
+            tag: FaderTag::Damage,
+        });
+
+        for _ in 0..5 {
+            manager.tick();
+        }
+
+        let faders = manager.active_faders();
+        assert_eq!(faders.len(), 1, "fader is still active after 5 of 10 ticks");
+        assert_eq!(faders[0].remaining_ticks, 5);
+        let intensity = faders[0].current_intensity();
+        assert!(
+            (intensity - 0.5).abs() < 1e-6,
+            "intensity should be ~0.5 after 5/10 ticks, got {intensity}"
+        );
+    }
+
+    /// Box 1.4: a fader with `total_ticks = 3`, ticked 4 times, expires and is
+    /// removed from `active_faders()`. (Mirrors box 1.7.)
+    #[test]
+    fn test_tick_removes_expired_fader() {
+        let mut manager = FaderManager::new();
+        manager.trigger(ActiveFader {
+            color: [0.0, 0.0, 1.0, 1.0],
+            blend_mode: FaderBlendMode::SoftTint,
+            initial_intensity: 0.8,
+            remaining_ticks: 3,
+            total_ticks: 3,
+            tag: FaderTag::Oxygen,
+        });
+
+        for _ in 0..4 {
+            manager.tick();
+        }
+
+        assert!(
+            manager.active_faders().is_empty(),
+            "a fader of duration 3 is removed after 4 ticks"
+        );
+    }
 
     #[test]
     fn test_fader_blend_mode_six_distinct_variants() {

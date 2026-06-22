@@ -2,8 +2,8 @@
 
 - [x] 1.1 Create `FaderBlendMode` enum with variants: Tint, Randomize, Negate, Dodge, Burn, SoftTint
 - [x] 1.2 Create `ActiveFader` struct with fields: color ([f32; 4]), blend_mode, initial_intensity (f32), remaining_ticks (u16), total_ticks (u16), tag (enum for dedup: Damage, Teleport, Invincibility, Oxygen, Shield, Lava, Infravision, None)
-- [ ] 1.3 Create `FaderManager` struct with `faders: Vec<ActiveFader>` and methods: `trigger()`, `tick()`, `active_faders()`, `remove_by_tag()`, `clear()`
-- [ ] 1.4 Implement `FaderManager::tick()`: decrement remaining_ticks, recompute intensity as `initial_intensity * (remaining / total)`, remove expired faders
+- [x] 1.3 Create `FaderManager` struct with `faders: Vec<ActiveFader>` and methods: `trigger()`, `tick()`, `active_faders()`, `remove_by_tag()`, `clear()`
+- [x] 1.4 Implement `FaderManager::tick()`: decrement remaining_ticks, recompute intensity as `initial_intensity * (remaining / total)`, remove expired faders
 - [ ] 1.5 Implement `FaderManager::trigger()`: push a new ActiveFader; for tagged faders, replace existing fader with same tag instead of duplicating
 - [ ] 1.6 Add unit test: trigger a fader with duration 10, tick 5 times, verify intensity is ~50% of initial
 - [ ] 1.7 Add unit test: trigger a fader with duration 3, tick 4 times, verify fader is removed
