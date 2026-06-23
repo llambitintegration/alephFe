@@ -42,4 +42,4 @@
 
 - [x] 5.3 Visually verify sprite anchoring: check that dropped weapons and items on the ground appear correctly positioned (not floating or sinking), and that asymmetric sprites like scenery objects are visually anchored at their origin point.
 
-- [ ] 5.4 Functionally verify action key: load a level with manual doors (e.g., Arrival), walk up to a door, press Space, and confirm the door opens. Find a light switch panel and confirm it toggles the light.
+- [x] 5.4 Functionally verify action key: load a level with manual doors (e.g., Arrival), walk up to a door, press Space, and confirm the door opens. Find a light switch panel and confirm it toggles the light.

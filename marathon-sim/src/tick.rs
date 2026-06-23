@@ -2781,6 +2781,94 @@ mod tests {
         );
     }
 
+    /// Box 5.4 infra: `debug_toggle_nearest_light_switch()` must drive the REAL
+    /// action-key path (face the switch → one ACTION rising-edge tick →
+    /// `find_action_key_target` → `ToggleLight`) and report the controlled
+    /// light's intensity straddling the toggle, crossing the lit/dark boundary.
+    #[test]
+    fn debug_toggle_nearest_light_switch_flips_the_controlled_light() {
+        use crate::components::{Light, LightFunction, LightFunctionSpec, LightState, LightType};
+        use crate::world_mechanics::panels::{ControlPanel, ControlPanels, PanelAction};
+
+        let mut world = minimal_sim_world();
+
+        // A steady light (index 3) currently fully lit, sitting in PrimaryActive.
+        let lit_spec = LightFunctionSpec {
+            function: LightFunction::Constant,
+            period: 100,
+            delta_period: 0,
+            intensity: 1.0,
+            delta_intensity: 0.0,
+        };
+        let dark_spec = LightFunctionSpec {
+            function: LightFunction::Constant,
+            period: 100,
+            delta_period: 0,
+            intensity: 0.0,
+            delta_intensity: 0.0,
+        };
+        {
+            use crate::components::{Facing, Position, VerticalLook};
+            use crate::{Player, PolygonIndex};
+            use glam::Vec3;
+
+            let ecs = world.ecs_world_mut();
+            // The minimal map has no player object, so spawn one (the debug hook
+            // repositions it onto the switch). Placed at the square's center.
+            ecs.spawn((
+                Player,
+                Position(Vec3::new(0.5, 0.5, 0.0)),
+                Facing(0.0),
+                VerticalLook::default(),
+                PolygonIndex(0),
+            ));
+            ecs.spawn(Light {
+                light_index: 3,
+                light_type: LightType::Normal,
+                state: LightState::PrimaryActive,
+                flags: 0,
+                phase: 0,
+                period: 100,
+                current_intensity: 1.0,
+                initial_intensity: 1.0,
+                final_intensity: 1.0,
+                // active hold = lit, inactive hold = dark.
+                functions: [
+                    lit_spec, lit_spec, lit_spec, dark_spec, dark_spec, dark_spec,
+                ],
+                tag: 0,
+            });
+
+            // A light switch on line 1 (the east wall of the unit square) driving
+            // light index 3. The minimal world's MapGeometry already carries this
+            // line's endpoints/adjacency, so the debug pose + raycast can use it.
+            ecs.insert_resource(ControlPanels(vec![ControlPanel {
+                line_index: 1,
+                side: 0,
+                action: PanelAction::ToggleLight { light_index: 3 },
+                max_distance: 1.5,
+            }]));
+        }
+
+        let (idx, before, after) = world
+            .debug_toggle_nearest_light_switch()
+            .expect("the level has a light switch, so a toggle result is expected");
+
+        assert_eq!(idx, 3, "the reported light is the one the switch controls");
+        assert!(
+            before > 0.5,
+            "the light started lit (before={before}), so the toggle must darken it"
+        );
+        assert!(
+            after < 0.5,
+            "after activating the switch the light must be dark (after={after})"
+        );
+        assert!(
+            (before - after).abs() > 0.4,
+            "the toggle must move the intensity substantially (before={before}, after={after})"
+        );
+    }
+
     #[test]
     fn action_flags_empty() {
         let flags = ActionFlags::default();
