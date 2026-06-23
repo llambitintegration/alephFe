@@ -8,10 +8,10 @@
 
 ## 2. Attach Components at Player Spawn
 
-- [ ] 2.1 In `spawn_map_objects()` in `marathon-sim/src/world.rs`, add `PowerupTimers::default()` and `InventoryItems::default()` to the player entity spawn bundle.
-- [ ] 2.2 In `spawn_map_objects()`, create a `WeaponInventory` with fists in slot 0 (weapon definition index 0) and attach it to the player entity as a component (or insert it as a resource, matching existing inventory architecture).
-- [ ] 2.3 Insert an empty `ItemRespawnQueue` resource in `SimWorld::new()`.
-- [ ] 2.4 Add unit test: construct a `SimWorld` from test data and verify the player entity has `PowerupTimers`, `InventoryItems`, and `WeaponInventory`.
+- [x] 2.1 In `spawn_map_objects()` in `marathon-sim/src/world.rs`, add `PowerupTimers::default()` and `InventoryItems::default()` to the player entity spawn bundle.
+- [x] 2.2 In `spawn_map_objects()`, create a `WeaponInventory` with fists in slot 0 (weapon definition index 0) and attach it to the player entity as a component (or insert it as a resource, matching existing inventory architecture).
+- [x] 2.3 Insert an empty `ItemRespawnQueue` resource in `SimWorld::new()`.
+- [x] 2.4 Add unit test: construct a `SimWorld` from test data and verify the player entity has `PowerupTimers`, `InventoryItems`, and `WeaponInventory`.
 
 ## 3. Fill Missing `item_effect()` Match Arms
 
@@ -22,17 +22,17 @@
 
 ## 4. Implement Core Pickup Logic
 
-- [ ] 4.1 Create `marathon-sim/src/world_mechanics/pickup.rs` (or add to items.rs) with a function `can_pickup(player_pos: Vec2, player_poly: usize, item_pos: Vec2, item_poly: usize, geometry: &MapGeometry) -> bool` that checks 2D distance < 1.0 WU and same-or-adjacent polygon.
-- [ ] 4.2 Implement `apply_item_effect()` function that takes a mutable player state (Health, Shield, Oxygen, WeaponInventory, PowerupTimers, InventoryItems) and an `ItemEffect`, applies the effect with cap enforcement, and returns `bool` (true if effect applied, false if wasted).
-- [ ] 4.3 Health cap logic: clamp `Health.0` at 150 after adding amount. Return false if already at 150.
-- [ ] 4.4 Shield cap logic: determine cap from amount (150 -> cap 150, 300 -> cap 300, 450 -> cap 450). Return false if shield >= cap. Set shield to `min(current + amount, cap)`.
-- [ ] 4.5 Oxygen cap logic: clamp `Oxygen.0` at 600 after adding amount. Return false if already at 600.
-- [ ] 4.6 Weapon grant logic: check `WeaponInventory.weapons[def_index]`. If `Some`, return false. Otherwise insert a new `WeaponSlot` with zeroed magazines/reserves.
-- [ ] 4.7 Ammo grant logic: find `WeaponSlot` by `weapon_definition_index`. Add amount to `primary_reserve` or `secondary_reserve`. Cap at maximum. Return false if already at max.
-- [ ] 4.8 Powerup activation logic: set `PowerupTimers` field to `max(current, duration)`. Always returns true (powerups are always picked up).
-- [ ] 4.9 Inventory item logic: increment count in `InventoryItems` map. Always returns true.
-- [ ] 4.10 Add unit tests for `can_pickup()`: same polygon within range, same polygon out of range, adjacent polygon within range, non-adjacent polygon, solid-wall adjacent.
-- [ ] 4.11 Add unit tests for `apply_item_effect()`: each effect type with normal application, cap enforcement, and wasted-pickup rejection.
+- [x] 4.1 Create `marathon-sim/src/world_mechanics/pickup.rs` (or add to items.rs) with a function `can_pickup(player_pos: Vec2, player_poly: usize, item_pos: Vec2, item_poly: usize, geometry: &MapGeometry) -> bool` that checks 2D distance < 1.0 WU and same-or-adjacent polygon.
+- [x] 4.2 Implement `apply_item_effect()` function that takes a mutable player state (Health, Shield, Oxygen, WeaponInventory, PowerupTimers, InventoryItems) and an `ItemEffect`, applies the effect with cap enforcement, and returns `bool` (true if effect applied, false if wasted).
+- [x] 4.3 Health cap logic: clamp `Health.0` at 150 after adding amount. Return false if already at 150.
+- [x] 4.4 Shield cap logic: determine cap from amount (150 -> cap 150, 300 -> cap 300, 450 -> cap 450). Return false if shield >= cap. Set shield to `min(current + amount, cap)`.
+- [x] 4.5 Oxygen cap logic: clamp `Oxygen.0` at 600 after adding amount. Return false if already at 600.
+- [x] 4.6 Weapon grant logic: check `WeaponInventory.weapons[def_index]`. If `Some`, return false. Otherwise insert a new `WeaponSlot` with zeroed magazines/reserves.
+- [x] 4.7 Ammo grant logic: find `WeaponSlot` by `weapon_definition_index`. Add amount to `primary_reserve` or `secondary_reserve`. Cap at maximum. Return false if already at max.
+- [x] 4.8 Powerup activation logic: set `PowerupTimers` field to `max(current, duration)`. Always returns true (powerups are always picked up).
+- [x] 4.9 Inventory item logic: increment count in `InventoryItems` map. Always returns true.
+- [x] 4.10 Add unit tests for `can_pickup()`: same polygon within range, same polygon out of range, adjacent polygon within range, non-adjacent polygon, solid-wall adjacent.
+- [x] 4.11 Add unit tests for `apply_item_effect()`: each effect type with normal application, cap enforcement, and wasted-pickup rejection.
 
 ## 5. Wire Pickup System into Tick Loop
 

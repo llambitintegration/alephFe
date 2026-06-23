@@ -1,8 +1,13 @@
-use bevy_ecs::prelude::Resource;
+use bevy_ecs::prelude::{Component, Resource};
 use serde::{Deserialize, Serialize};
 
 /// Player weapon inventory.
-#[derive(Debug, Clone, Default, Resource, Serialize, Deserialize)]
+///
+/// Available both as a `Resource` (the live, mutated inventory the tick loop
+/// reads via `get_resource`/`get_resource_mut`) and as a `Component` attached to
+/// the player entity at spawn, so per-entity queries can locate the player's
+/// weapons.
+#[derive(Debug, Clone, Default, Component, Resource, Serialize, Deserialize)]
 pub struct WeaponInventory {
     /// Weapons the player has (by definition index). None = empty slot.
     pub weapons: Vec<Option<WeaponSlot>>,
