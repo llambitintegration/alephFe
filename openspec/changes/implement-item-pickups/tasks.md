@@ -36,14 +36,14 @@
 
 ## 5. Wire Pickup System into Tick Loop
 
-- [ ] 5.1 Add `run_item_pickups()` method on `SimWorld` in `marathon-sim/src/tick.rs`. Query player `(Position, PolygonIndex, Health, Shield, Oxygen, PowerupTimers, InventoryItems)` plus `WeaponInventory`. For each `(Entity, Item, Position, PolygonIndex)` item entity, call `can_pickup()` and `apply_item_effect()`. On success, despawn item entity and emit `SimEvent::ItemPickedUp`.
-- [ ] 5.2 Call `run_item_pickups()` in `SimWorld::tick()` after `run_player_physics()` and before the tick counter increment.
-- [ ] 5.3 Add `run_powerup_countdown()` method that decrements all non-zero `PowerupTimers` fields by 1. Call it in `tick()` after item pickups.
-- [ ] 5.4 Add `run_item_respawns()` method that decrements all entries in `ItemRespawnQueue`, spawns new Item entities for entries that reach zero, and removes completed entries. Call it in `tick()`.
-- [ ] 5.5 Add integration test: construct world with player near a health item, tick once, verify health increased and item despawned.
-- [ ] 5.6 Add integration test: construct world with player near a weapon, tick once, verify weapon in inventory.
-- [ ] 5.7 Add integration test: construct world with player at full health near health item, tick once, verify item NOT despawned.
-- [ ] 5.8 Add integration test: activate invincibility, tick 1500 times, verify timer reaches 0.
+- [x] 5.1 Add `run_item_pickups()` method on `SimWorld` in `marathon-sim/src/tick.rs`. Query player `(Position, PolygonIndex, Health, Shield, Oxygen, PowerupTimers, InventoryItems)` plus `WeaponInventory`. For each `(Entity, Item, Position, PolygonIndex)` item entity, call `can_pickup()` and `apply_item_effect()`. On success, despawn item entity and emit `SimEvent::ItemPickedUp`. [Wires the live `WeaponInventory` **resource** (what the firing path reads), not the per-entity component; item→ItemEffect via existing `items::item_effect()`. Replaces the old `update_items()` stub (box 3.3) — no dead duplicate path remains.]
+- [x] 5.2 Call `run_item_pickups()` in `SimWorld::tick()` after `run_player_physics()` and before the tick counter increment.
+- [x] 5.3 Add `run_powerup_countdown()` method that decrements all non-zero `PowerupTimers` fields by 1. Call it in `tick()` after item pickups.
+- [x] 5.4 Add `run_item_respawns()` method that decrements all entries in `ItemRespawnQueue`, spawns new Item entities for entries that reach zero, and removes completed entries. Call it in `tick()`.
+- [x] 5.5 Add integration test: construct world with player near a health item, tick once, verify health increased and item despawned.
+- [x] 5.6 Add integration test: construct world with player near a weapon, tick once, verify weapon in inventory.
+- [x] 5.7 Add integration test: construct world with player at full health near health item, tick once, verify item NOT despawned.
+- [x] 5.8 Add integration test: activate invincibility, tick 1500 times, verify timer reaches 0.
 
 ## 6. Update Player State Queries
 
