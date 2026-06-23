@@ -65,10 +65,21 @@ pub struct Vertex {
     /// baked `position.y`. Floor/ceiling/media vertices carry their own
     /// surface+polygon as a forward-consistent default (unused for them).
     pub height_source: u32,
+    /// Material flag bits for surface-specific shading. Currently only
+    /// [`MATERIAL_DOOR`] (bit 0): set on the wall quad a *closed* door presents
+    /// to the player, so the fragment shader can render it with a distinct
+    /// "door" look (tint + frame band) and the door reads as a door at a
+    /// distance. Zero for ordinary geometry.
+    pub material_flags: u32,
 }
 
+/// `Vertex::material_flags` bit: this surface is the face of a closed door
+/// (a type-5 platform polygon). The shader keys its distinct door appearance
+/// off this bit.
+pub const MATERIAL_DOOR: u32 = 1 << 0;
+
 impl Vertex {
-    const ATTRIBS: [wgpu::VertexAttribute; 7] = wgpu::vertex_attr_array![
+    const ATTRIBS: [wgpu::VertexAttribute; 8] = wgpu::vertex_attr_array![
         0 => Float32x3,
         1 => Float32x2,
         2 => Uint32,
@@ -76,6 +87,7 @@ impl Vertex {
         4 => Uint32,
         5 => Uint32,
         6 => Uint32,
+        7 => Uint32,
     ];
 
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -279,6 +291,7 @@ fn build_floor(
             transfer_mode: info.floor_transfer_mode,
             polygon_index: poly_idx as u32,
             height_source: pack_height_source(WALL_HEIGHT_FROM_FLOOR, poly_idx as u32),
+            material_flags: 0,
         });
         actual_verts += 1;
     }
@@ -326,6 +339,7 @@ fn build_ceiling(
             transfer_mode: info.ceiling_transfer_mode,
             polygon_index: poly_idx as u32,
             height_source: pack_height_source(WALL_HEIGHT_FROM_CEILING, poly_idx as u32),
+            material_flags: 0,
         });
         actual_verts += 1;
     }
@@ -377,6 +391,7 @@ fn build_media_surface(
             // Media keeps baked Y; tag with the owning polygon's floor selector
             // for forward consistency (unused by the shader for media).
             height_source: pack_height_source(WALL_HEIGHT_FROM_FLOOR, poly_idx as u32),
+            material_flags: 0,
         });
         actual_verts += 1;
     }
@@ -459,6 +474,24 @@ fn build_wall_side(
     let polygon = &map.polygons[poly_idx];
     let info = &poly_info[poly_idx];
 
+    // Tag the wall as a door surface when the polygon on the *other* side of
+    // this line is a type-5 platform (door). When that door is closed its
+    // floor meets its ceiling, so the player only ever sees this wall face —
+    // marking it lets the shader give it a distinct, recognizable door look.
+    const POLYGON_TYPE_PLATFORM: i16 = 5;
+    let door_flags = match adjacent_poly_idx {
+        Some(adj_idx)
+            if map
+                .polygons
+                .get(adj_idx)
+                .map(|p| p.polygon_type == POLYGON_TYPE_PLATFORM)
+                .unwrap_or(false) =>
+        {
+            MATERIAL_DOOR
+        }
+        _ => 0,
+    };
+
     let (ep0_idx, ep1_idx) = if reverse_endpoints {
         (line.endpoint_indexes[1], line.endpoint_indexes[0])
     } else {
@@ -499,6 +532,7 @@ fn build_wall_side(
                     poly_idx,
                     pack_height_source(WALL_HEIGHT_FROM_FLOOR, poly_idx as u32),
                     pack_height_source(WALL_HEIGHT_FROM_CEILING, poly_idx as u32),
+                    door_flags,
                 );
             }
         }
@@ -527,6 +561,7 @@ fn build_wall_side(
                         poly_idx,
                         pack_height_source(WALL_HEIGHT_FROM_CEILING, adj_idx as u32),
                         pack_height_source(WALL_HEIGHT_FROM_CEILING, poly_idx as u32),
+                        door_flags,
                     );
                 }
             }
@@ -556,6 +591,7 @@ fn build_wall_side(
                         poly_idx,
                         pack_height_source(WALL_HEIGHT_FROM_FLOOR, poly_idx as u32),
                         pack_height_source(WALL_HEIGHT_FROM_FLOOR, adj_idx as u32),
+                        door_flags,
                     );
                 }
             }
@@ -586,6 +622,7 @@ fn build_wall_side(
                         poly_idx,
                         pack_height_source(WALL_HEIGHT_FROM_FLOOR, poly_idx as u32),
                         pack_height_source(WALL_HEIGHT_FROM_FLOOR, adj_idx as u32),
+                        door_flags,
                     );
                 }
 
@@ -612,6 +649,7 @@ fn build_wall_side(
                         poly_idx,
                         pack_height_source(WALL_HEIGHT_FROM_FLOOR, adj_idx as u32),
                         pack_height_source(WALL_HEIGHT_FROM_CEILING, adj_idx as u32),
+                        door_flags,
                     );
                 }
 
@@ -637,6 +675,7 @@ fn build_wall_side(
                         poly_idx,
                         pack_height_source(WALL_HEIGHT_FROM_CEILING, adj_idx as u32),
                         pack_height_source(WALL_HEIGHT_FROM_CEILING, poly_idx as u32),
+                        door_flags,
                     );
                 }
             }
@@ -663,6 +702,7 @@ fn emit_wall_quad(
     poly_idx: usize,
     bottom_source: u32,
     top_source: u32,
+    material_flags: u32,
 ) {
     let base = vertices.len() as u32;
     let height = top - bottom;
@@ -678,6 +718,7 @@ fn emit_wall_quad(
         transfer_mode,
         polygon_index,
         height_source: bottom_source,
+        material_flags,
     });
     vertices.push(Vertex {
         position: [x0, top, z0],
@@ -687,6 +728,7 @@ fn emit_wall_quad(
         transfer_mode,
         polygon_index,
         height_source: top_source,
+        material_flags,
     });
     vertices.push(Vertex {
         position: [x1, top, z1],
@@ -696,6 +738,7 @@ fn emit_wall_quad(
         transfer_mode,
         polygon_index,
         height_source: top_source,
+        material_flags,
     });
     vertices.push(Vertex {
         position: [x1, bottom, z1],
@@ -705,6 +748,7 @@ fn emit_wall_quad(
         transfer_mode,
         polygon_index,
         height_source: bottom_source,
+        material_flags,
     });
 
     indices.push(base);
@@ -840,8 +884,8 @@ mod tests {
     fn vertex_size_matches_gpu_layout() {
         // 3 floats (pos) + 2 floats (uv) + 1 u32 (tex_desc) + 1 float (light)
         // + 1 u32 (transfer) + 1 u32 (polygon_index) + 1 u32 (height_source)
-        // = 10 * 4 = 40 bytes
-        assert_eq!(std::mem::size_of::<Vertex>(), 40);
+        // + 1 u32 (material_flags) = 11 * 4 = 44 bytes
+        assert_eq!(std::mem::size_of::<Vertex>(), 44);
     }
 
     #[test]
@@ -855,24 +899,28 @@ mod tests {
             transfer_mode: 0,
             polygon_index: 7,
             height_source: pack_height_source(WALL_HEIGHT_FROM_FLOOR, 7),
+            material_flags: 0,
         };
         let bytes: &[u8] = bytemuck::bytes_of(&v);
-        assert_eq!(bytes.len(), 40);
+        assert_eq!(bytes.len(), 44);
     }
 
     #[test]
     fn vertex_layout_includes_polygon_index_attribute() {
         let layout = Vertex::layout();
-        assert_eq!(layout.array_stride, 40);
-        // 7 attributes: pos, uv, tex_desc, light, transfer, polygon_index,
-        // height_source.
-        assert_eq!(layout.attributes.len(), 7);
+        assert_eq!(layout.array_stride, 44);
+        // 8 attributes: pos, uv, tex_desc, light, transfer, polygon_index,
+        // height_source, material_flags.
+        assert_eq!(layout.attributes.len(), 8);
         let pi = layout.attributes[5];
         assert_eq!(pi.shader_location, 5);
         assert_eq!(pi.format, wgpu::VertexFormat::Uint32);
         let hs = layout.attributes[6];
         assert_eq!(hs.shader_location, 6);
         assert_eq!(hs.format, wgpu::VertexFormat::Uint32);
+        let mf = layout.attributes[7];
+        assert_eq!(mf.shader_location, 7);
+        assert_eq!(mf.format, wgpu::VertexFormat::Uint32);
     }
 
     #[test]
