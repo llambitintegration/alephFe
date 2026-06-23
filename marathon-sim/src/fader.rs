@@ -6,6 +6,8 @@
 //! its active faders into post-process draw calls. See
 //! `openspec/changes/implement-fullscreen-effects/design.md`.
 
+use marathon_formats::MmlSection;
+
 /// Compositing mode for a full-screen fader overlay.
 ///
 /// The six Marathon blend modes, each applied in the post-process fragment
@@ -28,6 +30,24 @@ pub enum FaderBlendMode {
     Burn = 4,
     /// Gentle tint for sustained effects: `mix(scene, scene * color, intensity * 0.5)`.
     SoftTint = 5,
+}
+
+impl FaderBlendMode {
+    /// The [`FaderBlendMode`] for a shader mode index (`0..=5`), or `None` if the
+    /// index is out of range. The mapping mirrors the enum discriminants:
+    /// `0 = Tint`, `1 = Randomize`, `2 = Negate`, `3 = Dodge`, `4 = Burn`,
+    /// `5 = SoftTint` (the Blend Mode Specifications table in `design.md`).
+    pub fn from_index(index: u32) -> Option<Self> {
+        match index {
+            0 => Some(FaderBlendMode::Tint),
+            1 => Some(FaderBlendMode::Randomize),
+            2 => Some(FaderBlendMode::Negate),
+            3 => Some(FaderBlendMode::Dodge),
+            4 => Some(FaderBlendMode::Burn),
+            5 => Some(FaderBlendMode::SoftTint),
+            _ => None,
+        }
+    }
 }
 
 /// Deduplication tag identifying which game effect owns a fader.
@@ -290,6 +310,76 @@ impl FaderConfigTable {
     /// range (valid indices are `0..FADER_TYPE_COUNT`).
     pub fn config_by_index(&self, index: usize) -> Option<FaderConfig> {
         self.configs.get(index).copied()
+    }
+
+    /// Override the M2 defaults with a parsed MML `<faders>` section.
+    ///
+    /// Reads the parsed `faders` [`MmlSection`] produced by `marathon-formats`
+    /// (Decision 6 in `openspec/changes/implement-fullscreen-effects/design.md`)
+    /// and overrides the matching entries in this table. Each `<fader index="N">`
+    /// element maps to the fader-type slot at index `N` (`0 = Damage` ..
+    /// `6 = Infravision`, mirroring the [`FaderTag`] discriminant order); a
+    /// `<fader>` with a missing or out-of-range `index` is skipped.
+    ///
+    /// Per-fader overrides are applied only for the attributes that are present,
+    /// so a partial element (e.g. only `duration`) leaves the other fields at
+    /// their default. Recognized attributes:
+    ///
+    /// - `red`/`green`/`blue`/`alpha` — RGBA color channels (`f32`, 0.0..=1.0).
+    ///   A channel with no attribute keeps the default channel value.
+    /// - `blend_mode` — the [`FaderBlendMode`] index (`0..=5`); out-of-range or
+    ///   malformed values are ignored.
+    /// - `duration` — lifetime in ticks (`u16`).
+    /// - `intensity` — base intensity at trigger time (`f32`).
+    ///
+    /// Attribute values follow AlephOne's lenient parsing conventions (see
+    /// [`marathon_formats::mml_interpret`]); a malformed value warns and leaves
+    /// the corresponding field unchanged rather than failing.
+    pub fn apply_mml_faders(&mut self, section: &MmlSection) {
+        use marathon_formats::mml_interpret::{parse_mml_f32, parse_mml_u32};
+
+        for el in &section.elements {
+            if el.name != "fader" {
+                continue;
+            }
+            // A `<fader>` without a parseable, in-range index is skipped.
+            let index = match el.attributes.get("index").and_then(|s| parse_mml_u32(s)) {
+                Some(i) => i as usize,
+                None => continue,
+            };
+            let Some(config) = self.configs.get_mut(index) else {
+                continue;
+            };
+
+            // Color channels: override only the channels that are present.
+            for (chan, key) in ["red", "green", "blue", "alpha"].iter().enumerate() {
+                if let Some(v) = el.attributes.get(*key).and_then(|s| parse_mml_f32(s)) {
+                    config.color[chan] = v;
+                }
+            }
+
+            // Blend mode: map the mode index (0..=5) onto a `FaderBlendMode`.
+            if let Some(mode) = el
+                .attributes
+                .get("blend_mode")
+                .and_then(|s| parse_mml_u32(s))
+                .and_then(FaderBlendMode::from_index)
+            {
+                config.blend_mode = mode;
+            }
+
+            // Duration (ticks) and base intensity.
+            if let Some(d) = el.attributes.get("duration").and_then(|s| parse_mml_u32(s)) {
+                config.duration = d.min(u16::MAX as u32) as u16;
+            }
+            if let Some(i) = el
+                .attributes
+                .get("intensity")
+                .and_then(|s| parse_mml_f32(s))
+            {
+                config.base_intensity = i;
+            }
+        }
     }
 }
 
@@ -578,6 +668,96 @@ mod tests {
 
         // Out-of-range index returns None.
         assert_eq!(table.config_by_index(99), None);
+    }
+
+    /// Box 2.3: the MML `faders` section overrides matching `FaderConfigTable`
+    /// entries. We build the M2 defaults, then apply a parsed `<faders>` section
+    /// that overrides the damage fader (index 0) — color to blue, blend mode to
+    /// Negate, duration and intensity — and asserts the overridden fields change
+    /// while a non-overridden entry (teleport, index 1) keeps its default.
+    #[test]
+    fn test_apply_mml_faders_overrides_matching_entries() {
+        use marathon_formats::MmlDocument;
+
+        let mut table = FaderConfigTable::marathon2_defaults();
+        let damage_default = table.config(FaderTag::Damage);
+        let teleport_default = table.config(FaderTag::Teleport);
+
+        // Sanity: the damage default is a red tint (so the override is observable).
+        assert_eq!(damage_default.blend_mode, FaderBlendMode::Tint);
+        assert!(damage_default.color[2] < 0.3, "damage default blue is low");
+
+        // Parse a `<faders>` section overriding fader index 0 (damage):
+        // color -> blue, blend_mode -> 2 (Negate), duration -> 20, intensity -> 0.3.
+        let doc = MmlDocument::from_bytes(
+            br#"<marathon><faders><fader index="0" red="0.0" green="0.0" blue="1.0" alpha="1.0" blend_mode="2" duration="20" intensity="0.3"/></faders></marathon>"#,
+        )
+        .unwrap();
+        let section = doc.faders.expect("faders section parsed");
+
+        table.apply_mml_faders(&section);
+
+        // Damage (index 0) reflects every overridden field.
+        let damage = table.config(FaderTag::Damage);
+        assert_eq!(
+            damage.color,
+            [0.0, 0.0, 1.0, 1.0],
+            "damage color overridden to blue"
+        );
+        assert_eq!(
+            damage.blend_mode,
+            FaderBlendMode::Negate,
+            "damage blend mode overridden to Negate"
+        );
+        assert_eq!(damage.duration, 20, "damage duration overridden");
+        assert!(
+            (damage.base_intensity - 0.3).abs() < 1e-6,
+            "damage base intensity overridden, got {}",
+            damage.base_intensity
+        );
+
+        // Teleport (index 1) was not mentioned: it keeps its default unchanged.
+        assert_eq!(
+            table.config(FaderTag::Teleport),
+            teleport_default,
+            "non-overridden entry keeps its default"
+        );
+    }
+
+    /// Box 2.3: a partial `<fader>` override touches only the named attributes;
+    /// fields with no corresponding attribute keep the M2 default. A `<fader>`
+    /// element without a parseable `index` is skipped (no panic, no change).
+    #[test]
+    fn test_apply_mml_faders_partial_and_skips_unindexed() {
+        use marathon_formats::MmlDocument;
+
+        let mut table = FaderConfigTable::marathon2_defaults();
+        let lava_default = table.config(FaderTag::Lava); // index 5
+
+        // Override only the lava duration; leave color/blend_mode/intensity alone.
+        // The index-less <fader> is ignored.
+        let doc = MmlDocument::from_bytes(
+            br#"<marathon><faders><fader index="5" duration="99"/><fader duration="1"/></faders></marathon>"#,
+        )
+        .unwrap();
+        let section = doc.faders.unwrap();
+
+        table.apply_mml_faders(&section);
+
+        let lava = table.config(FaderTag::Lava);
+        assert_eq!(lava.duration, 99, "lava duration overridden");
+        assert_eq!(
+            lava.color, lava_default.color,
+            "lava color untouched by a duration-only override"
+        );
+        assert_eq!(
+            lava.blend_mode, lava_default.blend_mode,
+            "lava blend mode untouched"
+        );
+        assert_eq!(
+            lava.base_intensity, lava_default.base_intensity,
+            "lava base intensity untouched"
+        );
     }
 
     #[test]
