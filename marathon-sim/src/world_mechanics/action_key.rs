@@ -2,8 +2,13 @@ use crate::world::MapGeometry;
 use crate::world_mechanics::panels::ControlPanels;
 use glam::Vec2;
 
-/// Maximum distance for platform/door activation (3 world units).
-const MAXIMUM_ACTIVATION_RANGE: f32 = 3.0;
+/// Maximum distance for platform/door activation (5 world units).
+///
+/// Widened from 3.0 to 5.0 so a player standing a comfortable pace away from a
+/// door can still activate it with the action key. 5 WU is roughly a relaxed
+/// standing distance in front of a door without being so generous that it
+/// triggers doors at the far end of a corridor.
+const MAXIMUM_ACTIVATION_RANGE: f32 = 5.0;
 /// Maximum distance for control panel activation (1.5 world units).
 const MAXIMUM_CONTROL_ACTIVATION_RANGE: f32 = 1.5;
 /// Polygon type for platforms.
@@ -312,5 +317,86 @@ mod tests {
         // Player at origin facing east, wall at x=1 (distance 1.0 < 1.5)
         let result = find_action_key_target(Vec2::new(0.0, 0.0), 0.0, 0, &geometry, &panels);
         assert_eq!(result, ActionTarget::Panel(0));
+    }
+
+    /// Build a two-polygon corridor: a long room (poly 0) with a door room
+    /// (poly 1, type=5 platform) on its east end, sharing the line at `x =
+    /// door_x`. The player stands at the origin facing east. Used to exercise
+    /// the activation-range boundary (door at 4.5 WU should activate, 7 WU
+    /// should not).
+    fn corridor_with_door_at(door_x: f32) -> MapGeometry {
+        MapGeometry {
+            polygon_vertices: vec![
+                // Polygon 0: room from x=-1 up to the shared door line.
+                vec![
+                    Vec2::new(-1.0, -1.0),
+                    Vec2::new(door_x, -1.0),
+                    Vec2::new(door_x, 1.0),
+                    Vec2::new(-1.0, 1.0),
+                ],
+                // Polygon 1: door room beyond the shared line.
+                vec![
+                    Vec2::new(door_x, -1.0),
+                    Vec2::new(door_x + 2.0, -1.0),
+                    Vec2::new(door_x + 2.0, 1.0),
+                    Vec2::new(door_x, 1.0),
+                ],
+            ],
+            floor_heights: vec![0.0, 0.0],
+            ceiling_heights: vec![3.0, 3.0],
+            polygon_adjacency: vec![
+                // Poly 0 edges: bottom(0), right→poly1(1), top(2), left(3)
+                vec![(0, None), (1, Some(1)), (2, None), (3, None)],
+                // Poly 1 edges: bottom(4), right(5), top(6), left→poly0(1)
+                vec![(4, None), (5, None), (6, None), (1, Some(0))],
+            ],
+            line_endpoints: vec![
+                (Vec2::new(-1.0, -1.0), Vec2::new(door_x, -1.0)),
+                (Vec2::new(door_x, -1.0), Vec2::new(door_x, 1.0)),
+                (Vec2::new(-1.0, 1.0), Vec2::new(door_x, 1.0)),
+                (Vec2::new(-1.0, -1.0), Vec2::new(-1.0, 1.0)),
+                (Vec2::new(door_x, -1.0), Vec2::new(door_x + 2.0, -1.0)),
+                (Vec2::new(door_x + 2.0, -1.0), Vec2::new(door_x + 2.0, 1.0)),
+                (Vec2::new(door_x, 1.0), Vec2::new(door_x + 2.0, 1.0)),
+            ],
+            line_solid: vec![true, false, true, true, true, true, true],
+            line_transparent: vec![false, true, false, false, false, false, false],
+            polygon_media_index: vec![-1, -1],
+            polygon_floor_light_index: vec![-1, -1],
+            polygon_ceiling_light_index: vec![-1, -1],
+            polygon_types: vec![0, 5], // poly 1 is a platform (door)
+            polygon_permutations: vec![-1, 0],
+            line_side_indices: vec![
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+                (None, None),
+            ],
+            changed_polygons: vec![false; 2],
+            has_changes: false,
+        }
+    }
+
+    #[test]
+    fn action_target_finds_door_at_four_point_five_units() {
+        // Door line sits at x=4.5; player at origin → 4.5 WU away, inside the
+        // 5.0 WU activation range, so the door is found.
+        let geometry = corridor_with_door_at(4.5);
+        let panels = ControlPanels::default();
+        let result = find_action_key_target(Vec2::new(0.0, 0.0), 0.0, 0, &geometry, &panels);
+        assert_eq!(result, ActionTarget::Platform(1));
+    }
+
+    #[test]
+    fn action_target_misses_door_at_seven_units() {
+        // Door line sits at x=7.0; player at origin → 7 WU away, beyond the
+        // 5.0 WU activation range, so nothing is activated.
+        let geometry = corridor_with_door_at(7.0);
+        let panels = ControlPanels::default();
+        let result = find_action_key_target(Vec2::new(0.0, 0.0), 0.0, 0, &geometry, &panels);
+        assert_eq!(result, ActionTarget::None);
     }
 }
