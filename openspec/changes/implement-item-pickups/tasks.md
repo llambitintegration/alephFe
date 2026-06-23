@@ -47,20 +47,20 @@
 
 ## 6. Update Player State Queries
 
-- [ ] 6.1 Add `player_weapons()` accessor on `SimWorld` returning `Option<&WeaponInventory>`.
-- [ ] 6.2 Add `player_powerups()` accessor on `SimWorld` returning `Option<PowerupTimers>`.
-- [ ] 6.3 Add `player_inventory()` accessor on `SimWorld` returning inventory item counts.
-- [ ] 6.4 Add unit tests for each new accessor.
+- [x] 6.1 Add `player_weapons()` accessor on `SimWorld` returning `Option<&WeaponInventory>`.
+- [x] 6.2 Add `player_powerups()` accessor on `SimWorld` returning `Option<PowerupTimers>`.
+- [x] 6.3 Add `player_inventory()` accessor on `SimWorld` returning inventory item counts.
+- [x] 6.4 Add unit tests for each new accessor.
 
 ## 7. Update Serialization
 
-- [ ] 7.1 Add `powerup_timers` and `inventory_items` fields to `PlayerSnapshot` in `marathon-sim/src/world.rs`.
-- [ ] 7.2 Add `weapon_inventory` field to `PlayerSnapshot`.
-- [ ] 7.3 Add `respawn_queue: Vec<ItemRespawnEntry>` field to `SimSnapshot`.
-- [ ] 7.4 Update `SimWorld::snapshot()` to read and include `PowerupTimers`, `InventoryItems`, `WeaponInventory`, and `ItemRespawnQueue`.
-- [ ] 7.5 Update `SimWorld::deserialize()` to restore `PowerupTimers`, `InventoryItems`, `WeaponInventory` on the player entity and `ItemRespawnQueue` as a resource.
-- [ ] 7.6 Add round-trip serialization test: set powerup timers, serialize, deserialize, verify timers preserved.
-- [ ] 7.7 Add round-trip serialization test: add respawn entries, serialize, deserialize, verify entries preserved.
+- [x] 7.1 Add `powerup_timers` and `inventory_items` fields to `PlayerSnapshot` in `marathon-sim/src/world.rs`.
+- [x] 7.2 Add `weapon_inventory` field to `PlayerSnapshot`.
+- [x] 7.3 Add `respawn_queue: Vec<ItemRespawnEntry>` field to `SimSnapshot`.
+- [x] 7.4 Update `SimWorld::snapshot()` to read and include `PowerupTimers`, `InventoryItems`, `WeaponInventory`, and `ItemRespawnQueue`.
+- [x] 7.5 Update `SimWorld::deserialize()` to restore `PowerupTimers`, `InventoryItems`, `WeaponInventory` on the player entity and `ItemRespawnQueue` as a resource.
+- [x] 7.6 Add round-trip serialization test: set powerup timers, serialize, deserialize, verify timers preserved.
+- [x] 7.7 Add round-trip serialization test: add respawn entries, serialize, deserialize, verify entries preserved.
 
 ## 8. Combat System Integration
 

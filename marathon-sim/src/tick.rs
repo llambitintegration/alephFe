@@ -2470,6 +2470,34 @@ impl SimWorld {
         ))
     }
 
+    /// Box 6.1: borrow the player's authoritative weapon inventory.
+    ///
+    /// The live `WeaponInventory` is the **resource** mutated by the tick/firing
+    /// path (`run_player_weapons`) and where picked-up weapons land — this is the
+    /// same source `snapshot()` captures. The per-entity `WeaponInventory`
+    /// component is only the spawn-time fists loadout. Returns `None` before a
+    /// player (and therefore the inventory resource) exists.
+    pub fn player_weapons(&self) -> Option<&crate::player::inventory::WeaponInventory> {
+        self.world
+            .get_resource::<crate::player::inventory::WeaponInventory>()
+    }
+
+    /// Box 6.2: the player's active powerup countdown timers, if a player exists.
+    pub fn player_powerups(&mut self) -> Option<crate::PowerupTimers> {
+        let mut query = self
+            .world
+            .query_filtered::<&crate::PowerupTimers, bevy_ecs::prelude::With<crate::Player>>();
+        query.iter(&self.world).next().copied()
+    }
+
+    /// Box 6.3: the player's non-weapon inventory item counts (item type → count).
+    pub fn player_inventory(&mut self) -> Option<std::collections::HashMap<i16, u16>> {
+        let mut query = self
+            .world
+            .query_filtered::<&crate::InventoryItems, bevy_ecs::prelude::With<crate::Player>>();
+        query.iter(&self.world).next().map(|inv| inv.counts.clone())
+    }
+
     /// Query nearby entities for the motion sensor HUD.
     ///
     /// Returns up to 16 entities as (relative_x, relative_z, entity_type)
