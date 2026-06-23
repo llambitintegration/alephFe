@@ -14,7 +14,7 @@
 
 - [x] 2.1 Create `FaderConfig` struct with per-fader-type defaults: color, blend_mode, duration, base_intensity
 - [x] 2.2 Create `FaderConfigTable` mapping fader type index to `FaderConfig`, with hardcoded Marathon 2 defaults
-- [ ] 2.3 Implement MML fader section interpretation: read parsed `faders` entries from `marathon-formats` MML output and override defaults in `FaderConfigTable`
+- [x] 2.3 Implement MML fader section interpretation: read parsed `faders` entries from `marathon-formats` MML output and override defaults in `FaderConfigTable`
 - [ ] 2.4 Add unit test: default config table has red tint for damage (index 0), white randomize for teleport
 - [ ] 2.5 Add unit test: MML override changes damage color to blue, verify config table reflects override
 
