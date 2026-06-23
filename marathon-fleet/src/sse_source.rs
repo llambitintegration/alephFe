@@ -225,10 +225,7 @@ impl SseSource {
         };
 
         let mut buf = [0u8; 8192];
-        let n = match reader.read(&mut buf) {
-            Ok(n) => n,
-            Err(_) => 0,
-        };
+        let n = reader.read(&mut buf).unwrap_or_default();
         if n == 0 {
             return Vec::new();
         }
