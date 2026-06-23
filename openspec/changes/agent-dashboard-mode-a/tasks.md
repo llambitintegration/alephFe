@@ -19,7 +19,7 @@
 ## 2. event-capture-daemon
 
 - [x] 2.1 Define an abstract `LiveEventSource` trait that yields a normalized internal event stream, with the rest of the pipeline transport-agnostic (specs/event-capture-daemon "Abstract live transport source" — scenario "Transport swap leaves the pipeline unchanged").
-- [ ] 2.2 Implement the SSE source: fetch the retained `fleet.snapshot` from `GET /fleet/snapshot` then follow `GET /fleet/sse` for `fleet.delta` on `:9091`, loopback-bound with `?token=` (specs/event-capture-daemon — scenario "SSE source selected by configuration"; design Decision 1).
+- [x] 2.2 Implement the SSE source: fetch the retained `fleet.snapshot` from `GET /fleet/snapshot` then follow `GET /fleet/sse` for `fleet.delta` on `:9091`, loopback-bound with `?token=` (specs/event-capture-daemon — scenario "SSE source selected by configuration"; design Decision 1).
 - [ ] 2.3 Implement the MQTT source: retained `fleet/v1/…` snapshot on connect + live subtree, producing a byte-shape-identical normalized stream to the SSE case (specs/event-capture-daemon — scenario "MQTT source selected by configuration").
 - [ ] 2.4 Select the concrete transport by configuration only, with no downstream code change between SSE and MQTT (specs/event-capture-daemon — scenario "SSE source selected by configuration" / "MQTT source selected by configuration").
 - [x] 2.5 Order every received event strictly by producer-owned monotonic `seq`, reordering out-of-order arrivals before apply (specs/event-capture-daemon "Producer `seq` is the ordering authority" — scenario "Out-of-order arrival is reordered by seq").
