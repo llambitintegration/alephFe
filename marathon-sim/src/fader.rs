@@ -178,6 +178,121 @@ pub struct FaderConfig {
     pub base_intensity: f32,
 }
 
+/// The number of distinct fader types (one `FaderConfig` slot per type).
+///
+/// Indices follow the `FaderTag` declaration order: Damage=0, Teleport=1,
+/// Invincibility=2, Oxygen=3, Shield=4, Lava=5, Infravision=6. The `None`
+/// tag is a dedup sentinel, not a fader type, so it has no table slot.
+const FADER_TYPE_COUNT: usize = 7;
+
+/// Lookup table from fader-type index to its default [`FaderConfig`].
+///
+/// Holds one [`FaderConfig`] per fader type, keyed by the type index (the
+/// `FaderTag` discriminant: Damage=0 .. Infravision=6). [`marathon2_defaults`]
+/// constructs the table with the hardcoded Marathon 2 defaults (red tint for
+/// damage, white randomize static for teleport, soft tints for the sustained
+/// glows, etc.). Box 2.3 lets the MML `faders` section override individual
+/// entries; lookups go through [`config`] (by tag) or [`config_by_index`].
+///
+/// [`marathon2_defaults`]: FaderConfigTable::marathon2_defaults
+/// [`config`]: FaderConfigTable::config
+/// [`config_by_index`]: FaderConfigTable::config_by_index
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FaderConfigTable {
+    /// Per-fader-type defaults, indexed by the `FaderTag` discriminant.
+    configs: [FaderConfig; FADER_TYPE_COUNT],
+}
+
+impl FaderConfigTable {
+    /// Build the table with the hardcoded Marathon 2 per-fader-type defaults.
+    ///
+    /// The defaults mirror the original Marathon 2 fader behaviour described in
+    /// `openspec/changes/implement-fullscreen-effects/design.md` (Decision 6 and
+    /// the sim-event wiring in tasks.md §6):
+    ///
+    /// | Index | Type          | Blend mode | Color       | Duration | Intensity |
+    /// |-------|---------------|------------|-------------|----------|-----------|
+    /// | 0     | Damage        | Tint       | red         | 12       | 0.8       |
+    /// | 1     | Teleport      | Randomize  | white       | 15       | 1.0       |
+    /// | 2     | Invincibility | SoftTint   | gold-green  | 30       | 0.5       |
+    /// | 3     | Oxygen        | SoftTint   | blue-gray   | 15       | 0.4       |
+    /// | 4     | Shield        | Dodge      | blue-white  | 4        | 0.4       |
+    /// | 5     | Lava          | Burn       | orange-red  | 15       | 0.6       |
+    /// | 6     | Infravision   | SoftTint   | green       | 30       | 0.4       |
+    pub fn marathon2_defaults() -> Self {
+        Self {
+            configs: [
+                // 0: Damage — red tint flash.
+                FaderConfig {
+                    color: [0.8, 0.0, 0.0, 1.0],
+                    blend_mode: FaderBlendMode::Tint,
+                    duration: 12,
+                    base_intensity: 0.8,
+                },
+                // 1: Teleport — white randomize static.
+                FaderConfig {
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    blend_mode: FaderBlendMode::Randomize,
+                    duration: 15,
+                    base_intensity: 1.0,
+                },
+                // 2: Invincibility — gold-green soft-tint glow.
+                FaderConfig {
+                    color: [0.8, 0.9, 0.2, 1.0],
+                    blend_mode: FaderBlendMode::SoftTint,
+                    duration: 30,
+                    base_intensity: 0.5,
+                },
+                // 3: Oxygen — blue-gray soft-tint warning.
+                FaderConfig {
+                    color: [0.4, 0.5, 0.6, 1.0],
+                    blend_mode: FaderBlendMode::SoftTint,
+                    duration: 15,
+                    base_intensity: 0.4,
+                },
+                // 4: Shield — blue-white dodge.
+                FaderConfig {
+                    color: [0.6, 0.8, 1.0, 1.0],
+                    blend_mode: FaderBlendMode::Dodge,
+                    duration: 4,
+                    base_intensity: 0.4,
+                },
+                // 5: Lava — orange-red burn.
+                FaderConfig {
+                    color: [0.9, 0.3, 0.1, 1.0],
+                    blend_mode: FaderBlendMode::Burn,
+                    duration: 15,
+                    base_intensity: 0.6,
+                },
+                // 6: Infravision — green soft-tint.
+                FaderConfig {
+                    color: [0.2, 0.9, 0.2, 1.0],
+                    blend_mode: FaderBlendMode::SoftTint,
+                    duration: 30,
+                    base_intensity: 0.4,
+                },
+            ],
+        }
+    }
+
+    /// The default [`FaderConfig`] for the given fader tag.
+    ///
+    /// Maps the tag to its type index (`FaderTag::Damage` -> 0, etc.). The
+    /// `FaderTag::None` sentinel is not a fader type and has no config; it falls
+    /// back to the damage config (index 0) so the accessor is total.
+    pub fn config(&self, tag: FaderTag) -> FaderConfig {
+        let index = tag as usize;
+        // `FaderTag::None` (index 7) is a dedup sentinel, not a fader type.
+        self.configs.get(index).copied().unwrap_or(self.configs[0])
+    }
+
+    /// The [`FaderConfig`] at the given fader-type index, or `None` if out of
+    /// range (valid indices are `0..FADER_TYPE_COUNT`).
+    pub fn config_by_index(&self, index: usize) -> Option<FaderConfig> {
+        self.configs.get(index).copied()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,6 +495,89 @@ mod tests {
         let copied = config;
         let _ = format!("{copied:?}");
         assert_eq!(cloned, copied);
+    }
+
+    /// Box 2.2: `FaderConfigTable` returns the hardcoded Marathon 2 default
+    /// `FaderConfig` for each known fader-type index. Per design.md's per-fader
+    /// defaults: index 0 (damage) is a red tint, teleport is a white randomize,
+    /// shield is a blue-white dodge, lava is an orange-red burn, and the sustained
+    /// effects (invincibility, oxygen, infravision) are soft tints. Box 2.4 adds
+    /// the canonical damage/teleport assertion test; box 2.3 (MML override) builds
+    /// on this lookup.
+    #[test]
+    fn test_fader_config_table_marathon2_defaults() {
+        let table = FaderConfigTable::marathon2_defaults();
+
+        // Damage (index 0) is a red tint.
+        let damage = table.config(FaderTag::Damage);
+        assert_eq!(
+            damage.blend_mode,
+            FaderBlendMode::Tint,
+            "damage default is a tint"
+        );
+        assert!(
+            damage.color[0] > 0.5 && damage.color[1] < 0.3 && damage.color[2] < 0.3,
+            "damage default color is red-ish, got {:?}",
+            damage.color
+        );
+        // Damage type-index is 0.
+        assert_eq!(FaderTag::Damage as usize, 0);
+        assert_eq!(
+            table.config_by_index(0),
+            Some(damage),
+            "index 0 maps to the damage config"
+        );
+
+        // Teleport is a white randomize (static/interference).
+        let teleport = table.config(FaderTag::Teleport);
+        assert_eq!(
+            teleport.blend_mode,
+            FaderBlendMode::Randomize,
+            "teleport default is randomize"
+        );
+        assert!(
+            teleport.color[0] > 0.8 && teleport.color[1] > 0.8 && teleport.color[2] > 0.8,
+            "teleport default color is white-ish, got {:?}",
+            teleport.color
+        );
+        // Teleport duration is 15 ticks (design.md box 6.2).
+        assert_eq!(teleport.duration, 15, "teleport duration is 15 ticks");
+
+        // Shield is a blue-white dodge with intensity 0.4, duration 4 (box 6.5).
+        let shield = table.config(FaderTag::Shield);
+        assert_eq!(shield.blend_mode, FaderBlendMode::Dodge);
+        assert!(
+            (shield.base_intensity - 0.4).abs() < 1e-6,
+            "shield base intensity is 0.4, got {}",
+            shield.base_intensity
+        );
+        assert_eq!(shield.duration, 4, "shield duration is 4 ticks");
+
+        // Lava is an orange-red burn.
+        let lava = table.config(FaderTag::Lava);
+        assert_eq!(lava.blend_mode, FaderBlendMode::Burn);
+        assert!(
+            lava.color[0] > 0.5 && lava.color[2] < 0.3,
+            "lava default color is orange-red, got {:?}",
+            lava.color
+        );
+
+        // Sustained effects are soft tints.
+        assert_eq!(
+            table.config(FaderTag::Invincibility).blend_mode,
+            FaderBlendMode::SoftTint
+        );
+        assert_eq!(
+            table.config(FaderTag::Oxygen).blend_mode,
+            FaderBlendMode::SoftTint
+        );
+        assert_eq!(
+            table.config(FaderTag::Infravision).blend_mode,
+            FaderBlendMode::SoftTint
+        );
+
+        // Out-of-range index returns None.
+        assert_eq!(table.config_by_index(99), None);
     }
 
     #[test]
