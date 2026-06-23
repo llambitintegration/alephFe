@@ -760,6 +760,56 @@ mod tests {
         );
     }
 
+    /// Box 2.4: the canonical default-config-table assertion — the default
+    /// (Marathon 2) `FaderConfigTable` has a red tint for damage (index 0) and a
+    /// white randomize for teleport. This is the specific, named acceptance check
+    /// for box 2.4 (the broader per-type sweep lives in box 2.2's test).
+    #[test]
+    fn test_default_config_table_damage_red_teleport_white() {
+        let table = FaderConfigTable::marathon2_defaults();
+
+        // Damage is at type-index 0.
+        assert_eq!(FaderTag::Damage as usize, 0, "damage is fader-type index 0");
+
+        // Damage (index 0): red tint.
+        let damage = table
+            .config_by_index(0)
+            .expect("damage config exists at index 0");
+        assert_eq!(
+            damage,
+            table.config(FaderTag::Damage),
+            "index 0 resolves to the damage config"
+        );
+        assert_eq!(
+            damage.blend_mode,
+            FaderBlendMode::Tint,
+            "damage default blend mode is Tint"
+        );
+        assert!(
+            damage.color[0] > 0.5,
+            "damage red channel is high, got {:?}",
+            damage.color
+        );
+        assert!(
+            damage.color[1] < 0.3 && damage.color[2] < 0.3,
+            "damage green/blue channels are low (red-ish), got {:?}",
+            damage.color
+        );
+
+        // Teleport: white randomize.
+        let teleport = table.config(FaderTag::Teleport);
+        assert_eq!(
+            teleport.blend_mode,
+            FaderBlendMode::Randomize,
+            "teleport default blend mode is Randomize"
+        );
+        assert!(
+            teleport.color[0] > 0.8 && teleport.color[1] > 0.8 && teleport.color[2] > 0.8,
+            "teleport color is white (all channels high), got {:?}",
+            teleport.color
+        );
+    }
+
     #[test]
     fn test_fader_blend_mode_six_distinct_variants() {
         // All six Marathon blend modes must exist and be distinct.
