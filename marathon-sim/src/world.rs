@@ -211,6 +211,7 @@ impl SimWorld {
         world.insert_resource(SimRng(StdRng::seed_from_u64(config.random_seed)));
         world.insert_resource(TickCounter(0));
         world.insert_resource(crate::tick::PrevActionKey::default());
+        world.insert_resource(crate::tick::PrevPlatformActionKey::default());
         world.insert_resource(SimEvents::default());
         world.insert_resource(ItemRespawnQueue::default());
         world.insert_resource(PhysicsTables {
@@ -1513,6 +1514,7 @@ impl SimWorld {
         });
         world.insert_resource(TickCounter(snapshot.tick_count));
         world.insert_resource(crate::tick::PrevActionKey::default());
+        world.insert_resource(crate::tick::PrevPlatformActionKey::default());
         world.insert_resource(SimEvents::default());
 
         // Restore RNG from seed

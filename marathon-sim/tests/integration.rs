@@ -3435,3 +3435,165 @@ fn render_snapshot_no_player_yields_none_but_rest_present() {
         "poly_dynamic still produced without a player"
     );
 }
+
+// ──────────── Boxes 6.1–6.3: player-entry + action-key platform activation in run_world_mechanics ────────────
+
+/// Build a map whose platform sits on poly 0 — the polygon the player starts in
+/// (location 512,512). `static_flags` selects the activation trigger under test.
+/// Speed is slow (0.125 WU/tick) so the platform stays `Extending` for many
+/// ticks, making a single activation easy to distinguish from a per-tick flicker.
+fn make_platform_on_player_polygon(static_flags: u32) -> MapData {
+    let mut map = make_test_map();
+    map.platforms = vec![StaticPlatformData {
+        platform_type: 0,
+        speed: 128, // 0.125 WU/tick
+        delay: 30,
+        minimum_height: 0,
+        maximum_height: 1024, // 1 WU
+        polygon_index: 0,
+        static_flags,
+        tag: 0,
+    }];
+    map
+}
+
+#[test]
+fn box61_player_entry_on_platform_polygon_activates() {
+    use marathon_sim::PlatformState;
+
+    // Platform on poly 0 with ACTIVATE_ON_PLAYER_ENTRY (0x0001). The player
+    // starts in poly 0, so the player-entry pass in run_world_mechanics() must
+    // activate it on the first tick.
+    let map = make_platform_on_player_polygon(0x0001);
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // At rest before any tick.
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::AtRest,
+        "platform should be at rest before any tick"
+    );
+
+    // One tick with NO input: player-entry activation fires.
+    world.tick(ActionFlags::default().into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Extending,
+        "player on an entry-flagged platform polygon should activate it"
+    );
+
+    // Confirm exactly-one activation: the floor rises monotonically over the
+    // next ticks (a double-activation per tick would flip Extending<->Returning
+    // and stall the floor near rest).
+    let mut prev_floor = world.snapshot().platforms[0].current_floor;
+    for tick in 0..4 {
+        world.tick(ActionFlags::default().into());
+        let p = &world.snapshot().platforms[0];
+        assert_eq!(
+            p.state,
+            PlatformState::Extending,
+            "tick {tick}: a single activation must keep the platform Extending, \
+             not be re-activated/reversed each tick"
+        );
+        assert!(
+            p.current_floor >= prev_floor,
+            "tick {tick}: floor must rise monotonically under one activation; \
+             {prev_floor} -> {} indicates a double-activation flicker",
+            p.current_floor
+        );
+        prev_floor = p.current_floor;
+    }
+}
+
+#[test]
+fn box62_action_press_on_action_key_platform_polygon_activates() {
+    use marathon_sim::PlatformState;
+
+    // Platform on poly 0 with PLATFORM_IS_PLAYER_CONTROLLABLE (1 << 12) and NOT
+    // the entry flag, so ONLY a deliberate ACTION press while standing on it can
+    // move it. The player starts on poly 0.
+    let map = make_platform_on_player_polygon(1 << 12);
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // No input: must stay at rest (entry flag is absent).
+    world.tick(ActionFlags::default().into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::AtRest,
+        "action-key platform must not auto-activate without an ACTION press"
+    );
+
+    // Press ACTION: rising edge activates the platform under the player.
+    let action = ActionFlags::new(ActionFlags::ACTION);
+    world.tick(action.into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Extending,
+        "pressing ACTION on an action-key platform polygon should activate it"
+    );
+}
+
+#[test]
+fn box63_action_on_moving_platform_reverses_exactly_once() {
+    use marathon_sim::PlatformState;
+
+    // Action-key platform on the player's polygon (poly 0).
+    let map = make_platform_on_player_polygon(1 << 12);
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    let action = ActionFlags::new(ActionFlags::ACTION);
+    let none = ActionFlags::default();
+
+    // First press (rising edge) -> Extending.
+    world.tick(action.into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Extending,
+        "first ACTION press should start the platform extending"
+    );
+
+    // Let it climb a little with ACTION released (re-arms the edge).
+    for _ in 0..2 {
+        world.tick(none.into());
+    }
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Extending,
+        "platform should still be extending mid-travel"
+    );
+    let floor_before_reverse = world.snapshot().platforms[0].current_floor;
+
+    // Second press (fresh rising edge) while still Extending must reverse it to
+    // Returning — exactly once, not flip back to Extending on the same edge.
+    world.tick(action.into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Returning,
+        "ACTION on a moving (Extending) platform must reverse it to Returning"
+    );
+
+    // With ACTION released it keeps Returning and the floor falls back — proof
+    // the reversal stuck (no second same-tick re-reversal).
+    world.tick(none.into());
+    let snap = world.snapshot();
+    assert!(
+        matches!(
+            snap.platforms[0].state,
+            PlatformState::Returning | PlatformState::AtRest
+        ),
+        "after reversal the platform should keep returning, got {:?}",
+        snap.platforms[0].state
+    );
+    assert!(
+        snap.platforms[0].current_floor <= floor_before_reverse,
+        "reversed platform floor should descend; {} -> {}",
+        floor_before_reverse,
+        snap.platforms[0].current_floor
+    );
+}

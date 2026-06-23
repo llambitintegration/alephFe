@@ -77,6 +77,19 @@ pub struct TickInput {
 #[derive(Debug, Default, Clone, Copy, bevy_ecs::prelude::Resource)]
 pub struct PrevActionKey(pub bool);
 
+/// Edge-detection state for the ACTION key used by the *platform* activation
+/// pass in [`SimWorld::run_world_mechanics`] (box 6.2).
+///
+/// This is intentionally separate from [`PrevActionKey`], which is owned and
+/// mutated by [`SimWorld::process_action_key`] (the directional ray-cast that
+/// activates a door the player *faces* from an adjacent polygon). The
+/// run_world_mechanics action-key pass instead activates a platform the player
+/// is *standing on*, and runs later in the same tick — so it needs its own
+/// rising-edge latch to avoid both (a) consuming the ray-cast pass's edge and
+/// (b) firing every tick the key is held.
+#[derive(Debug, Default, Clone, Copy, bevy_ecs::prelude::Resource)]
+pub struct PrevPlatformActionKey(pub bool);
+
 impl From<ActionFlags> for TickInput {
     fn from(action_flags: ActionFlags) -> Self {
         TickInput {
@@ -188,6 +201,95 @@ impl SimWorld {
                     geometry.changed_polygons[poly_idx] = true;
                     geometry.has_changes = true;
                 }
+            }
+        }
+
+        // Boxes 6.1 + 6.2: platform activation triggered by the player.
+        //
+        // This is now the SINGLE owner of player-entry activation. The old copy
+        // in `update_platforms()` was removed when this pass landed, so a
+        // platform is activated at most once per trigger per tick (a second
+        // activation in the same tick would reverse a just-activated platform).
+        // The action-key ray-cast in `process_action_key()` activates a door the
+        // player *faces from an adjacent polygon*; this pass activates a platform
+        // the player is *standing on* — disjoint targets, no double-activation.
+        self.run_platform_player_triggers();
+    }
+
+    /// Player-entry (box 6.1) and action-key (box 6.2) platform activation.
+    ///
+    /// Runs after platforms have ticked (per box 6.1's "after ticking platforms").
+    /// Builds a polygon-index → platform-entity lookup, finds the platform (if
+    /// any) the player currently occupies, and:
+    ///   * 6.1 — activates it if `should_activate(PlayerEntry)` (the platform
+    ///     carries the player-entry flag and is `AtRest`).
+    ///   * 6.2 — on a rising ACTION edge, activates it via the extended
+    ///     `activate_platform()` (which reverses an already-moving platform) when
+    ///     the platform carries the `PLATFORM_ACTIVATE_ON_ACTION_KEY` flag.
+    ///
+    /// Borrow-checker pattern: gather the player's polygon and the ACTION edge
+    /// first, then take the mutable platform query — never hold a player borrow
+    /// across the platform mutation.
+    fn run_platform_player_triggers(&mut self) {
+        use crate::world_mechanics::platforms::{
+            activate_platform, should_activate, PlatformTrigger, PLATFORM_ACTIVATE_ON_ACTION_KEY,
+        };
+
+        // Gather phase: the player's current polygon.
+        let player_poly = {
+            let mut q = self
+                .world
+                .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Player>>();
+            q.iter(&self.world).next().map(|p| p.0)
+        };
+        let Some(player_poly) = player_poly else {
+            // No player → no player-driven activation, but still keep the
+            // action-key edge latch in sync so a press while playerless does not
+            // leave a stale armed edge.
+            let action_now = self
+                .world
+                .resource::<TickInput>()
+                .action_flags
+                .contains(ActionFlags::ACTION);
+            self.world.resource_mut::<PrevPlatformActionKey>().0 = action_now;
+            return;
+        };
+
+        // Gather phase: rising-edge detection for the ACTION key (box 6.2),
+        // using the platform-pass's own latch so it never collides with the
+        // ray-cast pass's `PrevActionKey`.
+        let action_now = self
+            .world
+            .resource::<TickInput>()
+            .action_flags
+            .contains(ActionFlags::ACTION);
+        let action_prev = self.world.resource::<PrevPlatformActionKey>().0;
+        self.world.resource_mut::<PrevPlatformActionKey>().0 = action_now;
+        let action_rising_edge = action_now && !action_prev;
+
+        // Apply phase: walk platforms, activate the one under the player.
+        let mut query = self.world.query::<&mut crate::Platform>();
+        for mut platform in query.iter_mut(&mut self.world) {
+            if platform.polygon_index != player_poly {
+                continue;
+            }
+
+            // Box 6.1: player-entry. `should_activate` already gates on the
+            // entry flag AND `AtRest`, so this fires once per rest→move cycle.
+            if should_activate(&platform, PlatformTrigger::PlayerEntry) {
+                activate_platform(&mut platform);
+                // A platform just activated by entry must not also be reversed by
+                // a same-tick ACTION press, so skip the action-key branch.
+                continue;
+            }
+
+            // Box 6.2: action-key. On a rising ACTION edge, an action-key
+            // platform under the player is (re)activated; `activate_platform`
+            // reverses it if it is already moving (box 6.3 case c).
+            if action_rising_edge
+                && platform.activation_flags & PLATFORM_ACTIVATE_ON_ACTION_KEY != 0
+            {
+                activate_platform(&mut platform);
             }
         }
     }
@@ -521,33 +623,13 @@ impl SimWorld {
     }
 
     fn update_platforms(&mut self) {
-        // NOTE: platform *ticking* and MapGeometry height sync now live in
-        // `run_world_mechanics()` (boxes 5.1–5.4), which runs once per tick after
-        // player physics and additionally records dirty-polygon flags for the
-        // renderer. Ticking here too would advance every platform twice per
-        // tick, so this pass keeps only the activation/crush responsibilities.
-
-        // Player-entry activation check
-        let player_poly = {
-            let mut q = self
-                .world
-                .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Player>>();
-            q.iter(&self.world).next().map(|p| p.0)
-        };
-
-        if let Some(player_poly) = player_poly {
-            let mut query = self.world.query::<&mut crate::Platform>();
-            for mut platform in query.iter_mut(&mut self.world) {
-                if platform.polygon_index == player_poly {
-                    use crate::world_mechanics::platforms::{
-                        activate_platform, should_activate, PlatformTrigger,
-                    };
-                    if should_activate(&platform, PlatformTrigger::PlayerEntry) {
-                        activate_platform(&mut platform);
-                    }
-                }
-            }
-        }
+        // NOTE: platform *ticking* and MapGeometry height sync live in
+        // `run_world_mechanics()` (boxes 5.1–5.4); player-entry and action-key
+        // activation also moved there (boxes 6.1–6.2). Both used to live here and
+        // were removed when those passes landed — duplicating them would activate
+        // / advance a platform twice per tick. This pass now keeps ONLY the
+        // player-crush responsibility (box 8 will fold this into the unified
+        // platform pass alongside monster/projectile crush handling).
 
         // Crush check
         let player_data: Option<(f32, f32, usize)> = {

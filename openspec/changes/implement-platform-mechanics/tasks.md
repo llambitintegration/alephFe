@@ -33,9 +33,9 @@
 
 ## 6. Player-Entry and Action-Key Activation
 
-- [ ] 6.1 In `run_world_mechanics()`, after ticking platforms, query the player's `PolygonIndex`. Build a lookup from polygon index to platform entity. If the player's polygon matches a platform, check `should_activate()` with `PlatformTrigger::PlayerEntry` and activate if appropriate.
-- [ ] 6.2 Read the `TickInput` action flags. If ACTION is pressed and the player's polygon matches a platform with `ACTIVATE_ON_ACTION_KEY`, call the extended `activate_platform()` (which handles re-activation).
-- [ ] 6.3 Add integration tests: player on platform polygon with entry flag triggers activation; player pressing ACTION on action-key platform triggers activation; action on moving platform reverses it.
+- [x] 6.1 In `run_world_mechanics()`, after ticking platforms, query the player's `PolygonIndex`. Build a lookup from polygon index to platform entity. If the player's polygon matches a platform, check `should_activate()` with `PlatformTrigger::PlayerEntry` and activate if appropriate.
+- [x] 6.2 Read the `TickInput` action flags. If ACTION is pressed and the player's polygon matches a platform with `ACTIVATE_ON_ACTION_KEY`, call the extended `activate_platform()` (which handles re-activation).
+- [x] 6.3 Add integration tests: player on platform polygon with entry flag triggers activation; player pressing ACTION on action-key platform triggers activation; action on moving platform reverses it.
 
 ## 7. Monster and Projectile Activation
 
