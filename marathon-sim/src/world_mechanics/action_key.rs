@@ -14,12 +14,36 @@ const MAXIMUM_CONTROL_ACTIVATION_RANGE: f32 = 1.5;
 /// Polygon type for platforms.
 const POLYGON_IS_PLATFORM: i16 = 5;
 
+/// Classification of what the action key is currently aimed at, suitable for
+/// driving an on-screen prompt ("Press Space"). Mirrors the actionable variants
+/// of [`ActionTarget`] but carries no entity indices, so it is cheap to copy and
+/// serialize into the per-frame render snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ActionPromptKind {
+    /// A door / platform is in front of the player and within activation range.
+    Door,
+    /// A light-switch / control panel is in front of the player and within range.
+    Panel,
+}
+
 /// Target found by action key ray-cast.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActionTarget {
     None,
     Platform(usize),
     Panel(usize),
+}
+
+impl ActionTarget {
+    /// Classify this target into the prompt kind the HUD should show, or `None`
+    /// when there is nothing actionable in front of the player.
+    pub fn prompt_kind(&self) -> Option<ActionPromptKind> {
+        match self {
+            ActionTarget::Platform(_) => Some(ActionPromptKind::Door),
+            ActionTarget::Panel(_) => Some(ActionPromptKind::Panel),
+            ActionTarget::None => None,
+        }
+    }
 }
 
 /// Cast a ray from the player's position in their facing direction to find
@@ -398,5 +422,66 @@ mod tests {
         let panels = ControlPanels::default();
         let result = find_action_key_target(Vec2::new(0.0, 0.0), 0.0, 0, &geometry, &panels);
         assert_eq!(result, ActionTarget::None);
+    }
+
+    #[test]
+    fn action_prompt_kind_door_when_door_in_range() {
+        // Prompt query (reuse of find_action_key_target): a door within range
+        // classifies as a Door prompt.
+        let geometry = corridor_with_door_at(4.5);
+        let panels = ControlPanels::default();
+        let target = find_action_key_target(Vec2::new(0.0, 0.0), 0.0, 0, &geometry, &panels);
+        assert_eq!(target.prompt_kind(), Some(ActionPromptKind::Door));
+    }
+
+    #[test]
+    fn action_prompt_kind_none_when_nothing_in_range() {
+        // No actionable target in range → no prompt.
+        let geometry = corridor_with_door_at(7.0);
+        let panels = ControlPanels::default();
+        let target = find_action_key_target(Vec2::new(0.0, 0.0), 0.0, 0, &geometry, &panels);
+        assert_eq!(target.prompt_kind(), None);
+    }
+
+    #[test]
+    fn action_prompt_kind_panel_for_control_panel() {
+        use crate::world_mechanics::panels::{ControlPanel, PanelAction};
+
+        // Single room, player facing a wall with a control panel within range.
+        let geometry = MapGeometry {
+            polygon_vertices: vec![vec![
+                Vec2::new(-2.0, -1.0),
+                Vec2::new(1.0, -1.0),
+                Vec2::new(1.0, 1.0),
+                Vec2::new(-2.0, 1.0),
+            ]],
+            floor_heights: vec![0.0],
+            ceiling_heights: vec![3.0],
+            polygon_adjacency: vec![vec![(0, None), (1, None), (2, None), (3, None)]],
+            line_endpoints: vec![
+                (Vec2::new(-2.0, -1.0), Vec2::new(1.0, -1.0)),
+                (Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0)),
+                (Vec2::new(-2.0, 1.0), Vec2::new(1.0, 1.0)),
+                (Vec2::new(-2.0, -1.0), Vec2::new(-2.0, 1.0)),
+            ],
+            line_solid: vec![true; 4],
+            line_transparent: vec![false; 4],
+            polygon_media_index: vec![-1],
+            polygon_floor_light_index: vec![-1],
+            polygon_ceiling_light_index: vec![-1],
+            polygon_types: vec![0],
+            polygon_permutations: vec![-1],
+            line_side_indices: vec![(None, None), (Some(0), None), (None, None), (None, None)],
+            changed_polygons: vec![false; 1],
+            has_changes: false,
+        };
+        let panels = ControlPanels(vec![ControlPanel {
+            line_index: 1,
+            side: 0,
+            action: PanelAction::ToggleLight { light_index: 0 },
+            max_distance: 1.5,
+        }]);
+        let target = find_action_key_target(Vec2::new(0.0, 0.0), 0.0, 0, &geometry, &panels);
+        assert_eq!(target.prompt_kind(), Some(ActionPromptKind::Panel));
     }
 }
