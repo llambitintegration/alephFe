@@ -38,5 +38,6 @@
 
 - [x] 7.1 Regenerate `marathon-web` visual-regression baselines; assert a fully static scene is pixel-equivalent (within tolerance) to pre-change output
 - [x] 7.2 Add an e2e test (Playwright, against the proxy-net container): load a level, walk to a door, press the action key, screenshot before/after, assert the door-region pixels change
+  - CAVEAT (2026-06-22): the test exists and passes, but it reaches the door via the `__marathonDebug.faceNearestDoor()` teleport hook rather than by walking. It proves the door *mechanics* (data-texture upload, height offset, action-key→platform), NOT player navigation/accessibility. See reopened `fix-weapon-sprites-interactions` 5.4 — doors are not accessible in actual gameplay per operator report.
 - [ ] 7.3 Functionally verify and tick `fix-weapon-sprites-interactions` task 5.4 (door opens; light switch toggles a visible light) — record evidence
 - [ ] 7.4 `cargo test` workspace-green in Docker (`rust:slim`); `wasm-pack build` for `marathon-web` succeeds; redeploy and capture a moving-door screenshot via the live endpoint

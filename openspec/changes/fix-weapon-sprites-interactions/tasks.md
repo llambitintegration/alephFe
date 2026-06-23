@@ -42,4 +42,5 @@
 
 - [x] 5.3 Visually verify sprite anchoring: check that dropped weapons and items on the ground appear correctly positioned (not floating or sinking), and that asymmetric sprites like scenery objects are visually anchored at their origin point.
 
-- [x] 5.4 Functionally verify action key: load a level with manual doors (e.g., Arrival), walk up to a door, press Space, and confirm the door opens. Find a light switch panel and confirm it toggles the light.
+- [ ] 5.4 Functionally verify action key: load a level with manual doors (e.g., Arrival), walk up to a door, press Space, and confirm the door opens. Find a light switch panel and confirm it toggles the light.
+  - REOPENED 2026-06-22 (operator report: doors are NOT accessible in actual gameplay). The earlier tick was based on `action-key-verify.spec.ts`, which uses the `__marathonDebug.faceNearestDoor()` **teleport** hook to position the player at a door — it verifies the door/light *mechanics* but NOT that a player can *navigate to and open a door by walking*, which is the actual requirement. This box must be re-verified WITHOUT the debug hook (real WASD navigation from spawn to a door, then activate), and the underlying accessibility bug fixed.
