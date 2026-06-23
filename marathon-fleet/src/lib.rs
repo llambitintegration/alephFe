@@ -10,6 +10,7 @@
 //! Module map (each stage of the capture -> projection -> reconcile -> interact
 //! -> replay pipeline):
 //! - [`transport`]: abstract live event sources (SSE / MQTT) feeding the daemon.
+//! - [`sse_source`]: the concrete blocking-HTTP SSE [`transport::LiveEventSource`].
 //! - [`event_log`]: the append-only NDJSON event log (resumable byte cursor).
 //! - [`event`]: the CloudEvents-shaped envelope and shared cross-stage types.
 //! - [`projection`]: the pure deterministic event-sourced reducer.
@@ -27,6 +28,7 @@ pub mod placement;
 pub mod projection;
 pub mod reconciler;
 pub mod replay;
+pub mod sse_source;
 pub mod transport;
 
 pub use embodiment::{
@@ -53,4 +55,5 @@ pub use replay::{
     resolve_scrub_state, InterpBuffer, Keyframe, Pose, ScrubResolver, Straddle, ViewClock,
     INTERP_DELAY, MAX_TRAVEL, MIN_TRAVEL,
 };
+pub use sse_source::{normalize_snapshot, parse_sse_frames, SseConfig, SseSource, FLEET_PORT};
 pub use transport::{capture, CaptureBuffer, LiveEventSource, ReplaySource};
