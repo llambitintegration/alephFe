@@ -26,10 +26,10 @@
 
 ## 5. World Mechanics Orchestration in tick.rs
 
-- [ ] 5.1 Add a `run_world_mechanics(&mut self)` method to `SimWorld` in `marathon-sim/src/tick.rs`.
-- [ ] 5.2 In `run_world_mechanics()`, query all `Platform` components and call `tick_platform()` on each. After ticking, write `current_floor` and `current_ceiling` into `MapGeometry.floor_heights[polygon_index]` and `MapGeometry.ceiling_heights[polygon_index]`. Set `changed_polygons[polygon_index] = true` and `has_changes = true` for any platform that moved.
-- [ ] 5.3 Call `self.run_world_mechanics()` from `SimWorld::tick()` after `self.run_player_physics()` and before the tick counter increment.
-- [ ] 5.4 At the start of `run_world_mechanics()`, clear the previous tick's dirty flags by calling `MapGeometry::clear_changes()`.
+- [x] 5.1 Add a `run_world_mechanics(&mut self)` method to `SimWorld` in `marathon-sim/src/tick.rs`.
+- [x] 5.2 In `run_world_mechanics()`, query all `Platform` components and call `tick_platform()` on each. After ticking, write `current_floor` and `current_ceiling` into `MapGeometry.floor_heights[polygon_index]` and `MapGeometry.ceiling_heights[polygon_index]`. Set `changed_polygons[polygon_index] = true` and `has_changes = true` for any platform that moved.
+- [x] 5.3 Call `self.run_world_mechanics()` from `SimWorld::tick()` after `self.run_player_physics()` and before the tick counter increment.
+- [x] 5.4 At the start of `run_world_mechanics()`, clear the previous tick's dirty flags by calling `MapGeometry::clear_changes()`.
 
 ## 6. Player-Entry and Action-Key Activation
 

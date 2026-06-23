@@ -128,8 +128,68 @@ impl SimWorld {
         // 9. Update items (pickup check)
         self.update_items();
 
+        // 10. World mechanics: tick platforms, sync their heights into the
+        //     authoritative MapGeometry, and record dirty-polygon flags for the
+        //     renderer (boxes 5.1–5.4). Runs after player physics, before the
+        //     tick-counter increment.
+        self.run_world_mechanics();
+
         // Advance tick counter
         self.world.resource_mut::<TickCounter>().0 += 1;
+    }
+
+    /// World-mechanics orchestration pass (boxes 5.1–5.4).
+    ///
+    /// Runs after player physics. Ticks every `Platform`, writes each one's new
+    /// `current_floor`/`current_ceiling` back into the authoritative
+    /// [`MapGeometry`] resource (the same copy `run_player_physics` clones and
+    /// the renderer reads), and marks the platform's polygon dirty so the mesh
+    /// rebuild can be incremental.
+    ///
+    /// The dirty flags from the *previous* tick are cleared at the very start
+    /// (box 5.4) so the renderer/consumer always sees exactly this tick's
+    /// changes — clearing happens before the platform loop, never after.
+    ///
+    /// Borrow-checker pattern (mirrors the pre-existing `update_platforms`):
+    /// query `Platform` entities and collect `(polygon_index, floor, ceiling,
+    /// moved)` tuples first, then take a separate mutable borrow of the
+    /// `MapGeometry` resource to apply them. `moved` is computed by comparing
+    /// each platform's pre-tick floor/ceiling to its post-tick values.
+    fn run_world_mechanics(&mut self) {
+        // Box 5.4: wipe the prior tick's dirty flags before recording this tick's.
+        self.world.resource_mut::<MapGeometry>().clear_changes();
+
+        // Box 5.2 (collect phase): tick each platform, noting whether it moved.
+        let mut updates: Vec<(usize, f32, f32, bool)> = Vec::new();
+        {
+            let mut query = self.world.query::<&mut crate::Platform>();
+            for mut platform in query.iter_mut(&mut self.world) {
+                let prev_floor = platform.current_floor;
+                let prev_ceiling = platform.current_ceiling;
+                let (floor, ceiling) =
+                    crate::world_mechanics::platforms::tick_platform(&mut platform);
+                let moved = (floor - prev_floor).abs() > f32::EPSILON
+                    || (ceiling - prev_ceiling).abs() > f32::EPSILON;
+                updates.push((platform.polygon_index, floor, ceiling, moved));
+            }
+        }
+
+        // Box 5.2 (apply phase): write heights into MapGeometry and flag movers.
+        {
+            let mut geometry = self.world.resource_mut::<MapGeometry>();
+            for &(poly_idx, floor, ceiling, moved) in &updates {
+                if poly_idx < geometry.floor_heights.len() {
+                    geometry.floor_heights[poly_idx] = floor;
+                }
+                if poly_idx < geometry.ceiling_heights.len() {
+                    geometry.ceiling_heights[poly_idx] = ceiling;
+                }
+                if moved && poly_idx < geometry.changed_polygons.len() {
+                    geometry.changed_polygons[poly_idx] = true;
+                    geometry.has_changes = true;
+                }
+            }
+        }
     }
 
     fn run_player_physics(&mut self) {
@@ -461,29 +521,11 @@ impl SimWorld {
     }
 
     fn update_platforms(&mut self) {
-        // Tick all platforms, collect height updates
-        let mut height_updates: Vec<(usize, f32, f32)> = Vec::new();
-        {
-            let mut query = self.world.query::<&mut crate::Platform>();
-            for mut platform in query.iter_mut(&mut self.world) {
-                let (floor, ceiling) =
-                    crate::world_mechanics::platforms::tick_platform(&mut platform);
-                height_updates.push((platform.polygon_index, floor, ceiling));
-            }
-        }
-
-        // Write back heights to MapGeometry
-        {
-            let mut geometry = self.world.resource_mut::<MapGeometry>();
-            for &(poly_idx, floor, ceiling) in &height_updates {
-                if poly_idx < geometry.floor_heights.len() {
-                    geometry.floor_heights[poly_idx] = floor;
-                }
-                if poly_idx < geometry.ceiling_heights.len() {
-                    geometry.ceiling_heights[poly_idx] = ceiling;
-                }
-            }
-        }
+        // NOTE: platform *ticking* and MapGeometry height sync now live in
+        // `run_world_mechanics()` (boxes 5.1–5.4), which runs once per tick after
+        // player physics and additionally records dirty-polygon flags for the
+        // renderer. Ticking here too would advance every platform twice per
+        // tick, so this pass keeps only the activation/crush responsibilities.
 
         // Player-entry activation check
         let player_poly = {
@@ -2631,6 +2673,64 @@ mod tests {
         assert!(flags.contains(ActionFlags::MOVE_FORWARD));
         assert!(flags.contains(ActionFlags::FIRE_PRIMARY));
         assert!(!flags.contains(ActionFlags::STRAFE_LEFT));
+    }
+
+    /// Boxes 5.1–5.4: ticking the world drives `run_world_mechanics()`, which
+    /// ticks each `Platform`, writes its new `current_floor`/`current_ceiling`
+    /// into `MapGeometry.floor_heights`/`ceiling_heights` for the platform's
+    /// polygon, and marks that polygon dirty (`changed_polygons[poly] == true`,
+    /// `has_changes == true`) for the renderer.
+    #[test]
+    fn run_world_mechanics_syncs_moving_platform_into_geometry_and_marks_dirty() {
+        use crate::components::{Platform, PlatformState, PlatformType};
+
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+
+        // Spawn a platform mid-motion (Extending) on poly 0, currently below its
+        // extended target so this tick it moves up by `speed`.
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5,
+            state: PlatformState::Extending,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+        });
+
+        world.tick(TickInput::default());
+
+        let geo = world.world.resource::<MapGeometry>();
+        // (a) MapGeometry heights track the platform's new current heights.
+        assert!(
+            (geo.floor_heights[poly] - 0.5).abs() < 1e-6,
+            "floor_heights[{poly}] must follow the platform's new current_floor (0.5), got {}",
+            geo.floor_heights[poly]
+        );
+        assert!(
+            (geo.ceiling_heights[poly] - 3.0).abs() < 1e-6,
+            "ceiling_heights[{poly}] must follow the platform's current_ceiling (3.0), got {}",
+            geo.ceiling_heights[poly]
+        );
+        // (b) The moved polygon is flagged dirty for the renderer.
+        assert!(
+            geo.changed_polygons[poly],
+            "changed_polygons[{poly}] must be true after the platform moved"
+        );
+        assert!(
+            geo.has_changes,
+            "has_changes must be true after a platform moved this tick"
+        );
     }
 
     /// Build a minimal single-square SimWorld (no lights/media in the map) so we
