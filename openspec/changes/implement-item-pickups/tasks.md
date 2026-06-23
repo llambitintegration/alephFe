@@ -8,10 +8,10 @@
 
 ## 2. Attach Components at Player Spawn
 
-- [ ] 2.1 In `spawn_map_objects()` in `marathon-sim/src/world.rs`, add `PowerupTimers::default()` and `InventoryItems::default()` to the player entity spawn bundle.
-- [ ] 2.2 In `spawn_map_objects()`, create a `WeaponInventory` with fists in slot 0 (weapon definition index 0) and attach it to the player entity as a component (or insert it as a resource, matching existing inventory architecture).
-- [ ] 2.3 Insert an empty `ItemRespawnQueue` resource in `SimWorld::new()`.
-- [ ] 2.4 Add unit test: construct a `SimWorld` from test data and verify the player entity has `PowerupTimers`, `InventoryItems`, and `WeaponInventory`.
+- [x] 2.1 In `spawn_map_objects()` in `marathon-sim/src/world.rs`, add `PowerupTimers::default()` and `InventoryItems::default()` to the player entity spawn bundle.
+- [x] 2.2 In `spawn_map_objects()`, create a `WeaponInventory` with fists in slot 0 (weapon definition index 0) and attach it to the player entity as a component (or insert it as a resource, matching existing inventory architecture).
+- [x] 2.3 Insert an empty `ItemRespawnQueue` resource in `SimWorld::new()`.
+- [x] 2.4 Add unit test: construct a `SimWorld` from test data and verify the player entity has `PowerupTimers`, `InventoryItems`, and `WeaponInventory`.
 
 ## 3. Fill Missing `item_effect()` Match Arms
 
