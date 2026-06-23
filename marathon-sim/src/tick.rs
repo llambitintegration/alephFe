@@ -274,6 +274,49 @@ impl SimWorld {
         }
     }
 
+    /// Box 8.1: apply combat damage to the player, honoring the invincibility
+    /// powerup.
+    ///
+    /// `apply_damage()` is a pure scalar function with no notion of the player
+    /// entity, so the invincibility powerup can only be gated at this call-site
+    /// layer. If the player's `PowerupTimers.invincibility > 0`, the hit is
+    /// fully absorbed (no Health/Shield change) and `false` is returned;
+    /// otherwise the damage is applied to Health/Shield and `true` is returned.
+    ///
+    /// Scope: this gates **combat** damage (monster attacks / projectile hits).
+    /// Environmental damage (platform crush, media/drowning) is intentionally
+    /// NOT routed through here — invincibility protects against weapon damage,
+    /// not the world geometry crushing or drowning the player, matching the
+    /// original Marathon behavior. When `invincibility == 0` the result is
+    /// byte-for-byte identical to calling `apply_damage()` directly, so existing
+    /// damage tests are unaffected.
+    fn apply_combat_damage_to_player(&mut self, damage: i16) -> bool {
+        let invincible = {
+            let mut q = self
+                .world
+                .query_filtered::<&crate::PowerupTimers, bevy_ecs::prelude::With<crate::Player>>();
+            q.iter(&self.world)
+                .next()
+                .map(|t| t.invincibility > 0)
+                .unwrap_or(false)
+        };
+        if invincible {
+            return false;
+        }
+
+        let mut q = self
+            .world
+            .query_filtered::<(&mut crate::Health, &mut crate::Shield), bevy_ecs::prelude::With<crate::Player>>();
+        if let Some((mut health, mut shield)) = q.iter_mut(&mut self.world).next() {
+            let (new_h, new_s, _) = crate::combat::damage::apply_damage(damage, health.0, shield.0);
+            health.0 = new_h;
+            shield.0 = new_s;
+            true
+        } else {
+            false
+        }
+    }
+
     // ─── Simulation Systems ─────────────────────────────────────────────────
 
     fn run_light_updates(&mut self) {
@@ -1098,18 +1141,11 @@ impl SimWorld {
             }
         }
 
-        // Apply damage to player from melee attacks
+        // Apply damage to player from melee attacks. Box 8.1: route through the
+        // invincibility-aware helper so an active invincibility powerup fully
+        // absorbs the combat hit.
         if damage_to_player > 0 {
-            let mut q = self.world.query_filtered::<(
-                &mut crate::Health,
-                &mut crate::Shield,
-            ), bevy_ecs::prelude::With<crate::Player>>();
-            if let Some((mut health, mut shield)) = q.iter_mut(&mut self.world).next() {
-                let (new_h, new_s, _) =
-                    crate::combat::damage::apply_damage(damage_to_player, health.0, shield.0);
-                health.0 = new_h;
-                shield.0 = new_s;
-            }
+            self.apply_combat_damage_to_player(damage_to_player);
         }
 
         // Spawn monster projectiles
@@ -2705,6 +2741,68 @@ mod tests {
             daemon_bridge.actions.try_recv().is_err(),
             "direct update_agents() call on empty desired-set must emit nothing"
         );
+    }
+
+    /// Box 8.2: an invincible player takes NO combat damage from a hit, while an
+    /// otherwise-identical non-invincible player DOES. Exercising both cases
+    /// proves the invincibility gate actually fires (not a silent no-op) and that
+    /// the un-powered path still applies damage exactly as before.
+    #[test]
+    fn invincibility_skips_combat_damage_to_player() {
+        use crate::{Health, Player, PowerupTimers, Shield};
+
+        // Case A: invincible player — a 50-damage combat hit must be fully
+        // absorbed (Health and Shield unchanged).
+        {
+            let mut world = minimal_sim_world();
+            {
+                let ecs = world.ecs_world_mut();
+                ecs.spawn((
+                    Player,
+                    Health(100),
+                    Shield(80),
+                    PowerupTimers {
+                        invincibility: 300,
+                        ..Default::default()
+                    },
+                ));
+            }
+            let applied = world.apply_combat_damage_to_player(50);
+            assert!(
+                !applied,
+                "invincible player must absorb the hit (apply returns false)"
+            );
+            let ecs = world.ecs_world_mut();
+            let mut q = ecs.query_filtered::<(&Health, &Shield), bevy_ecs::prelude::With<Player>>();
+            let (h, s) = q.iter(ecs).next().expect("player exists");
+            assert_eq!(h.0, 100, "invincible player Health must be unchanged");
+            assert_eq!(s.0, 80, "invincible player Shield must be unchanged");
+        }
+
+        // Case B: identical player WITHOUT invincibility — the same 50-damage hit
+        // must be applied (shield absorbs first, then health).
+        {
+            let mut world = minimal_sim_world();
+            {
+                let ecs = world.ecs_world_mut();
+                ecs.spawn((
+                    Player,
+                    Health(100),
+                    Shield(80),
+                    PowerupTimers::default(), // invincibility == 0
+                ));
+            }
+            let applied = world.apply_combat_damage_to_player(50);
+            assert!(
+                applied,
+                "non-invincible player must take the hit (apply returns true)"
+            );
+            let ecs = world.ecs_world_mut();
+            let mut q = ecs.query_filtered::<(&Health, &Shield), bevy_ecs::prelude::With<Player>>();
+            let (h, s) = q.iter(ecs).next().expect("player exists");
+            assert_eq!(h.0, 100, "Health untouched: shield absorbs the 50 fully");
+            assert_eq!(s.0, 30, "Shield must drop 80 -> 30 from the 50 hit");
+        }
     }
 
     #[test]

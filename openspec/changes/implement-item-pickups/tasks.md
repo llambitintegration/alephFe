@@ -64,12 +64,12 @@
 
 ## 8. Combat System Integration
 
-- [ ] 8.1 In the damage application path (when it exists), check `PowerupTimers.invincibility > 0` on the player entity and skip damage if active.
-- [ ] 8.2 Add unit test: player with invincibility takes no damage from a projectile hit.
+- [x] 8.1 In the damage application path (when it exists), check `PowerupTimers.invincibility > 0` on the player entity and skip damage if active. [Gated at the CALL-SITE layer: `apply_damage()` is a pure scalar fn with no entity/invincibility awareness, so added `SimWorld::apply_combat_damage_to_player()` (tick.rs) which queries the player's `PowerupTimers.invincibility` and skips when active; the monster-attack combat-damage path (`update_monsters`, formerly an inline `apply_damage` block) now routes through it. Scope = combat damage only; environmental crush/media/drowning damage intentionally NOT gated, matching original Marathon.]
+- [x] 8.2 Add unit test: player with invincibility takes no damage from a projectile hit. [`invincibility_skips_combat_damage_to_player` in tick.rs asserts BOTH cases — invincible player absorbs a 50-damage hit (Health/Shield unchanged, helper returns false) AND an identical non-invincible player takes it (Shield 80→30, helper returns true), proving the gate fires rather than being a no-op. RED captured first (gate disabled → invincible player took damage → fail).]
 
 ## 9. Full Integration Testing
 
-- [ ] 9.1 Run full `cargo test` suite in Docker and verify all existing + new tests pass.
+- [x] 9.1 Run full `cargo test` suite in Docker and verify all existing + new tests pass. [Full `cargo test --workspace` GREEN in rust:slim (1.94.1) with `pkg-config`+`libasound2-dev` installed for the marathon-audio/alsa-sys build dep. Per-crate: marathon-audio 49; marathon-fleet 129; marathon-formats 192 + integration_tests 2 + real_data_tests 22; marathon-game 25 + e2e 12 + integration 6; marathon-integration 113 + integration_tests 7; marathon-sim lib 254 + integration 68 + render_snapshot_determinism 3; marathon-viewer 1 + e2e 12; marathon-web 34 + buffer_stability 2 + dynamic_geometry 1 + render_snapshot_upload 2 + wasm 10 (+common_map 0). ALL 0 failed. fmt clean.]
 - [ ] 9.2 Deploy to marathon.llambit.io and verify items can be picked up during gameplay.
 - [ ] 9.3 Verify health/shield/oxygen HUD updates on pickup (requires HUD integration reading the new accessors).
 - [ ] 9.4 Verify weapons acquired from pickups can be selected and fired.
