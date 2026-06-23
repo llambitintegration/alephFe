@@ -294,6 +294,15 @@ impl InputState {
         ActionFlags::new(bits)
     }
 
+    /// Clear both fire inputs. Called when pointer lock is lost so a held fire
+    /// can't stay latched after the player tabs/clicks away (which would make
+    /// the weapon keep firing — and the muzzle-flash sprite keep showing —
+    /// with no way to release it).
+    fn clear_fire(&mut self) {
+        self.fire_primary = false;
+        self.fire_secondary = false;
+    }
+
     fn to_mouse_delta(&mut self) -> (f32, f32) {
         // Yaw: positive mouse_dx (rightward) increases sim facing.
         // cam.yaw = -facing then decreases, turning camera toward render -Z = Marathon RIGHT.
@@ -304,6 +313,19 @@ impl InputState {
         self.mouse_dy = 0.0;
         (yaw, pitch)
     }
+}
+
+/// Whether a primary/secondary fire mousedown should be registered as a weapon
+/// fire, given whether the canvas currently owns the pointer lock.
+///
+/// The click that *acquires* pointer lock (mouse capture) arrives while the
+/// canvas does NOT yet own the lock; treating that click as a fire makes the
+/// weapon discharge the instant the player clicks to take mouse control (and
+/// leaves the muzzle-flash sprite on screen). Once the canvas owns the lock,
+/// subsequent clicks are real fire intents. So: only register fire while the
+/// pointer is already locked to the canvas.
+fn fire_allowed_while(pointer_locked: bool) -> bool {
+    pointer_locked
 }
 
 #[derive(Clone)]
@@ -1435,10 +1457,26 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
         .unwrap();
     click.forget();
 
-    // Mouse buttons
+    // Mouse buttons. Only register a fire when the canvas already owns the
+    // pointer lock: the click that *acquires* the lock (mouse capture) fires
+    // BEFORE the lock engages, and treating it as a fire would discharge the
+    // weapon — and leave the muzzle flash on screen — the instant the player
+    // clicks to take control. See `fire_allowed_while`.
     let s = state.clone();
+    let canvas_for_down = canvas.clone();
     let mousedown =
         Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |e: web_sys::MouseEvent| {
+            let locked = web_sys::window()
+                .and_then(|w| w.document())
+                .and_then(|d| d.pointer_lock_element())
+                .map(|el| {
+                    let canvas_el: &web_sys::Element = canvas_for_down.as_ref();
+                    &el == canvas_el
+                })
+                .unwrap_or(false);
+            if !fire_allowed_while(locked) {
+                return;
+            }
             let mut st = s.borrow_mut();
             match e.button() {
                 0 => st.input.fire_primary = true,
@@ -1464,6 +1502,35 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
         .add_event_listener_with_callback("mouseup", mouseup.as_ref().unchecked_ref())
         .unwrap();
     mouseup.forget();
+
+    // When the canvas loses the pointer lock (player tabs/clicks away, presses
+    // Esc, etc.) the corresponding `mouseup` may never reach our handler, which
+    // would otherwise leave `fire_primary`/`fire_secondary` latched true — the
+    // weapon keeps firing and the muzzle-flash sprite stays on screen with no
+    // way to release it. Clear both fire inputs on every pointer-lock change
+    // where the canvas no longer owns the lock.
+    let s = state.clone();
+    let canvas_for_lock = canvas.clone();
+    let lock_change = Closure::<dyn FnMut()>::new(move || {
+        let locked = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.pointer_lock_element())
+            .map(|el| {
+                let canvas_el: &web_sys::Element = canvas_for_lock.as_ref();
+                &el == canvas_el
+            })
+            .unwrap_or(false);
+        if !locked {
+            s.borrow_mut().input.clear_fire();
+        }
+    });
+    if let Some(document) = web_sys::window().and_then(|w| w.document()) {
+        let _ = document.add_event_listener_with_callback(
+            "pointerlockchange",
+            lock_change.as_ref().unchecked_ref(),
+        );
+    }
+    lock_change.forget();
 }
 
 fn start_render_loop(state: Rc<RefCell<GameState>>) {
@@ -1483,4 +1550,59 @@ fn start_render_loop(state: Rc<RefCell<GameState>>) {
     window
         .request_animation_frame(g.borrow().as_ref().unwrap().as_ref().unchecked_ref())
         .unwrap();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // Pure-logic unit checks for the fire-gating helpers. These exercise plain
+    // Rust (no web-sys), documenting the Bug 1/Bug 2 fire-input contract.
+
+    /// Bug 1: the click that *acquires* pointer lock must NOT fire the weapon.
+    /// That click's `mousedown` arrives while the canvas does not yet own the
+    /// lock, so fire must be suppressed then and only allowed once locked.
+    #[test]
+    fn fire_suppressed_until_pointer_locked() {
+        assert!(
+            !fire_allowed_while(false),
+            "the lock-acquiring click (not yet locked) must not fire the weapon"
+        );
+        assert!(
+            fire_allowed_while(true),
+            "clicks while the pointer is locked are real fire intents"
+        );
+    }
+
+    /// A mousedown received before lock is acquired leaves fire untouched;
+    /// once locked, the same button press latches fire. This mirrors the
+    /// real handler's gate (`if !fire_allowed_while(locked) { return; }`).
+    #[test]
+    fn mousedown_gate_matches_lock_state() {
+        let mut input = InputState::new();
+
+        // Pre-lock click: gate rejects, fire stays clear.
+        if fire_allowed_while(false) {
+            input.fire_primary = true;
+        }
+        assert!(!input.fire_primary, "pre-lock click must not set fire");
+
+        // Post-lock click: gate allows, fire latches.
+        if fire_allowed_while(true) {
+            input.fire_primary = true;
+        }
+        assert!(input.fire_primary, "post-lock click sets fire");
+    }
+
+    /// Bug 2 (latched-fire path): losing the pointer lock must clear any held
+    /// fire so the weapon stops firing and the muzzle-flash sprite stops
+    /// re-showing even when the releasing `mouseup` never reaches us.
+    #[test]
+    fn clear_fire_releases_both_triggers() {
+        let mut input = InputState::new();
+        input.fire_primary = true;
+        input.fire_secondary = true;
+        input.clear_fire();
+        assert!(!input.fire_primary);
+        assert!(!input.fire_secondary);
+    }
 }
