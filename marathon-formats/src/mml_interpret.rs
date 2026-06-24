@@ -760,6 +760,10 @@ pub fn interpret_weapons(section: &MmlSection) -> WeaponOverrides {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StubOverride;
 
+/// One stub-section dispatch entry: the optional document section, its name for
+/// the not-yet-implemented notice, and the interpreter stub to invoke.
+type StubEntry<'a> = (&'a Option<MmlSection>, &'a str, fn(&MmlSection) -> StubOverride);
+
 /// Emit the one-time "not yet implemented" notice for a stubbed section.
 fn warn_stub(section_name: &str) {
     eprintln!("[mml] section <{section_name}> not yet implemented; ignoring overrides");
@@ -888,7 +892,7 @@ impl MmlOverrideSet {
 
         // Stub sections (box 1.14): call the stub to emit the notice, record the
         // name. `view` has no dedicated MmlDocument field, so it is not checked.
-        let stubs: [(&Option<MmlSection>, &str, fn(&MmlSection) -> StubOverride); 15] = [
+        let stubs: [StubEntry<'_>; 15] = [
             (&doc.interface, "interface", interpret_interface),
             (&doc.motion_sensor, "motion_sensor", interpret_motion_sensor),
             (&doc.overhead_map, "overhead_map", interpret_overhead_map),
