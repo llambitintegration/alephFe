@@ -810,6 +810,54 @@ mod tests {
         );
     }
 
+    /// Box 2.5: a focused acceptance check that an MML `<faders>` override of the
+    /// DAMAGE fader's color to blue is reflected in the `FaderConfigTable`. The
+    /// damage fader is index 0 (`FaderTag::Damage`) and defaults to a red-ish
+    /// tint; after applying a `<fader index="0" red="0.0" green="0.0" blue="1.0"/>`
+    /// override, the table's damage config — read via both `config_by_index(0)`
+    /// and `config(FaderTag::Damage)` — must report the blue color. (Box 2.3's
+    /// test exercises a multi-field override; this is the named damage→blue check.)
+    #[test]
+    fn test_apply_mml_faders_damage_color_to_blue() {
+        use marathon_formats::MmlDocument;
+
+        let mut table = FaderConfigTable::marathon2_defaults();
+
+        // Precondition: damage (index 0) defaults to a red-ish tint, NOT blue.
+        let damage_default = table
+            .config_by_index(0)
+            .expect("damage config exists at index 0");
+        assert_eq!(FaderTag::Damage as usize, 0, "damage is fader-type index 0");
+        assert!(
+            damage_default.color[0] > 0.5 && damage_default.color[2] < 0.3,
+            "damage default is red-ish (high red, low blue), got {:?}",
+            damage_default.color
+        );
+
+        // Apply an MML override flipping the damage color to blue.
+        let doc = MmlDocument::from_bytes(
+            br#"<marathon><faders><fader index="0" red="0.0" green="0.0" blue="1.0" alpha="1.0"/></faders></marathon>"#,
+        )
+        .unwrap();
+        let section = doc.faders.expect("faders section parsed");
+        table.apply_mml_faders(&section);
+
+        // The config table now reflects the blue override, via both accessors.
+        let damage_by_index = table
+            .config_by_index(0)
+            .expect("damage config still exists at index 0");
+        assert_eq!(
+            damage_by_index.color,
+            [0.0, 0.0, 1.0, 1.0],
+            "config_by_index(0) reflects the MML blue override"
+        );
+        assert_eq!(
+            table.config(FaderTag::Damage).color,
+            [0.0, 0.0, 1.0, 1.0],
+            "config(FaderTag::Damage) reflects the MML blue override"
+        );
+    }
+
     #[test]
     fn test_fader_blend_mode_six_distinct_variants() {
         // All six Marathon blend modes must exist and be distinct.
