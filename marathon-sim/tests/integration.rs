@@ -3435,3 +3435,194 @@ fn render_snapshot_no_player_yields_none_but_rest_present() {
         "poly_dynamic still produced without a player"
     );
 }
+
+// ─── Box 5.5–5.8: pickup / powerup / respawn wiring into the tick loop ───────
+
+/// Box 5.5: a player near a health item picks it up on one tick — health
+/// increases AND the item entity is despawned.
+#[test]
+fn tick_loop_run_item_pickups_health_increases_and_despawns() {
+    let mut map = make_test_map();
+    // Health-major item (type 21, +40 HP) right on top of the player in poly 0.
+    map.objects.push(MapObject {
+        object_type: 2, // OBJECT_IS_ITEM
+        index: 21,      // ITEM_HEALTH_MAJOR
+        facing: 0,
+        polygon_index: 0,
+        location: WorldPoint3d {
+            x: 512,
+            y: 512,
+            z: 0,
+        },
+        flags: 0,
+    });
+
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Drop the player below the health cap so the pickup is not wasted.
+    {
+        let ecs = world.ecs_world_mut();
+        let mut q = ecs.query_filtered::<&mut marathon_sim::Health, bevy_ecs::query::With<marathon_sim::Player>>();
+        for mut h in q.iter_mut(ecs) {
+            h.0 = 100;
+        }
+    }
+
+    let before = world.player_health().unwrap();
+    assert_eq!(before, 100);
+
+    let items_before = world
+        .entities()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.entity_type,
+                marathon_sim::tick::RenderEntityType::Item { .. }
+            )
+        })
+        .count();
+    assert_eq!(items_before, 1, "one item before pickup");
+
+    world.tick(ActionFlags::default().into());
+
+    let after = world.player_health().unwrap();
+    assert!(
+        after > before,
+        "health should increase after pickup, got {after}"
+    );
+
+    let items_after = world
+        .entities()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.entity_type,
+                marathon_sim::tick::RenderEntityType::Item { .. }
+            )
+        })
+        .count();
+    assert_eq!(items_after, 0, "item should be despawned after pickup");
+}
+
+/// Box 5.6: a player near a weapon item picks it up — the weapon appears in the
+/// player's (resource) weapon inventory after one tick.
+#[test]
+fn tick_loop_run_item_pickups_weapon_enters_inventory() {
+    let mut map = make_test_map();
+    // Assault rifle item (type 3 -> weapon definition index 3) on the player.
+    map.objects.push(MapObject {
+        object_type: 2, // OBJECT_IS_ITEM
+        index: 3,       // ITEM_ASSAULT_RIFLE
+        facing: 0,
+        polygon_index: 0,
+        location: WorldPoint3d {
+            x: 512,
+            y: 512,
+            z: 0,
+        },
+        flags: 0,
+    });
+
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Precondition: weapon definition index 3 is not yet held.
+    {
+        let ecs = world.ecs_world_mut();
+        let inv = ecs
+            .get_resource::<marathon_sim::player::inventory::WeaponInventory>()
+            .expect("weapon inventory resource");
+        let held = inv.weapons.get(3).map(|s| s.is_some()).unwrap_or(false);
+        assert!(!held, "assault rifle must not be held before pickup");
+    }
+
+    world.tick(ActionFlags::default().into());
+
+    let ecs = world.ecs_world_mut();
+    let inv = ecs
+        .get_resource::<marathon_sim::player::inventory::WeaponInventory>()
+        .expect("weapon inventory resource");
+    let slot = inv
+        .weapons
+        .get(3)
+        .and_then(|s| s.as_ref())
+        .expect("assault rifle should be in inventory after pickup");
+    assert_eq!(slot.definition_index, 3);
+}
+
+/// Box 5.7: a player at full health near a health item does NOT pick it up —
+/// the wasted pickup leaves the item in the world.
+#[test]
+fn tick_loop_run_item_pickups_wasted_at_full_health_keeps_item() {
+    let mut map = make_test_map();
+    map.objects.push(MapObject {
+        object_type: 2, // OBJECT_IS_ITEM
+        index: 21,      // ITEM_HEALTH_MAJOR
+        facing: 0,
+        polygon_index: 0,
+        location: WorldPoint3d {
+            x: 512,
+            y: 512,
+            z: 0,
+        },
+        flags: 0,
+    });
+
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Player spawns at full health (150).
+    assert_eq!(world.player_health().unwrap(), 150);
+
+    world.tick(ActionFlags::default().into());
+
+    let items_after = world
+        .entities()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.entity_type,
+                marathon_sim::tick::RenderEntityType::Item { .. }
+            )
+        })
+        .count();
+    assert_eq!(
+        items_after, 1,
+        "wasted pickup at full health must leave the item in the world"
+    );
+}
+
+/// Box 5.8: an active invincibility timer counts down to zero. Activate it
+/// (directly setting the player's PowerupTimers) then tick 1500 times.
+#[test]
+fn tick_loop_run_powerup_countdown_reaches_zero() {
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Activate invincibility (900 ticks canonical) directly on the player.
+    {
+        let ecs = world.ecs_world_mut();
+        let mut q = ecs.query_filtered::<&mut marathon_sim::PowerupTimers, bevy_ecs::query::With<marathon_sim::Player>>();
+        let mut timers = q.iter_mut(ecs).next().expect("player has PowerupTimers");
+        timers.invincibility = 900;
+    }
+
+    // 1500 ticks is more than the 900-tick duration, so it must hit zero.
+    for _ in 0..1500 {
+        world.tick(ActionFlags::default().into());
+    }
+
+    let ecs = world.ecs_world_mut();
+    let mut q = ecs.query_filtered::<&marathon_sim::PowerupTimers, bevy_ecs::query::With<marathon_sim::Player>>();
+    let timers = q.iter(ecs).next().expect("player has PowerupTimers");
+    assert_eq!(
+        timers.invincibility, 0,
+        "invincibility timer should count down to zero"
+    );
+}

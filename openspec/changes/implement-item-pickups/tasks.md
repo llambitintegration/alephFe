@@ -36,40 +36,40 @@
 
 ## 5. Wire Pickup System into Tick Loop
 
-- [ ] 5.1 Add `run_item_pickups()` method on `SimWorld` in `marathon-sim/src/tick.rs`. Query player `(Position, PolygonIndex, Health, Shield, Oxygen, PowerupTimers, InventoryItems)` plus `WeaponInventory`. For each `(Entity, Item, Position, PolygonIndex)` item entity, call `can_pickup()` and `apply_item_effect()`. On success, despawn item entity and emit `SimEvent::ItemPickedUp`.
-- [ ] 5.2 Call `run_item_pickups()` in `SimWorld::tick()` after `run_player_physics()` and before the tick counter increment.
-- [ ] 5.3 Add `run_powerup_countdown()` method that decrements all non-zero `PowerupTimers` fields by 1. Call it in `tick()` after item pickups.
-- [ ] 5.4 Add `run_item_respawns()` method that decrements all entries in `ItemRespawnQueue`, spawns new Item entities for entries that reach zero, and removes completed entries. Call it in `tick()`.
-- [ ] 5.5 Add integration test: construct world with player near a health item, tick once, verify health increased and item despawned.
-- [ ] 5.6 Add integration test: construct world with player near a weapon, tick once, verify weapon in inventory.
-- [ ] 5.7 Add integration test: construct world with player at full health near health item, tick once, verify item NOT despawned.
-- [ ] 5.8 Add integration test: activate invincibility, tick 1500 times, verify timer reaches 0.
+- [x] 5.1 Add `run_item_pickups()` method on `SimWorld` in `marathon-sim/src/tick.rs`. Query player `(Position, PolygonIndex, Health, Shield, Oxygen, PowerupTimers, InventoryItems)` plus `WeaponInventory`. For each `(Entity, Item, Position, PolygonIndex)` item entity, call `can_pickup()` and `apply_item_effect()`. On success, despawn item entity and emit `SimEvent::ItemPickedUp`. [Wires the live `WeaponInventory` **resource** (what the firing path reads), not the per-entity component; item→ItemEffect via existing `items::item_effect()`. Replaces the old `update_items()` stub (box 3.3) — no dead duplicate path remains.]
+- [x] 5.2 Call `run_item_pickups()` in `SimWorld::tick()` after `run_player_physics()` and before the tick counter increment.
+- [x] 5.3 Add `run_powerup_countdown()` method that decrements all non-zero `PowerupTimers` fields by 1. Call it in `tick()` after item pickups.
+- [x] 5.4 Add `run_item_respawns()` method that decrements all entries in `ItemRespawnQueue`, spawns new Item entities for entries that reach zero, and removes completed entries. Call it in `tick()`.
+- [x] 5.5 Add integration test: construct world with player near a health item, tick once, verify health increased and item despawned.
+- [x] 5.6 Add integration test: construct world with player near a weapon, tick once, verify weapon in inventory.
+- [x] 5.7 Add integration test: construct world with player at full health near health item, tick once, verify item NOT despawned.
+- [x] 5.8 Add integration test: activate invincibility, tick 1500 times, verify timer reaches 0.
 
 ## 6. Update Player State Queries
 
-- [ ] 6.1 Add `player_weapons()` accessor on `SimWorld` returning `Option<&WeaponInventory>`.
-- [ ] 6.2 Add `player_powerups()` accessor on `SimWorld` returning `Option<PowerupTimers>`.
-- [ ] 6.3 Add `player_inventory()` accessor on `SimWorld` returning inventory item counts.
-- [ ] 6.4 Add unit tests for each new accessor.
+- [x] 6.1 Add `player_weapons()` accessor on `SimWorld` returning `Option<&WeaponInventory>`.
+- [x] 6.2 Add `player_powerups()` accessor on `SimWorld` returning `Option<PowerupTimers>`.
+- [x] 6.3 Add `player_inventory()` accessor on `SimWorld` returning inventory item counts.
+- [x] 6.4 Add unit tests for each new accessor.
 
 ## 7. Update Serialization
 
-- [ ] 7.1 Add `powerup_timers` and `inventory_items` fields to `PlayerSnapshot` in `marathon-sim/src/world.rs`.
-- [ ] 7.2 Add `weapon_inventory` field to `PlayerSnapshot`.
-- [ ] 7.3 Add `respawn_queue: Vec<ItemRespawnEntry>` field to `SimSnapshot`.
-- [ ] 7.4 Update `SimWorld::snapshot()` to read and include `PowerupTimers`, `InventoryItems`, `WeaponInventory`, and `ItemRespawnQueue`.
-- [ ] 7.5 Update `SimWorld::deserialize()` to restore `PowerupTimers`, `InventoryItems`, `WeaponInventory` on the player entity and `ItemRespawnQueue` as a resource.
-- [ ] 7.6 Add round-trip serialization test: set powerup timers, serialize, deserialize, verify timers preserved.
-- [ ] 7.7 Add round-trip serialization test: add respawn entries, serialize, deserialize, verify entries preserved.
+- [x] 7.1 Add `powerup_timers` and `inventory_items` fields to `PlayerSnapshot` in `marathon-sim/src/world.rs`.
+- [x] 7.2 Add `weapon_inventory` field to `PlayerSnapshot`.
+- [x] 7.3 Add `respawn_queue: Vec<ItemRespawnEntry>` field to `SimSnapshot`.
+- [x] 7.4 Update `SimWorld::snapshot()` to read and include `PowerupTimers`, `InventoryItems`, `WeaponInventory`, and `ItemRespawnQueue`.
+- [x] 7.5 Update `SimWorld::deserialize()` to restore `PowerupTimers`, `InventoryItems`, `WeaponInventory` on the player entity and `ItemRespawnQueue` as a resource.
+- [x] 7.6 Add round-trip serialization test: set powerup timers, serialize, deserialize, verify timers preserved.
+- [x] 7.7 Add round-trip serialization test: add respawn entries, serialize, deserialize, verify entries preserved.
 
 ## 8. Combat System Integration
 
-- [ ] 8.1 In the damage application path (when it exists), check `PowerupTimers.invincibility > 0` on the player entity and skip damage if active.
-- [ ] 8.2 Add unit test: player with invincibility takes no damage from a projectile hit.
+- [x] 8.1 In the damage application path (when it exists), check `PowerupTimers.invincibility > 0` on the player entity and skip damage if active. [Gated at the CALL-SITE layer: `apply_damage()` is a pure scalar fn with no entity/invincibility awareness, so added `SimWorld::apply_combat_damage_to_player()` (tick.rs) which queries the player's `PowerupTimers.invincibility` and skips when active; the monster-attack combat-damage path (`update_monsters`, formerly an inline `apply_damage` block) now routes through it. Scope = combat damage only; environmental crush/media/drowning damage intentionally NOT gated, matching original Marathon.]
+- [x] 8.2 Add unit test: player with invincibility takes no damage from a projectile hit. [`invincibility_skips_combat_damage_to_player` in tick.rs asserts BOTH cases — invincible player absorbs a 50-damage hit (Health/Shield unchanged, helper returns false) AND an identical non-invincible player takes it (Shield 80→30, helper returns true), proving the gate fires rather than being a no-op. RED captured first (gate disabled → invincible player took damage → fail).]
 
 ## 9. Full Integration Testing
 
-- [ ] 9.1 Run full `cargo test` suite in Docker and verify all existing + new tests pass.
+- [x] 9.1 Run full `cargo test` suite in Docker and verify all existing + new tests pass. [Full `cargo test --workspace` GREEN in rust:slim (1.94.1) with `pkg-config`+`libasound2-dev` installed for the marathon-audio/alsa-sys build dep. Per-crate: marathon-audio 49; marathon-fleet 129; marathon-formats 192 + integration_tests 2 + real_data_tests 22; marathon-game 25 + e2e 12 + integration 6; marathon-integration 113 + integration_tests 7; marathon-sim lib 254 + integration 68 + render_snapshot_determinism 3; marathon-viewer 1 + e2e 12; marathon-web 34 + buffer_stability 2 + dynamic_geometry 1 + render_snapshot_upload 2 + wasm 10 (+common_map 0). ALL 0 failed. fmt clean.]
 - [ ] 9.2 Deploy to marathon.llambit.io and verify items can be picked up during gameplay.
 - [ ] 9.3 Verify health/shield/oxygen HUD updates on pickup (requires HUD integration reading the new accessors).
 - [ ] 9.4 Verify weapons acquired from pickups can be selected and fired.
