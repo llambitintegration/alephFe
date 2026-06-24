@@ -2251,13 +2251,10 @@ impl SimWorld {
         // inventory is the resource; everything else lives on the player entity.
         // Take the weapon inventory resource out so we can hold a &mut to it
         // while also taking &mut component refs off the player entity.
-        let mut weapons = match self
+        let mut weapons = self
             .world
             .remove_resource::<crate::player::inventory::WeaponInventory>()
-        {
-            Some(w) => w,
-            None => crate::player::inventory::WeaponInventory::default(),
-        };
+            .unwrap_or_default();
 
         let mut consumed: Vec<(bevy_ecs::entity::Entity, i16)> = Vec::new();
         for cand in &candidates {
