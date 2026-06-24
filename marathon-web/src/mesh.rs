@@ -19,6 +19,13 @@ pub struct PolygonInfo {
 pub const WALL_HEIGHT_FROM_FLOOR: u32 = 0;
 pub const WALL_HEIGHT_FROM_CEILING: u32 = 1;
 
+/// High bit of `Vertex::texture_descriptor` flagging a media-surface vertex.
+/// Media vertices set this bit so the renderer/shader can distinguish them from
+/// opaque geometry (apply media height override + alpha-blended visuals). The
+/// real texture id lives in the low 31 bits; the shader masks this off before
+/// sampling. Collection extraction (bits[12:8]) is unaffected by bit 31.
+pub const MEDIA_VERTEX_FLAG: u32 = 0x8000_0000;
+
 /// Bit position of the floor/ceiling selector inside `Vertex::height_source`.
 const HEIGHT_SOURCE_SELECTOR_SHIFT: u32 = 31;
 /// Mask covering the source-polygon-index bits of `Vertex::height_source`.
@@ -113,7 +120,14 @@ pub struct LevelMesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
     /// Draw batches grouped by texture collection, sorted by collection index.
+    /// Opaque batches come first (covering `0..opaque_index_count`), followed by
+    /// media batches (covering `opaque_index_count..indices.len()`).
     pub batches: Vec<DrawBatch>,
+    /// Number of indices belonging to opaque geometry (floors, ceilings, walls),
+    /// which are emitted FIRST. Indices in `0..opaque_index_count` are opaque;
+    /// indices in `opaque_index_count..indices.len()` are alpha-blended media
+    /// surfaces. Lets the renderer draw opaque-then-media in two sub-passes.
+    pub opaque_index_count: u32,
 }
 
 /// Convert Marathon world distance (i16, 1024 = 1 world unit) to f32.
@@ -124,8 +138,14 @@ fn world_to_f32(v: i16) -> f32 {
 /// Build all geometry for a level: floors, ceilings, and walls.
 pub fn build_level_mesh(map: &MapData, poly_info: &[PolygonInfo]) -> LevelMesh {
     let mut vertices = Vec::new();
-    let mut indices = Vec::new();
 
+    // Opaque and media geometry are accumulated into separate index buffers so
+    // they can be batched independently and concatenated opaque-then-media; the
+    // boundary between them becomes `opaque_index_count`.
+    let mut opaque_indices = Vec::new();
+    let mut media_indices = Vec::new();
+
+    // --- Opaque pass: floors + ceilings for every polygon, then all walls. ---
     for (poly_idx, polygon) in map.polygons.iter().enumerate() {
         let vert_count = polygon.vertex_count as usize;
         if vert_count < 3 {
@@ -136,7 +156,7 @@ pub fn build_level_mesh(map: &MapData, poly_info: &[PolygonInfo]) -> LevelMesh {
 
         build_floor(
             &mut vertices,
-            &mut indices,
+            &mut opaque_indices,
             map,
             polygon,
             info,
@@ -145,19 +165,32 @@ pub fn build_level_mesh(map: &MapData, poly_info: &[PolygonInfo]) -> LevelMesh {
         );
         build_ceiling(
             &mut vertices,
-            &mut indices,
+            &mut opaque_indices,
             map,
             polygon,
             info,
             vert_count,
             poly_idx,
         );
+    }
+
+    for line in &map.lines {
+        build_walls_for_line(&mut vertices, &mut opaque_indices, map, line, poly_info);
+    }
+
+    // --- Media pass: alpha-blended media surfaces for every polygon. ---
+    for (poly_idx, polygon) in map.polygons.iter().enumerate() {
+        let vert_count = polygon.vertex_count as usize;
+        if vert_count < 3 {
+            continue;
+        }
 
         if polygon.media_index >= 0 {
             if let Some(media) = map.media.get(polygon.media_index as usize) {
+                let info = &poly_info[poly_idx];
                 build_media_surface(
                     &mut vertices,
-                    &mut indices,
+                    &mut media_indices,
                     map,
                     polygon,
                     info,
@@ -169,18 +202,30 @@ pub fn build_level_mesh(map: &MapData, poly_info: &[PolygonInfo]) -> LevelMesh {
         }
     }
 
-    for line in &map.lines {
-        build_walls_for_line(&mut vertices, &mut indices, map, line, poly_info);
-    }
+    // Group triangles by collection for batched rendering, opaque first then
+    // media. Each triangle's collection is determined by the first vertex's
+    // texture_descriptor. Batching opaque and media separately preserves the
+    // opaque-then-media ordering despite the per-batch collection sort.
+    let mut opaque_batches = build_draw_batches(&vertices, &mut opaque_indices);
+    let opaque_index_count = opaque_indices.len() as u32;
 
-    // Group triangles by collection for batched rendering.
-    // Each triangle's collection is determined by the first vertex's texture_descriptor.
-    let batches = build_draw_batches(&vertices, &mut indices);
+    let media_batches = build_draw_batches(&vertices, &mut media_indices);
+
+    // Concatenate: opaque indices first, then media indices (offsetting media
+    // batch starts past the opaque range).
+    let mut indices = opaque_indices;
+    for mut batch in media_batches {
+        batch.index_start += opaque_index_count;
+        opaque_batches.push(batch);
+    }
+    indices.extend_from_slice(&media_indices);
+    let batches = opaque_batches;
 
     LevelMesh {
         vertices,
         indices,
         batches,
+        opaque_index_count,
     }
 }
 
@@ -353,7 +398,11 @@ fn build_media_surface(
     let base = vertices.len() as u32;
     // Height un-baked; Y carries the media surface discriminator (see build_floor).
     let media_y = SURFACE_MEDIA;
-    let tex_desc = media.texture.0 as u32;
+    // Flag this as a media-surface vertex by setting bit 31 of the texture
+    // descriptor (low bits stay the real texture id). The shader masks bit 31
+    // off before sampling and uses it to apply media height/visual overrides.
+    // Collection extraction (bits[12:8]) is unaffected by bit 31.
+    let tex_desc = (media.texture.0 as u32) | MEDIA_VERTEX_FLAG;
 
     let mut actual_verts = 0u32;
     for i in 0..vert_count {

@@ -1,10 +1,10 @@
 ## 1. Mesh Builder: Separate Opaque and Media Index Ranges
 
-- [ ] 1.1 Add `opaque_index_count: u32` field to `LevelMesh` struct in marathon-game/src/mesh.rs, marathon-viewer/src/mesh.rs, and marathon-web/src/mesh.rs
-- [ ] 1.2 Refactor `build_level_mesh()` in all three crates to emit opaque geometry (floors, ceilings, walls) first, then media surfaces, recording the index count boundary as `opaque_index_count`
-- [ ] 1.3 In `build_media_surface()`, set bit 31 on the `texture_descriptor` field of each media vertex (OR with 0x80000000) to flag it as a media surface vertex
-- [ ] 1.4 Add unit test: given a level with 2 opaque polygons and 1 media polygon, verify `opaque_index_count` equals the opaque triangle index count and total indices include media triangles after that boundary
-- [ ] 1.5 Add unit test: verify media vertices have bit 31 set on texture_descriptor, and opaque vertices do not
+- [x] 1.1 Add `opaque_index_count: u32` field to `LevelMesh` struct in marathon-game/src/mesh.rs, marathon-viewer/src/mesh.rs, and marathon-web/src/mesh.rs
+- [x] 1.2 Refactor `build_level_mesh()` in all three crates to emit opaque geometry (floors, ceilings, walls) first, then media surfaces, recording the index count boundary as `opaque_index_count`
+- [x] 1.3 In `build_media_surface()`, set bit 31 on the `texture_descriptor` field of each media vertex (OR with 0x80000000) to flag it as a media surface vertex
+- [x] 1.4 Add unit test: given a level with 2 opaque polygons and 1 media polygon, verify `opaque_index_count` equals the opaque triangle index count and total indices include media triangles after that boundary
+- [x] 1.5 Add unit test: verify media vertices have bit 31 set on texture_descriptor, and opaque vertices do not
 
 ## 2. PolygonGpuData: Add Media Fields
 
