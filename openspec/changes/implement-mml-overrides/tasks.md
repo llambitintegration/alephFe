@@ -6,7 +6,7 @@
 - [x] 1.4 Define `ShellCasingOverride`, `WeaponOrderEntry`, and implement `interpret_weapons(section: &MmlSection)` producing shell casing overrides and weapon order data
 - [x] 1.5 Define `ProjectileOverride` struct and implement `interpret_projectiles(section: &MmlSection) -> Vec<ProjectileOverride>` for all `ProjectileDefinition` fields
 - [x] 1.6 Define `EffectOverride` struct and implement `interpret_effects(section: &MmlSection) -> Vec<EffectOverride>` for all `EffectDefinition` fields
-- [ ] 1.7 Define `PlayerOverride` struct and implement `interpret_player(section: &MmlSection) -> PlayerOverride` for player attributes (energy, oxygen, light, visual arcs, swim, powerup durations, starting items)
+- [x] 1.7 Define `PlayerOverride` struct and implement `interpret_player(section: &MmlSection) -> PlayerOverride` for player attributes (energy, oxygen, light, visual arcs, swim, powerup durations, starting items)
 - [x] 1.8 Define `DynamicLimitsOverride` struct and implement `interpret_dynamic_limits(section: &MmlSection) -> DynamicLimitsOverride` parsing child element text content as integers
 - [x] 1.9 Define `ItemOverride` struct and implement `interpret_items(section: &MmlSection) -> Vec<ItemOverride>` for item type, names, maximum, invalid flag
 - [x] 1.10 Define `LandscapeOverride` struct and implement `interpret_landscapes(section: &MmlSection)` producing landscape overrides and clear directives
