@@ -718,6 +718,108 @@ impl SimWorld {
             })
             .collect()
     }
+
+    /// Mark the player's current polygon (and its immediately reachable
+    /// surroundings) as explored on the [`ExploredMap`] (boxes 2.1/2.2).
+    ///
+    /// Called each tick from [`SimWorld::tick`] after `run_player_physics()`,
+    /// so the player's `PolygonIndex` already reflects this tick's movement.
+    ///
+    /// For the polygon the player stands in we mark:
+    /// - the polygon itself, and
+    /// - every line bordering it (the `line_index` of each
+    ///   `MapGeometry::polygon_adjacency` entry for that polygon).
+    ///
+    /// Then, for each border line that is **non-solid** (`!line_solid[line]`)
+    /// and leads to an adjacent polygon (the entry's `Some(adjacent)`), we also
+    /// mark that adjacent polygon and *its* border lines explored. This reveals
+    /// the rooms you can actually see/walk into through open lines while leaving
+    /// rooms hidden behind solid walls dark, matching Marathon's automap reveal.
+    ///
+    /// Exploration is sticky: this only ever sets flags to `true`, so a polygon
+    /// the player has left stays explored.
+    ///
+    /// Borrow discipline: read the player `PolygonIndex` and clone the geometry
+    /// fields we need first (immutable), collect every polygon/line index to
+    /// mark, then take a mutable borrow of [`ExploredMap`] and apply — so the
+    /// player query, the geometry resource, and the explored-map resource never
+    /// alias. All index writes are bounds-checked against the explored vectors.
+    pub fn update_explored_map(&mut self) {
+        // Read the player's current polygon (immutable player query).
+        let Some(player_poly) = ({
+            let mut q = self
+                .world
+                .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Player>>();
+            q.iter(&self.world).next().map(|p| p.0)
+        }) else {
+            // No player entity (e.g. a headless map) → nothing to reveal.
+            return;
+        };
+
+        // Clone the geometry data we need so the mutable ExploredMap borrow below
+        // doesn't alias the MapGeometry resource.
+        let (polygon_adjacency, line_solid) = {
+            let geometry = self.world.resource::<MapGeometry>();
+            (
+                geometry.polygon_adjacency.clone(),
+                geometry.line_solid.clone(),
+            )
+        };
+
+        let polygon_count = polygon_adjacency.len();
+        let line_count = line_solid.len();
+
+        // Collect indices to mark (collect-then-apply). A polygon with no
+        // adjacency entry (out of range) reveals nothing.
+        let mut polys_to_mark: Vec<usize> = Vec::new();
+        let mut lines_to_mark: Vec<usize> = Vec::new();
+
+        // Mark border lines of `poly` and queue any non-solid neighbour polygon.
+        // Returns the neighbour polygons reachable through non-solid lines.
+        let collect_borders = |poly: usize, lines: &mut Vec<usize>| -> Vec<usize> {
+            let mut neighbours = Vec::new();
+            if let Some(borders) = polygon_adjacency.get(poly) {
+                for &(line_idx, adj) in borders {
+                    lines.push(line_idx);
+                    if let Some(adj_poly) = adj {
+                        // Reachable only through a non-solid line.
+                        if !line_solid.get(line_idx).copied().unwrap_or(true) {
+                            neighbours.push(adj_poly);
+                        }
+                    }
+                }
+            }
+            neighbours
+        };
+
+        // Player's own polygon + all of its border lines.
+        polys_to_mark.push(player_poly);
+        let neighbours = collect_borders(player_poly, &mut lines_to_mark);
+
+        // Each adjacent polygon reachable through a non-solid line, plus its
+        // border lines.
+        for adj_poly in neighbours {
+            polys_to_mark.push(adj_poly);
+            let _ = collect_borders(adj_poly, &mut lines_to_mark);
+        }
+
+        // Apply (mutable borrow of ExploredMap only now), bounds-checked.
+        let mut explored = self.world.resource_mut::<ExploredMap>();
+        for p in polys_to_mark {
+            if p < polygon_count {
+                if let Some(slot) = explored.explored_polygons.get_mut(p) {
+                    *slot = true;
+                }
+            }
+        }
+        for l in lines_to_mark {
+            if l < line_count {
+                if let Some(slot) = explored.explored_lines.get_mut(l) {
+                    *slot = true;
+                }
+            }
+        }
+    }
 }
 
 /// Current per-polygon dynamic geometry/lighting state, indexed by polygon.
@@ -2008,6 +2110,229 @@ mod poly_dynamic_data_tests {
             (state.zoom - 12.0).abs() < f32::EPSILON,
             "default zoom is 12.0"
         );
+    }
+
+    /// A line whose SOLID flag is set explicitly. `mk_line` always sets SOLID;
+    /// for the exploration tests we need non-solid lines too.
+    fn mk_line_solid(a: i16, b: i16, solid: bool) -> Line {
+        let mut line = mk_line(a, b);
+        // 0x4000 = LINE_SOLID. Set or clear it explicitly.
+        if solid {
+            line.flags |= 0x4000;
+        } else {
+            line.flags &= !0x4000;
+        }
+        line
+    }
+
+    /// Like `mk_square_polygon` but lets the caller wire per-edge adjacency.
+    fn mk_square_polygon_adj(
+        polygon_type: i16,
+        endpoint_indexes: [i16; 8],
+        line_indexes: [i16; 8],
+        adjacent_polygon_indexes: [i16; 8],
+        floor_height: i16,
+        ceiling_height: i16,
+    ) -> Polygon {
+        let mut poly = mk_square_polygon(
+            polygon_type,
+            endpoint_indexes,
+            line_indexes,
+            floor_height,
+            ceiling_height,
+        );
+        poly.adjacent_polygon_indexes = adjacent_polygon_indexes;
+        poly
+    }
+
+    /// Three-polygon test fixture for the exploration system (boxes 2.3/2.4).
+    ///
+    /// Layout (three 1024x1024 squares in a horizontal row):
+    /// ```text
+    ///   poly0 (x 0..1024) | poly1 (x 1024..2048) | poly2 (x 2048..3072)
+    /// ```
+    /// Shared vertical edges:
+    /// - line 1 between poly0 and poly1 is **NON-SOLID** (open doorway), with
+    ///   adjacency wired both ways → from poly0 you can reach poly1.
+    /// - line 5 between poly1 and poly2 is **SOLID** (a wall). Adjacency is wired
+    ///   both ways so a "neighbour exists" but the line is solid → poly2 is NOT
+    ///   reachable from poly1 through it, so standing in poly0 never reveals poly2.
+    ///
+    /// Lines:
+    /// - 0,2,3   : poly0 outer walls (solid)
+    /// - 1       : poly0/poly1 shared edge (NON-SOLID)
+    /// - 4,6     : poly1 outer top/bottom walls (solid)
+    /// - 5       : poly1/poly2 shared edge (SOLID)
+    /// - 7,8,9   : poly2 outer walls (solid)
+    fn three_poly_map() -> MapData {
+        // Endpoints: a 4-column grid of corners at y=0 and y=1024.
+        let endpoints = vec![
+            mk_endpoint(0, 0, 0),       // 0
+            mk_endpoint(1024, 0, 0),    // 1
+            mk_endpoint(2048, 0, 1),    // 2
+            mk_endpoint(3072, 0, 2),    // 3
+            mk_endpoint(0, 1024, 0),    // 4
+            mk_endpoint(1024, 1024, 0), // 5
+            mk_endpoint(2048, 1024, 1), // 6
+            mk_endpoint(3072, 1024, 2), // 7
+        ];
+
+        // Lines (index : endpoints : role).
+        let lines = vec![
+            mk_line_solid(0, 1, true),  // 0  poly0 bottom
+            mk_line_solid(1, 5, false), // 1  poly0/poly1 shared edge  NON-SOLID
+            mk_line_solid(5, 4, true),  // 2  poly0 top
+            mk_line_solid(4, 0, true),  // 3  poly0 left
+            mk_line_solid(1, 2, true),  // 4  poly1 bottom
+            mk_line_solid(2, 6, true),  // 5  poly1/poly2 shared edge  SOLID
+            mk_line_solid(6, 5, true),  // 6  poly1 top
+            mk_line_solid(2, 3, true),  // 7  poly2 bottom
+            mk_line_solid(3, 7, true),  // 8  poly2 right
+            mk_line_solid(7, 6, true),  // 9  poly2 top
+        ];
+
+        // poly0: lines [0 (bottom), 1 (shared→poly1), 2 (top), 3 (left)].
+        // Only edge 1 is adjacent (to poly1); the rest are void (-1).
+        let poly0 = mk_square_polygon_adj(
+            0,
+            [0, 1, 5, 4, -1, -1, -1, -1],
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            [-1, 1, -1, -1, -1, -1, -1, -1],
+            0,
+            2048,
+        );
+        // poly1: lines [4 (bottom), 5 (shared→poly2, SOLID), 6 (top), 1 (shared→poly0)].
+        // Adjacent to poly2 via line 5 and to poly0 via line 1.
+        let poly1 = mk_square_polygon_adj(
+            0,
+            [1, 2, 6, 5, -1, -1, -1, -1],
+            [4, 5, 6, 1, -1, -1, -1, -1],
+            [-1, 2, -1, 0, -1, -1, -1, -1],
+            0,
+            2048,
+        );
+        // poly2: lines [7 (bottom), 8 (right), 9 (top), 5 (shared→poly1, SOLID)].
+        let poly2 = mk_square_polygon_adj(
+            0,
+            [2, 3, 7, 6, -1, -1, -1, -1],
+            [7, 8, 9, 5, -1, -1, -1, -1],
+            [-1, -1, -1, 1, -1, -1, -1, -1],
+            0,
+            2048,
+        );
+
+        MapData {
+            endpoints,
+            lines,
+            sides: vec![],
+            polygons: vec![poly0, poly1, poly2],
+            objects: vec![],
+            lights: LightData::Static(vec![constant_light(1.0)]),
+            platforms: vec![],
+            media: vec![],
+            annotations: vec![],
+            terminals: vec![],
+            ambient_sounds: vec![],
+            random_sounds: vec![],
+            map_info: None,
+            item_placement: vec![],
+            guard_paths: None,
+        }
+    }
+
+    /// Spawn a minimal player entity in the given polygon for the exploration
+    /// tests (the fixtures have no map `objects`, so no player is auto-spawned).
+    fn spawn_test_player(world: &mut SimWorld, polygon: usize) {
+        let center = match polygon {
+            0 => Vec3::new(0.5, 0.5, 0.0),
+            1 => Vec3::new(1.5, 0.5, 0.0),
+            _ => Vec3::new(2.5, 0.5, 0.0),
+        };
+        world
+            .world
+            .spawn((Player, Position(center), crate::PolygonIndex(polygon)));
+    }
+
+    #[test]
+    fn update_explored_map_reveals_player_polygon_and_non_solid_neighbour() {
+        // box 2.3: player in poly0 of a 3-poly map. After one tick:
+        //  - poly0 explored + its border lines explored,
+        //  - poly1 (reachable via the NON-SOLID shared line) explored,
+        //  - poly2 (behind the SOLID poly1/poly2 wall, never bordering poly0)
+        //    NOT explored.
+        let map = three_poly_map();
+        let mut world =
+            SimWorld::new(&map, &empty_physics(), &SimConfig::default()).expect("world");
+        spawn_test_player(&mut world, 0);
+
+        world.tick(crate::tick::TickInput::default());
+
+        let explored = world.world.resource::<ExploredMap>();
+        // Player's own polygon revealed.
+        assert!(explored.explored_polygons[0], "poly0 (player) explored");
+        // poly0's border lines (0,1,2,3) revealed.
+        for &l in &[0usize, 1, 2, 3] {
+            assert!(explored.explored_lines[l], "poly0 border line {l} explored");
+        }
+        // Neighbour through the NON-SOLID shared line revealed.
+        assert!(
+            explored.explored_polygons[1],
+            "poly1 reachable via non-solid line is explored"
+        );
+        // poly2 sits behind the SOLID poly1/poly2 wall and never borders poly0,
+        // so it stays dark.
+        assert!(
+            !explored.explored_polygons[2],
+            "poly2 behind a solid wall is NOT explored"
+        );
+    }
+
+    #[test]
+    fn update_explored_map_persists_across_movement() {
+        // box 2.4: move the player poly0 -> poly1, tick, and verify poly0 stays
+        // explored (sticky) while poly1 and its non-solid neighbours are now
+        // explored too.
+        let map = three_poly_map();
+        let mut world =
+            SimWorld::new(&map, &empty_physics(), &SimConfig::default()).expect("world");
+        spawn_test_player(&mut world, 0);
+
+        // Tick once in poly0 → poly0 (and poly1) explored.
+        world.tick(crate::tick::TickInput::default());
+        assert!(
+            world.world.resource::<ExploredMap>().explored_polygons[0],
+            "poly0 explored after first tick"
+        );
+
+        // Move the player into poly1 by rewriting its PolygonIndex directly.
+        {
+            let mut q = world
+                .world
+                .query_filtered::<&mut crate::PolygonIndex, With<Player>>();
+            let mut poly = q.iter_mut(&mut world.world).next().expect("player");
+            poly.0 = 1;
+        }
+
+        world.tick(crate::tick::TickInput::default());
+
+        let explored = world.world.resource::<ExploredMap>();
+        // Persistence: poly0 is still explored even though the player left it.
+        assert!(
+            explored.explored_polygons[0],
+            "poly0 remains explored after leaving it (persistence)"
+        );
+        // poly1 (current polygon) explored.
+        assert!(explored.explored_polygons[1], "poly1 (current) explored");
+        // poly1's non-solid neighbour is poly0; poly2 is behind the SOLID wall
+        // from poly1, so it must stay unexplored.
+        assert!(
+            !explored.explored_polygons[2],
+            "poly2 behind solid wall from poly1 stays unexplored"
+        );
+        // poly1's border lines (4,5,6,1) explored.
+        for &l in &[1usize, 4, 5, 6] {
+            assert!(explored.explored_lines[l], "poly1 border line {l} explored");
+        }
     }
 
     #[test]

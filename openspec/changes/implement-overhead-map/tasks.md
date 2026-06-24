@@ -8,10 +8,10 @@
 
 ## 2. Exploration Update System
 
-- [ ] 2.1 Implement `update_explored_map()` method on `SimWorld` that reads the player's `PolygonIndex`, marks that polygon as explored, marks all of its lines as explored (by iterating `polygon_adjacency` for the polygon and extracting line indices), then for each adjacent polygon reachable through a non-solid line, marks that polygon and its border lines as explored.
-- [ ] 2.2 Call `update_explored_map()` in `SimWorld::tick()` after `run_player_physics()`.
-- [ ] 2.3 Add unit test: place player in polygon 0 of a 3-polygon test map, tick once, verify polygon 0 is explored and its lines are explored. Verify adjacent polygon via non-solid line is explored. Verify polygon behind solid wall is NOT explored.
-- [ ] 2.4 Add unit test: move player from polygon 0 to polygon 1 (update PolygonIndex), tick, verify polygon 0 remains explored (persistence) and polygon 1 and its neighbors are now explored.
+- [x] 2.1 Implement `update_explored_map()` method on `SimWorld` that reads the player's `PolygonIndex`, marks that polygon as explored, marks all of its lines as explored (by iterating `polygon_adjacency` for the polygon and extracting line indices), then for each adjacent polygon reachable through a non-solid line, marks that polygon and its border lines as explored.
+- [x] 2.2 Call `update_explored_map()` in `SimWorld::tick()` after `run_player_physics()`.
+- [x] 2.3 Add unit test: place player in polygon 0 of a 3-polygon test map, tick once, verify polygon 0 is explored and its lines are explored. Verify adjacent polygon via non-solid line is explored. Verify polygon behind solid wall is NOT explored.
+- [x] 2.4 Add unit test: move player from polygon 0 to polygon 1 (update PolygonIndex), tick, verify polygon 0 remains explored (persistence) and polygon 1 and its neighbors are now explored.
 
 ## 3. Line/Polygon Classification and Query API
 
