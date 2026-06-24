@@ -1839,3 +1839,424 @@ mod tests {
         assert!(set.monsters.is_empty());
     }
 }
+
+/// Section 6 (boxes 6.1–6.6): comprehensive unit-test coverage that FILLS the
+/// gaps left by the per-feature tests above — parse-helper hex/sign/edge forms,
+/// **empty-section** interpreter behavior, direct `MmlSection::merge`
+/// exercise, the `MmlDocument::layer` only-base/only-overlay/both matrix,
+/// `from_document` subset/full, and `apply_overrides` empty-set no-op. It does
+/// not duplicate the existing tests; it covers scenarios they skip.
+#[cfg(test)]
+mod section6_coverage {
+    use super::*;
+    use crate::mml::{MmlDocument, MmlElement, MmlSection};
+    use std::collections::HashMap;
+
+    // ── helpers ──
+
+    /// Build an `MmlElement` with the given name and `(key, value)` attributes.
+    fn elem(name: &str, attrs: &[(&str, &str)]) -> MmlElement {
+        let mut attributes = HashMap::new();
+        for (k, v) in attrs {
+            attributes.insert((*k).to_string(), (*v).to_string());
+        }
+        MmlElement {
+            name: name.to_string(),
+            attributes,
+            children: Vec::new(),
+            text: None,
+        }
+    }
+
+    /// Build an `MmlSection` from section-level attrs plus a list of elements.
+    fn section(section_attrs: &[(&str, &str)], elements: Vec<MmlElement>) -> MmlSection {
+        let mut attributes = HashMap::new();
+        for (k, v) in section_attrs {
+            attributes.insert((*k).to_string(), (*v).to_string());
+        }
+        MmlSection {
+            attributes,
+            elements,
+        }
+    }
+
+    /// An empty section: no section attributes and no child elements.
+    fn empty_section() -> MmlSection {
+        MmlSection::default()
+    }
+
+    // ─── box 6.1: parse_mml_* helpers — hex / sign / boolean / edge forms ─────
+    //
+    // The existing tests cover the common decimal/hex/bool/malformed cases. These
+    // fill the remaining documented-but-untested forms: leading `+`, `0x0`, the
+    // full bool truth table including the AlephOne short forms in mixed case, and
+    // confirmation that unsupported forms (`yes`/`no`/empty/whitespace-only) map
+    // to `None` as the helper actually implements them.
+
+    #[test]
+    fn box61_int_helpers_sign_and_zero_hex_forms() {
+        // explicit `+` sign accepted (normalize_int strips it)
+        assert_eq!(parse_mml_i16("+7"), Some(7));
+        assert_eq!(parse_mml_i32("+2000000000"), Some(2_000_000_000));
+        assert_eq!(parse_mml_u32("+42"), Some(42));
+        // 0x0 / 0X0 hex zero
+        assert_eq!(parse_mml_i16("0x0"), Some(0));
+        assert_eq!(parse_mml_i32("0X0"), Some(0));
+        assert_eq!(parse_mml_u32("0x0"), Some(0));
+        // lowercase and uppercase hex digits both parse
+        assert_eq!(parse_mml_i32("0xabcdef"), Some(0x00AB_CDEF));
+        assert_eq!(parse_mml_u32("0XABCDEF"), Some(0x00AB_CDEF));
+    }
+
+    #[test]
+    fn box61_int_helpers_reject_more_malformed_forms() {
+        // bare "0x" with no digits, internal spaces, plus floats handed to ints
+        assert_eq!(parse_mml_i16("0x"), None);
+        assert_eq!(parse_mml_i32("1 2"), None);
+        assert_eq!(parse_mml_u32("3.5"), None);
+        assert_eq!(parse_mml_i16("  "), None); // whitespace-only
+                                               // u32 still rejects a hex negative
+        assert_eq!(parse_mml_u32("-0xFF"), None);
+    }
+
+    #[test]
+    fn box61_f32_edge_forms() {
+        // scientific notation, leading dot, explicit positive
+        assert_eq!(parse_mml_f32("1e3"), Some(1000.0));
+        assert_eq!(parse_mml_f32(".5"), Some(0.5));
+        assert_eq!(parse_mml_f32("+2.0"), Some(2.0));
+        // no hex floats, empty/whitespace-only -> None
+        assert_eq!(parse_mml_f32("0xA"), None);
+        assert_eq!(parse_mml_f32(""), None);
+        assert_eq!(parse_mml_f32("   "), None);
+    }
+
+    #[test]
+    fn box61_bool_full_truth_table_and_unsupported_forms() {
+        // every accepted true spelling (case-insensitive, whitespace-tolerant)
+        for t in ["1", "t", "T", "true", "TRUE", "True", " true ", "\tt\n"] {
+            assert_eq!(parse_mml_bool(t), Some(true), "{t:?} -> true");
+        }
+        // every accepted false spelling
+        for f in ["0", "f", "F", "false", "FALSE", "False", " false ", "\tf\n"] {
+            assert_eq!(parse_mml_bool(f), Some(false), "{f:?} -> false");
+        }
+        // AlephOne's parser here does NOT accept yes/no/on/off — confirm they are None
+        for bad in [
+            "yes", "no", "on", "off", "y", "n", "2", "-1", "", "  ", "tru",
+        ] {
+            assert_eq!(parse_mml_bool(bad), None, "{bad:?} -> None");
+        }
+    }
+
+    // ─── box 6.2: interpret_* on EMPTY sections (no child elements) ───────────
+    //
+    // Every interpreter must produce an empty/default result for an empty section
+    // — the scenario the per-feature tests above do not cover. Also exercises a
+    // section that contains only non-matching elements (still empty result).
+
+    #[test]
+    fn box62_interpreters_on_empty_sections_yield_defaults() {
+        let s = empty_section();
+        assert!(interpret_monsters(&s).is_empty());
+        assert!(interpret_projectiles(&s).is_empty());
+        assert!(interpret_effects(&s).is_empty());
+        assert!(interpret_items(&s).is_empty());
+        assert_eq!(
+            interpret_dynamic_limits(&s),
+            DynamicLimitsOverride::default()
+        );
+        assert_eq!(interpret_landscapes(&s), LandscapesOverride::default());
+        assert_eq!(
+            interpret_texture_loading(&s),
+            TextureLoadingOverride::default()
+        );
+        assert_eq!(interpret_weapons(&s), WeaponOverrides::default());
+        // scenario reads only section attributes; an empty section -> all None
+        assert_eq!(interpret_scenario(&s), ScenarioIdOverride::default());
+    }
+
+    #[test]
+    fn box62_stringset_empty_section_has_no_resource_id() {
+        // An empty <stringset> has no `index` attribute -> no resource id ->
+        // empty entries (warned). With an index but no <string> children it is
+        // also empty.
+        assert_eq!(
+            interpret_stringset(&empty_section()),
+            StringSetOverride::default()
+        );
+        let only_index = section(&[("index", "128")], Vec::new());
+        assert_eq!(
+            interpret_stringset(&only_index),
+            StringSetOverride::default(),
+            "resource id present but no <string> children -> no entries"
+        );
+    }
+
+    #[test]
+    fn box62_texture_loading_empty_elements_keeps_section_flag() {
+        // texture_loading reads `landscapes` from the SECTION attributes; an
+        // empty element list still surfaces that flag with zero texture_envs.
+        let s = section(&[("landscapes", "true")], Vec::new());
+        let out = interpret_texture_loading(&s);
+        assert_eq!(out.landscapes, Some(true));
+        assert!(out.texture_envs.is_empty());
+    }
+
+    #[test]
+    fn box62_interpreters_ignore_only_nonmatching_elements() {
+        // A section whose only children are the wrong element name still yields
+        // an empty result (the loops `continue` past non-matching names).
+        let monsters = section(&[], vec![elem("not_a_monster", &[("index", "0")])]);
+        assert!(interpret_monsters(&monsters).is_empty());
+        let items = section(&[], vec![elem("widget", &[("index", "0")])]);
+        assert!(interpret_items(&items).is_empty());
+        let landscapes = section(&[], vec![elem("noise", &[("coll", "1")])]);
+        assert_eq!(
+            interpret_landscapes(&landscapes),
+            LandscapesOverride::default()
+        );
+    }
+
+    // ─── box 6.3: MmlSection::merge() exercised DIRECTLY ─────────────────────
+    //
+    // The existing tests drive merge only through MmlDocument::layer. These call
+    // MmlSection::merge() directly to cover: index matching, attribute
+    // preservation (overlay wins / base kept), recursive child merge, and
+    // non-indexed element handling (always appended, never matched).
+
+    #[test]
+    fn box63_merge_matches_by_name_and_index() {
+        let base = section(
+            &[],
+            vec![
+                elem("monster", &[("index", "0"), ("vitality", "10")]),
+                elem("monster", &[("index", "1"), ("vitality", "20")]),
+            ],
+        );
+        let overlay = section(
+            &[],
+            vec![elem("monster", &[("index", "1"), ("vitality", "99")])],
+        );
+        let merged = MmlSection::merge(base, overlay);
+        assert_eq!(merged.elements.len(), 2, "siblings preserved, no duplicate");
+        assert_eq!(
+            merged.find_element("monster", "0").unwrap().attributes["vitality"],
+            "10"
+        );
+        assert_eq!(
+            merged.find_element("monster", "1").unwrap().attributes["vitality"],
+            "99",
+            "matched element's attribute overridden"
+        );
+    }
+
+    #[test]
+    fn box63_merge_attribute_preservation_section_and_element() {
+        // Section-level attributes: overlay wins, base-only preserved.
+        let base = section(
+            &[("name", "Base"), ("id", "B")],
+            vec![elem("e", &[("index", "0"), ("a", "1"), ("b", "2")])],
+        );
+        let overlay = section(
+            &[("name", "Over")],
+            vec![elem("e", &[("index", "0"), ("a", "9")])],
+        );
+        let merged = MmlSection::merge(base, overlay);
+        assert_eq!(
+            merged.attributes["name"], "Over",
+            "overlay section attr wins"
+        );
+        assert_eq!(merged.attributes["id"], "B", "base-only section attr kept");
+        let e = merged.find_element("e", "0").unwrap();
+        assert_eq!(e.attributes["a"], "9", "overlay element attr wins");
+        assert_eq!(e.attributes["b"], "2", "base-only element attr kept");
+    }
+
+    #[test]
+    fn box63_merge_recursive_child_merge() {
+        let mut base_weapon = elem("weapon", &[("index", "0")]);
+        base_weapon.children = vec![elem("trigger", &[("index", "0"), ("rounds", "10")])];
+        let mut overlay_weapon = elem("weapon", &[("index", "0")]);
+        overlay_weapon.children = vec![
+            elem("trigger", &[("index", "0"), ("rounds", "20")]),
+            elem("trigger", &[("index", "1"), ("rounds", "5")]),
+        ];
+        let merged = MmlSection::merge(
+            section(&[], vec![base_weapon]),
+            section(&[], vec![overlay_weapon]),
+        );
+        let weapon = merged.find_element("weapon", "0").unwrap();
+        assert_eq!(weapon.children.len(), 2, "new child trigger appended");
+        let t0 = weapon
+            .children
+            .iter()
+            .find(|c| c.attributes.get("index").map(String::as_str) == Some("0"))
+            .unwrap();
+        assert_eq!(
+            t0.attributes["rounds"], "20",
+            "matched child merged recursively"
+        );
+    }
+
+    #[test]
+    fn box63_merge_non_indexed_elements_always_appended() {
+        // Elements without an `index` attribute are never matched: both the base's
+        // and the overlay's non-indexed elements are kept side by side.
+        let base = section(&[], vec![elem("clear", &[("coll", "1")])]);
+        let overlay = section(&[], vec![elem("clear", &[("coll", "2")])]);
+        let merged = MmlSection::merge(base, overlay);
+        assert_eq!(
+            merged.elements.len(),
+            2,
+            "non-indexed overlay element appended, base kept"
+        );
+        let colls: Vec<&str> = merged
+            .elements
+            .iter()
+            .map(|e| e.attributes["coll"].as_str())
+            .collect();
+        assert!(colls.contains(&"1") && colls.contains(&"2"));
+    }
+
+    #[test]
+    fn box63_merge_unmatched_overlay_index_is_appended() {
+        let base = section(&[], vec![elem("monster", &[("index", "0")])]);
+        let overlay = section(&[], vec![elem("monster", &[("index", "5")])]);
+        let merged = MmlSection::merge(base, overlay);
+        assert_eq!(merged.elements.len(), 2);
+        assert!(merged.find_element("monster", "0").is_some());
+        assert!(merged.find_element("monster", "5").is_some());
+    }
+
+    // ─── box 6.4: MmlDocument::layer() — only-base / only-overlay / both ──────
+
+    #[test]
+    fn box64_layer_section_only_in_overlay_is_carried_through() {
+        let base = MmlDocument::from_bytes(b"<marathon><monsters/></marathon>").unwrap();
+        let overlay = MmlDocument::from_bytes(b"<marathon><weapons/></marathon>").unwrap();
+        let result = MmlDocument::layer(base, overlay);
+        assert!(
+            result.monsters.is_some(),
+            "base-only section carried through"
+        );
+        assert!(
+            result.weapons.is_some(),
+            "overlay-only section carried through"
+        );
+    }
+
+    #[test]
+    fn box64_layer_section_only_in_base_is_carried_through() {
+        let base =
+            MmlDocument::from_bytes(b"<marathon><monsters/><dynamic_limits/></marathon>").unwrap();
+        let overlay = MmlDocument::from_bytes(b"<marathon><weapons/></marathon>").unwrap();
+        let result = MmlDocument::layer(base, overlay);
+        assert!(result.monsters.is_some());
+        assert!(
+            result.dynamic_limits.is_some(),
+            "base-only section survives layering"
+        );
+        assert!(result.weapons.is_some());
+    }
+
+    #[test]
+    fn box64_layer_section_in_both_merges_at_element_level() {
+        // Backward-compatible behavior plus element-level merge: a section present
+        // in both documents is merged (not replaced), keeping base siblings.
+        let base = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"0\" vitality=\"10\"/><monster index=\"1\" vitality=\"20\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let overlay = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"1\" vitality=\"99\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let monsters = MmlDocument::layer(base, overlay).monsters.unwrap();
+        assert_eq!(
+            monsters.elements.len(),
+            2,
+            "base sibling kept (not replaced)"
+        );
+        assert_eq!(
+            monsters.find_element("monster", "0").unwrap().attributes["vitality"],
+            "10"
+        );
+        assert_eq!(
+            monsters.find_element("monster", "1").unwrap().attributes["vitality"],
+            "99"
+        );
+    }
+
+    #[test]
+    fn box64_layer_empty_over_empty_is_empty() {
+        // Backward compatibility: layering two empty documents stays empty.
+        let base = MmlDocument::from_bytes(b"<marathon></marathon>").unwrap();
+        let overlay = MmlDocument::from_bytes(b"<marathon></marathon>").unwrap();
+        assert!(MmlDocument::layer(base, overlay).is_empty());
+    }
+
+    // ─── box 6.5: MmlOverrideSet::from_document — empty / subset / full ───────
+
+    #[test]
+    fn box65_from_document_empty_is_all_defaults() {
+        let doc = MmlDocument::default();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set, MmlOverrideSet::default());
+    }
+
+    #[test]
+    fn box65_from_document_subset_of_sections() {
+        // Only two implemented sections present; the rest stay default/empty.
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><items><item index=\"3\" maximum=\"9\"/></items><landscapes><clear coll=\"7\"/></landscapes></marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set.items.len(), 1);
+        assert_eq!(set.items[0].maximum, Some(9));
+        assert_eq!(set.landscapes.clears, vec![7]);
+        // untouched implemented sections at default
+        assert!(set.monsters.is_empty());
+        assert_eq!(set.dynamic_limits, DynamicLimitsOverride::default());
+        assert_eq!(set.scenario, ScenarioIdOverride::default());
+        assert!(set.stub_sections.is_empty());
+    }
+
+    #[test]
+    fn box65_from_document_full_many_sections() {
+        // Every implemented section populated plus two stub sections, all in one
+        // document — the "full document" scenario.
+        let doc = MmlDocument::from_bytes(
+            b"<marathon>\
+                <monsters><monster index=\"0\" vitality=\"500\"/></monsters>\
+                <weapons><order index=\"0\" weapon=\"3\"/></weapons>\
+                <items><item index=\"1\" maximum=\"4\"/></items>\
+                <dynamic_limits><monsters>2048</monsters></dynamic_limits>\
+                <landscapes><landscape coll=\"27\"/></landscapes>\
+                <texture_loading landscapes=\"true\"><texture_env index=\"0\" which=\"1\" coll=\"5\"/></texture_loading>\
+                <stringset index=\"128\"><string index=\"0\">Hi</string></stringset>\
+                <scenario name=\"Infinity\" version=\"2\" id=\"INF\"/>\
+                <platforms><platform index=\"0\"/></platforms>\
+                <sounds/>\
+              </marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set.monsters.len(), 1);
+        assert_eq!(set.monsters[0].vitality, Some(500));
+        assert_eq!(set.weapons.order.len(), 1);
+        assert_eq!(set.weapons.order[0].weapon, Some(3));
+        assert_eq!(set.items.len(), 1);
+        assert_eq!(set.dynamic_limits.monsters, Some(2048));
+        assert_eq!(set.landscapes.landscapes.len(), 1);
+        assert_eq!(set.texture_loading.landscapes, Some(true));
+        assert_eq!(set.texture_loading.texture_envs.len(), 1);
+        assert_eq!(set.stringset.entries, vec![((128, 0), "Hi".to_string())]);
+        assert_eq!(set.scenario.name.as_deref(), Some("Infinity"));
+        assert_eq!(set.scenario.version, Some(2));
+        // both stub sections recorded
+        assert!(set.stub_sections.iter().any(|s| s == "platforms"));
+        assert!(set.stub_sections.iter().any(|s| s == "sounds"));
+    }
+}

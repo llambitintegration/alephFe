@@ -55,12 +55,12 @@
 
 ## 6. Testing
 
-- [ ] 6.1 Unit tests for each `parse_mml_*` helper: decimal, hex, boolean variants, malformed values return None
-- [ ] 6.2 Unit tests for each `interpret_*` function: valid elements, missing index, malformed attributes, empty sections
-- [ ] 6.3 Unit tests for `MmlSection::merge()`: index matching, attribute preservation, recursive child merge, non-indexed element handling
-- [ ] 6.4 Unit tests for `MmlDocument::layer()` with element-level merge: backward compatibility with existing tests plus new merge scenarios
-- [ ] 6.5 Unit tests for `MmlOverrideSet::from_document()`: empty document, document with subset of sections, full document
-- [ ] 6.6 Unit tests for `PhysicsData::apply_overrides()`: single override, multiple overrides, out-of-bounds, None fields, empty override set
+- [x] 6.1 Unit tests for each `parse_mml_*` helper: decimal, hex, boolean variants, malformed values return None
+- [x] 6.2 Unit tests for each `interpret_*` function: valid elements, missing index, malformed attributes, empty sections
+- [x] 6.3 Unit tests for `MmlSection::merge()`: index matching, attribute preservation, recursive child merge, non-indexed element handling
+- [x] 6.4 Unit tests for `MmlDocument::layer()` with element-level merge: backward compatibility with existing tests plus new merge scenarios
+- [x] 6.5 Unit tests for `MmlOverrideSet::from_document()`: empty document, document with subset of sections, full document
+- [x] 6.6 Unit tests for `PhysicsData::apply_overrides()`: single override, multiple overrides, out-of-bounds, None fields, empty override set
 - [ ] 6.7 Integration tests with real MML snippets from Marathon 2 and Infinity scenarios: monster stats, weapon modifications, dynamic limits changes
 - [ ] 6.8 Integration test for full cascade: global + scenario + plugin + level MML layered and applied to physics data, verify final values match expected cascade order
 - [ ] 6.9 Verify all tests pass in Docker CI (`cargo test` in `marathon-formats` crate)

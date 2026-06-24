@@ -1030,4 +1030,42 @@ mod tests {
         assert_eq!(pd.projectiles.as_ref().unwrap()[0].radius, 64, "unchanged");
         assert_eq!(pd.effects.as_ref().unwrap()[0].collection, 3, "unchanged");
     }
+
+    #[test]
+    fn apply_overrides_empty_set_is_noop() {
+        // box 6.6: an empty override set leaves every definition exactly as
+        // parsed — applying `MmlOverrideSet::default()` must not change anything
+        // and must not panic.
+        let mut pd = physics_data_fixture();
+        let before_monsters: Vec<i16> = pd
+            .monsters
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|m| m.vitality)
+            .collect();
+        let before_proj_radius = pd.projectiles.as_ref().unwrap()[0].radius;
+        let before_effect_coll = pd.effects.as_ref().unwrap()[0].collection;
+
+        pd.apply_overrides(&MmlOverrideSet::default());
+
+        let after_monsters: Vec<i16> = pd
+            .monsters
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|m| m.vitality)
+            .collect();
+        assert_eq!(before_monsters, after_monsters, "monsters unchanged");
+        assert_eq!(
+            pd.projectiles.as_ref().unwrap()[0].radius,
+            before_proj_radius,
+            "projectile unchanged"
+        );
+        assert_eq!(
+            pd.effects.as_ref().unwrap()[0].collection,
+            before_effect_coll,
+            "effect unchanged"
+        );
+    }
 }
