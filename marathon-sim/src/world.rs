@@ -72,6 +72,65 @@ impl MapGeometry {
     }
 }
 
+/// Static per-line / per-polygon map metadata for the overhead (automap)
+/// renderer (box 1.1). Built once from [`MapData`] alongside [`MapGeometry`];
+/// holds the source classification data needed to colour and categorise lines
+/// and polygons on the overhead map.
+///
+/// Like [`MapGeometry`], this is a static geometry resource and is *not*
+/// serialized (the snapshot/save path only persists dynamic state — this is
+/// rebuilt from the map on load), so it matches `MapGeometry`'s derive set
+/// (`Resource, Debug, Clone`) and skips serde.
+#[derive(Resource, Debug, Clone)]
+pub struct MapMetadata {
+    /// Per-line flags, decoded from each line's raw flag word.
+    pub line_flags: Vec<marathon_formats::map::LineFlags>,
+    /// Per-line: whether either of the line's sides carries a control panel
+    /// (`SideFlags::IS_CONTROL_PANEL`, 0x0002). Used to classify a line as a
+    /// control-panel line regardless of its SOLID flag.
+    pub line_has_control_panel: Vec<bool>,
+    /// Per-line adjacent polygon owners: `(clockwise_polygon_owner,
+    /// counterclockwise_polygon_owner)`. `-1` marks "no polygon on that side"
+    /// (void / map edge), preserved verbatim from the map data.
+    pub line_adjacent_polygons: Vec<(i16, i16)>,
+    /// Per-polygon type (e.g. 5 = platform).
+    pub polygon_types: Vec<i16>,
+    /// Per-polygon media index (`-1` if the polygon has no media).
+    pub polygon_media_index: Vec<i16>,
+    /// Media types, indexed by media index (`MediaData::media_type`).
+    pub media_types: Vec<i16>,
+}
+
+/// Per-player overhead-map exploration state (box 1.2). Tracks which polygons
+/// and lines the player has uncovered. Initialized all-`false` and grown to
+/// match the map's polygon/line counts. Dynamic state, so it *is* serialized to
+/// match the snapshot resources.
+#[derive(Resource, Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ExploredMap {
+    /// `true` once the player has explored the polygon at this index.
+    pub explored_polygons: Vec<bool>,
+    /// `true` once the player has explored the line at this index.
+    pub explored_lines: Vec<bool>,
+}
+
+/// Runtime UI state for the overhead (automap) view (box 1.3).
+#[derive(Resource, Debug, Clone, Serialize, Deserialize)]
+pub struct OverheadMapState {
+    /// Whether the overhead map is currently shown.
+    pub visible: bool,
+    /// Current zoom level (world units to screen scale factor).
+    pub zoom: f32,
+}
+
+impl Default for OverheadMapState {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            zoom: 12.0,
+        }
+    }
+}
+
 /// Physics tables resource (monster defs, weapon defs, etc.).
 #[derive(Resource, Debug)]
 pub struct PhysicsTables {
@@ -220,6 +279,14 @@ impl SimWorld {
         // Build map geometry resource
         let geometry = build_map_geometry(map_data);
         world.insert_resource(geometry);
+
+        // Build overhead-map metadata + initialize exploration / UI state.
+        world.insert_resource(build_map_metadata(map_data));
+        world.insert_resource(ExploredMap {
+            explored_polygons: vec![false; map_data.polygons.len()],
+            explored_lines: vec![false; map_data.lines.len()],
+        });
+        world.insert_resource(OverheadMapState::default());
 
         // Store player physics params as a resource.
         // Marathon physics data has two entries: index 0 = walking, index 1 = running.
@@ -804,6 +871,77 @@ fn build_map_geometry(map_data: &MapData) -> MapGeometry {
         line_side_indices,
         changed_polygons: vec![false; polygon_count],
         has_changes: false,
+    }
+}
+
+/// Build the static [`MapMetadata`] resource (box 1.1) from raw map data,
+/// mirroring [`build_map_geometry`]'s per-line / per-polygon construction.
+fn build_map_metadata(map_data: &MapData) -> MapMetadata {
+    use marathon_formats::map::{LineFlags, SideFlags};
+
+    let line_flags: Vec<LineFlags> = map_data
+        .lines
+        .iter()
+        .map(|line| line.line_flags())
+        .collect();
+
+    // A line "has a control panel" if either of its sides is flagged
+    // IS_CONTROL_PANEL. Resolve each side via the line's clockwise /
+    // counterclockwise side indices (negative = no side on that face).
+    let line_has_control_panel: Vec<bool> = map_data
+        .lines
+        .iter()
+        .map(|line| {
+            let side_has_panel = |idx: i16| -> bool {
+                if idx < 0 {
+                    return false;
+                }
+                map_data
+                    .sides
+                    .get(idx as usize)
+                    .is_some_and(|s| s.side_flags().contains(SideFlags::IS_CONTROL_PANEL))
+            };
+            side_has_panel(line.clockwise_polygon_side_index)
+                || side_has_panel(line.counterclockwise_polygon_side_index)
+        })
+        .collect();
+
+    let line_adjacent_polygons: Vec<(i16, i16)> = map_data
+        .lines
+        .iter()
+        .map(|line| {
+            (
+                line.clockwise_polygon_owner,
+                line.counterclockwise_polygon_owner,
+            )
+        })
+        .collect();
+
+    let polygon_types: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.polygon_type)
+        .collect();
+
+    let polygon_media_index: Vec<i16> = map_data
+        .polygons
+        .iter()
+        .map(|poly| poly.media_index)
+        .collect();
+
+    let media_types: Vec<i16> = map_data
+        .media
+        .iter()
+        .map(|media| media.media_type)
+        .collect();
+
+    MapMetadata {
+        line_flags,
+        line_has_control_panel,
+        line_adjacent_polygons,
+        polygon_types,
+        polygon_media_index,
+        media_types,
     }
 }
 
@@ -1830,6 +1968,46 @@ mod poly_dynamic_data_tests {
             physics: None,
             weapons: None,
         }
+    }
+
+    #[test]
+    fn explored_map_initializes_unexplored_and_sized() {
+        // box 1.4: ExploredMap is sized to the map's polygon/line counts and
+        // every entry starts `false`. platform_map() has 2 polygons and 7 lines.
+        let map = platform_map();
+        let world = SimWorld::new(&map, &empty_physics(), &SimConfig::default()).expect("world");
+        let explored = world.world.resource::<ExploredMap>();
+        assert_eq!(
+            explored.explored_polygons.len(),
+            map.polygons.len(),
+            "one explored flag per polygon"
+        );
+        assert_eq!(
+            explored.explored_lines.len(),
+            map.lines.len(),
+            "one explored flag per line"
+        );
+        assert!(
+            explored.explored_polygons.iter().all(|&p| !p),
+            "all polygons start unexplored"
+        );
+        assert!(
+            explored.explored_lines.iter().all(|&l| !l),
+            "all lines start unexplored"
+        );
+    }
+
+    #[test]
+    fn overhead_map_state_initializes_hidden_at_default_zoom() {
+        // box 1.5: OverheadMapState defaults to hidden, zoom 12.0.
+        let map = platform_map();
+        let world = SimWorld::new(&map, &empty_physics(), &SimConfig::default()).expect("world");
+        let state = world.world.resource::<OverheadMapState>();
+        assert!(!state.visible, "overhead map starts hidden");
+        assert!(
+            (state.zoom - 12.0).abs() < f32::EPSILON,
+            "default zoom is 12.0"
+        );
     }
 
     #[test]

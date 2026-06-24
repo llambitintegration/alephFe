@@ -1,10 +1,10 @@
 ## 1. Sim Data Model: ExploredMap and MapMetadata
 
-- [ ] 1.1 Add `MapMetadata` resource to `marathon-sim/src/world.rs` storing per-line flags (`LineFlags`), per-line side-has-control-panel (`bool`), per-polygon type (`i16`), per-polygon media_index (`i16`), per-line adjacent polygon indices (`(i16, i16)`), and media types (`Vec<i16>`). Build it alongside `MapGeometry` in `build_map_geometry()` (or a new `build_map_metadata()` function) from `MapData`.
-- [ ] 1.2 Add `ExploredMap` resource to `marathon-sim/src/world.rs` with `explored_polygons: Vec<bool>` and `explored_lines: Vec<bool>`, initialized to all `false`, sized to `map_data.polygons.len()` and `map_data.lines.len()` respectively. Insert it in `SimWorld::new()`.
-- [ ] 1.3 Add `OverheadMapState` resource to `marathon-sim/src/world.rs` with `visible: bool` (default false) and `zoom: f32` (default 12.0). Insert it in `SimWorld::new()`.
-- [ ] 1.4 Add unit test: construct `SimWorld` from test map data, verify `ExploredMap` has correct sizes and all entries are false.
-- [ ] 1.5 Add unit test: verify `OverheadMapState` initializes with visible=false, zoom=12.0.
+- [x] 1.1 Add `MapMetadata` resource to `marathon-sim/src/world.rs` storing per-line flags (`LineFlags`), per-line side-has-control-panel (`bool`), per-polygon type (`i16`), per-polygon media_index (`i16`), per-line adjacent polygon indices (`(i16, i16)`), and media types (`Vec<i16>`). Build it alongside `MapGeometry` in `build_map_geometry()` (or a new `build_map_metadata()` function) from `MapData`.
+- [x] 1.2 Add `ExploredMap` resource to `marathon-sim/src/world.rs` with `explored_polygons: Vec<bool>` and `explored_lines: Vec<bool>`, initialized to all `false`, sized to `map_data.polygons.len()` and `map_data.lines.len()` respectively. Insert it in `SimWorld::new()`.
+- [x] 1.3 Add `OverheadMapState` resource to `marathon-sim/src/world.rs` with `visible: bool` (default false) and `zoom: f32` (default 12.0). Insert it in `SimWorld::new()`.
+- [x] 1.4 Add unit test: construct `SimWorld` from test map data, verify `ExploredMap` has correct sizes and all entries are false.
+- [x] 1.5 Add unit test: verify `OverheadMapState` initializes with visible=false, zoom=12.0.
 
 ## 2. Exploration Update System
 
