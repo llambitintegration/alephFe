@@ -6,8 +6,8 @@
 - [ ] 1.4 Add `[[levels]]` entries for 4 Marathon Infinity golden levels: Ne Cede Malis (level 0), A Converted Church, Aye Mak Sicur, Hang Brain -- with `id`, `source`, `wad_path`, `level_index`, `name`, and `features` fields
 - [ ] 1.5 Add 5 deferred `[[levels]]` entries for total conversion placeholders with `deferred = true` and comments explaining blocking dependencies
 - [ ] 1.6 Add `[levels.tier1]` sub-tables with golden geometry counts (endpoints, lines, polygons) for Marathon 2 Waterloo Waterpark (716, 1106, 369 from existing tests)
-- [ ] 1.7 Add a Rust module `tests/scenario_manifest.rs` (or in-crate helper) that parses `tests/scenarios.toml` into typed structs using `toml` + `serde`, exposing `load_manifest()`, `levels_for_tier()`, and `source_path()` functions
-- [ ] 1.8 Add `toml` and `serde` dev-dependencies to `marathon-formats/Cargo.toml` and `marathon-sim/Cargo.toml` for manifest parsing in tests
+- [x] 1.7 Add a Rust module `tests/scenario_manifest.rs` (or in-crate helper) that parses `tests/scenarios.toml` into typed structs using `toml` + `serde`, exposing `load_manifest()`, `levels_for_tier()`, and `source_path()` functions
+- [x] 1.8 Add `toml` and `serde` dev-dependencies to `marathon-formats/Cargo.toml` and `marathon-sim/Cargo.toml` for manifest parsing in tests
 
 ## 2. Data Acquisition
 

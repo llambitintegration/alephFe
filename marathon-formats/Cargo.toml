@@ -18,3 +18,5 @@ test-helpers = []
 [dev-dependencies]
 pretty_assertions = "1"
 marathon-formats = { path = ".", features = ["test-helpers"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
