@@ -58,9 +58,9 @@
 
 ## 10. Teleporter Platform Handling
 
-- [ ] 10.1 In `run_world_mechanics()`, when a Teleporter platform (type 5) is activated while the player is on it, emit `SimEvent::LevelTeleport` instead of performing height movement.
-- [ ] 10.2 Skip height sync for Teleporter platforms (they do not change MapGeometry).
-- [ ] 10.3 Add a unit test verifying teleporter activation emits LevelTeleport and does not modify heights.
+- [x] 10.1 In `run_world_mechanics()`, when a Teleporter platform (type 5) is activated while the player is on it, emit `SimEvent::LevelTeleport` instead of performing height movement.
+- [x] 10.2 Skip height sync for Teleporter platforms (they do not change MapGeometry).
+- [x] 10.3 Add a unit test verifying teleporter activation emits LevelTeleport and does not modify heights.
 
 ## 11. Sound Event Emission
 

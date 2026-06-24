@@ -192,6 +192,16 @@ impl SimWorld {
             use crate::PlatformState;
             let mut query = self.world.query::<&mut crate::Platform>();
             for mut platform in query.iter_mut(&mut self.world) {
+                // Box 10.2: a Teleporter platform (type 5) never moves geometry —
+                // it has no floor/ceiling motion. Skip ticking it and skip the
+                // height-sync update entirely, so it neither writes
+                // `MapGeometry.floor_heights`/`ceiling_heights` nor flags its
+                // polygon dirty. Its player-driven LevelTeleport is handled in the
+                // player-entry pass (box 10.1).
+                if platform.platform_type == crate::PlatformType::Teleporter {
+                    continue;
+                }
+
                 let prev_floor = platform.current_floor;
                 let prev_ceiling = platform.current_ceiling;
                 let prev_state = platform.state;
@@ -584,10 +594,46 @@ impl SimWorld {
         self.world.resource_mut::<PrevPlatformActionKey>().0 = action_now;
         let action_rising_edge = action_now && !action_prev;
 
+        // Gather phase: the destination level for a teleporter under the player
+        // is the player's polygon permutation (Marathon stores a teleporter
+        // polygon's target level there). Read it now, before the mutable platform
+        // borrow below (box 10.1).
+        let player_poly_permutation = self
+            .world
+            .resource::<MapGeometry>()
+            .polygon_permutations
+            .get(player_poly)
+            .copied()
+            .unwrap_or(0);
+
+        // Box 10.1: collect teleporter activations to emit after the platform
+        // query is released (collect-then-apply borrow discipline).
+        let mut teleport_targets: Vec<usize> = Vec::new();
+
         // Apply phase: walk platforms, activate the one under the player.
         let mut query = self.world.query::<&mut crate::Platform>();
         for mut platform in query.iter_mut(&mut self.world) {
             if platform.polygon_index != player_poly {
+                continue;
+            }
+
+            // Box 10.1: a Teleporter platform (type 5) the player stands on emits
+            // `SimEvent::LevelTeleport` instead of any height movement. It reuses
+            // the same `should_activate(PlayerEntry)` gate as a normal platform —
+            // which requires the player-entry flag AND `AtRest` — so it fires once
+            // per rest→fire cycle. To make that gate close after firing (the
+            // teleporter never moves, so it can't leave `AtRest` on its own), we
+            // park it at `AtExtended`; box 10.2 already skips it in height-sync, so
+            // this state change moves no geometry. While the player keeps standing
+            // on the (now `AtExtended`) teleporter, `should_activate` returns false
+            // and no further teleport is emitted.
+            if platform.platform_type == crate::PlatformType::Teleporter {
+                if should_activate(&platform, PlatformTrigger::PlayerEntry) {
+                    teleport_targets.push(player_poly_permutation as usize);
+                    platform.state = crate::PlatformState::AtExtended;
+                }
+                // A teleporter never participates in the action-key / movement
+                // branches below.
                 continue;
             }
 
@@ -607,6 +653,15 @@ impl SimWorld {
                 && platform.activation_flags & PLATFORM_ACTIVATE_ON_ACTION_KEY != 0
             {
                 activate_platform(&mut platform);
+            }
+        }
+
+        // Box 10.1 (apply phase): emit the teleporter activations collected above,
+        // now that the mutable platform borrow is released.
+        if !teleport_targets.is_empty() {
+            let mut events = self.world.resource_mut::<crate::world::SimEvents>();
+            for target_level in teleport_targets {
+                events.push(crate::world::SimEvent::LevelTeleport { target_level });
             }
         }
     }
@@ -3197,6 +3252,134 @@ mod tests {
                 "a projectile on a non-PROJECTILE platform must leave it at rest"
             );
         }
+    }
+
+    /// Boxes 10.1–10.3: a Teleporter platform (type 5) the player stands on, when
+    /// activated, must emit `SimEvent::LevelTeleport { target_level }` (sourced
+    /// from the polygon's permutation) and must NOT move geometry — its polygon's
+    /// floor/ceiling heights in `MapGeometry` stay exactly as initialized, and it
+    /// is never flagged dirty. The teleport fires exactly once: a second tick with
+    /// the player still standing on the (already-fired) teleporter emits nothing.
+    #[test]
+    fn teleporter_platform_emits_level_teleport_and_does_not_move_geometry() {
+        use crate::components::{
+            EntityHeight, Health, Platform, PlatformState, PlatformType, Player, PolygonIndex,
+            Position, Shield,
+        };
+        use crate::world_mechanics::platforms::PLATFORM_ACTIVATE_ON_PLAYER_ENTRY;
+
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+        let target_level = 7i16;
+
+        // The teleporter's destination level lives in the polygon's permutation
+        // (Marathon's teleporter polygons store the target level there).
+        {
+            let mut geo = world.world.resource_mut::<MapGeometry>();
+            geo.polygon_permutations[poly] = target_level;
+        }
+
+        // Record the polygon's initial heights so we can assert they are untouched.
+        let (init_floor, init_ceiling) = {
+            let geo = world.world.resource::<MapGeometry>();
+            (geo.floor_heights[poly], geo.ceiling_heights[poly])
+        };
+
+        // An at-rest Teleporter platform that activates on player entry. Its
+        // floor_extended differs from floor_rest so that if it WERE (wrongly)
+        // ticked + synced, the geometry would visibly change.
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: init_floor,
+            floor_extended: init_floor + 1.0,
+            ceiling_rest: init_ceiling,
+            ceiling_extended: init_ceiling,
+            current_floor: init_floor,
+            current_ceiling: init_ceiling,
+            speed: 0.5,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: PLATFORM_ACTIVATE_ON_PLAYER_ENTRY,
+            crushes: false,
+            platform_type: PlatformType::Teleporter,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+        });
+
+        let player = world
+            .world
+            .spawn((
+                Player,
+                Position(glam::Vec3::new(0.0, 0.0, init_floor)),
+                EntityHeight(0.8),
+                PolygonIndex(poly),
+                Health(100),
+                Shield(0),
+            ))
+            .id();
+        let _ = player;
+
+        world.world.insert_resource(TickInput::default());
+        world.run_world_mechanics();
+
+        // (a) A LevelTeleport event was emitted carrying the polygon permutation.
+        let events = world
+            .world
+            .resource_mut::<crate::world::SimEvents>()
+            .drain();
+        let teleport = events.iter().find_map(|e| match e {
+            crate::world::SimEvent::LevelTeleport { target_level } => Some(*target_level),
+            _ => None,
+        });
+        assert_eq!(
+            teleport,
+            Some(target_level as usize),
+            "a player on a Teleporter platform must emit LevelTeleport with the polygon permutation as target_level"
+        );
+
+        // (b) The teleporter did NOT move geometry: heights unchanged, not dirty.
+        {
+            let geo = world.world.resource::<MapGeometry>();
+            assert!(
+                (geo.floor_heights[poly] - init_floor).abs() < 1e-6,
+                "a Teleporter must not change floor_heights[{poly}] (was {init_floor}, now {})",
+                geo.floor_heights[poly]
+            );
+            assert!(
+                (geo.ceiling_heights[poly] - init_ceiling).abs() < 1e-6,
+                "a Teleporter must not change ceiling_heights[{poly}] (was {init_ceiling}, now {})",
+                geo.ceiling_heights[poly]
+            );
+            assert!(
+                !geo.changed_polygons[poly],
+                "a Teleporter must not flag its polygon dirty"
+            );
+        }
+
+        // (c) The teleporter platform itself never started moving.
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_ne!(
+                p.state,
+                PlatformState::Extending,
+                "a Teleporter must never start extending (it does not move)"
+            );
+        }
+
+        // (d) Fire-once: a second tick with the player still on it emits nothing.
+        world.run_world_mechanics();
+        let events2 = world
+            .world
+            .resource_mut::<crate::world::SimEvents>()
+            .drain();
+        assert!(
+            !events2
+                .iter()
+                .any(|e| matches!(e, crate::world::SimEvent::LevelTeleport { .. })),
+            "a teleporter that already fired must not re-emit LevelTeleport while the player stands on it"
+        );
     }
 
     /// Box 7.3 (cross-check): the monster-entry and projectile-impact passes are
