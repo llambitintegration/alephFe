@@ -217,7 +217,7 @@ impl CameraState {
         }
     }
 
-    fn to_uniform(&self, aspect: f32, elapsed: f32) -> CameraUniform {
+    fn to_uniform(self, aspect: f32, elapsed: f32) -> CameraUniform {
         let dir = Vec3::new(
             self.yaw.cos() * self.pitch.cos(),
             self.pitch.sin(),
@@ -303,7 +303,7 @@ impl InputState {
         self.fire_secondary = false;
     }
 
-    fn to_mouse_delta(&mut self) -> (f32, f32) {
+    fn take_mouse_delta(&mut self) -> (f32, f32) {
         // Yaw: positive mouse_dx (rightward) increases sim facing.
         // cam.yaw = -facing then decreases, turning camera toward render -Z = Marathon RIGHT.
         // Pitch: negate mouse_dy so mouse-up (negative dy) produces positive pitch = look up.
@@ -429,7 +429,7 @@ impl GameState {
             self.tick_accum_ms -= TICK_DURATION_MS;
             self.prev_camera = self.curr_camera;
             let flags = self.input.to_action_flags();
-            let (mouse_yaw, mouse_pitch) = self.input.to_mouse_delta();
+            let (mouse_yaw, mouse_pitch) = self.input.take_mouse_delta();
             let tick_input = TickInput {
                 action_flags: flags,
                 mouse_yaw,
@@ -469,7 +469,7 @@ impl GameState {
         let mut cam = self.prev_camera.lerp(&self.curr_camera, alpha);
         // Apply pending mouse delta (not yet consumed by a sim tick) directly
         // to the rendered camera so mouse look reflects immediately. The sim
-        // remains authoritative: on the next tick `to_mouse_delta()` consumes
+        // remains authoritative: on the next tick `take_mouse_delta()` consumes
         // these and updates `curr_camera.yaw/pitch` to match, so the preview
         // transitions seamlessly.
         cam.yaw -= self.input.mouse_dx as f32;
@@ -604,8 +604,7 @@ impl GameState {
                 .get(&coll)
                 .map(|c| &c.bind_group)
                 .unwrap_or(
-                    &self
-                        .sprite_renderer
+                    self.sprite_renderer
                         .collections
                         .values()
                         .next()
@@ -1543,8 +1542,11 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
     lock_change.forget();
 }
 
+/// Shared, self-referential handle for the requestAnimationFrame closure.
+type RenderLoopHandle = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
+
 fn start_render_loop(state: Rc<RefCell<GameState>>) {
-    let f: Rc<RefCell<Option<Closure<dyn FnMut()>>>> = Rc::new(RefCell::new(None));
+    let f: RenderLoopHandle = Rc::new(RefCell::new(None));
     let g = f.clone();
     let s = state.clone();
 
