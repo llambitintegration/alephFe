@@ -60,6 +60,9 @@
     </div>
     <canvas id="marathon-canvas" tabindex="0"></canvas>
     <canvas id="automap-canvas" style="display:none;position:fixed;inset:0;z-index:4;background:rgba(0,0,0,0.7);pointer-events:none"></canvas>
+    <!-- Action prompt: shown when the player is facing an activatable door /
+         panel within action-key range (driven from WorldSnapshot.action_prompt). -->
+    <div id="action-prompt" style="display:none;position:fixed;left:50%;top:62%;transform:translateX(-50%);z-index:7;pointer-events:none;font-family:monospace;font-size:1.05em;letter-spacing:1px;color:#cfe;padding:6px 14px;border:1px solid #4a9;border-radius:4px;background:rgba(8,16,16,0.72);text-shadow:0 0 4px #2c6">[Space] Open door</div>
     <div id="hud">
         <div id="hud-left">
             <canvas id="sensor-canvas" width="112" height="112"></canvas>

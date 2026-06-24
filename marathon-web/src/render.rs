@@ -9,6 +9,7 @@ use wgpu::util::DeviceExt;
 use marathon_formats::{PhysicsData, ShapesFile, WadFile};
 use marathon_sim::tick::{ActionFlags, TickInput};
 use marathon_sim::world::{SimConfig, SimWorld};
+use marathon_sim::world_mechanics::action_key::ActionPromptKind;
 use marathon_sim::WorldSnapshot;
 
 use crate::level;
@@ -688,6 +689,11 @@ impl GameState {
             }
         }
 
+        // Action prompt ("Press Space") — updated every frame (not throttled)
+        // so it appears/disappears responsively as the player faces/leaves a
+        // door or panel. Driven from the per-frame snapshot's action_prompt.
+        update_action_prompt(self.latest_snapshot.as_ref().and_then(|s| s.action_prompt));
+
         // Automap toggle
         if self.input.toggle_map {
             self.input.toggle_map = false;
@@ -804,6 +810,34 @@ fn update_hud(
         "window.updateMotionSensor({},window._sensorData)",
         player_yaw
     ));
+}
+
+/// Show or hide the on-screen "Press Space" action prompt based on the
+/// per-frame `WorldSnapshot.action_prompt`. The prompt text is tailored to the
+/// target kind (door vs control panel). `None` hides the prompt.
+fn update_action_prompt(prompt: Option<ActionPromptKind>) {
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    let Some(el) = document.get_element_by_id("action-prompt") else {
+        return;
+    };
+    match prompt {
+        Some(kind) => {
+            let label = match kind {
+                ActionPromptKind::Door => "[Space] Open door",
+                ActionPromptKind::Panel => "[Space] Use panel",
+            };
+            el.set_text_content(Some(label));
+            let _ = el.set_attribute(
+                "style",
+                "display:block;position:fixed;left:50%;top:62%;transform:translateX(-50%);z-index:7;pointer-events:none;font-family:monospace;font-size:1.05em;letter-spacing:1px;color:#cfe;padding:6px 14px;border:1px solid #4a9;border-radius:4px;background:rgba(8,16,16,0.72);text-shadow:0 0 4px #2c6",
+            );
+        }
+        None => {
+            let _ = el.set_attribute("style", "display:none");
+        }
+    }
 }
 
 fn draw_automap(lines: &[([f32; 2], [f32; 2])], player_x: f32, player_z: f32, player_yaw: f32) {

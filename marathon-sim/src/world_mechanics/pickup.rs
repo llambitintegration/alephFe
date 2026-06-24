@@ -136,6 +136,8 @@ fn apply_shield(shield: &mut Shield, amount: i16) -> bool {
 /// 450 -> 450. Any other amount caps at its own magnitude (so a custom shield
 /// pickup behaves sensibly rather than being uncapped).
 fn shield_cap(amount: i16) -> i16 {
+    // 150/300/450 cap at themselves; any other amount caps at its own
+    // magnitude — i.e. the cap is always the amount itself.
     amount
 }
 

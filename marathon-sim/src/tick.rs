@@ -2900,6 +2900,46 @@ impl SimWorld {
         query.iter(&self.world).next().map(|p| p.0)
     }
 
+    /// Query whether the player is currently facing an activatable target
+    /// (door / platform or control panel) within action-key range.
+    ///
+    /// Reuses [`crate::world_mechanics::action_key::find_action_key_target`] —
+    /// the exact ray-cast the ACTION key consumes — so the HUD prompt is
+    /// guaranteed to agree with what a Space press would actually activate.
+    /// Returns the kind of prompt to show, or `None` when nothing is in range.
+    pub fn action_prompt(
+        &mut self,
+    ) -> Option<crate::world_mechanics::action_key::ActionPromptKind> {
+        // Player position / facing / polygon (mirrors process_action_key).
+        let player_data: Option<(glam::Vec2, f32, usize)> = {
+            let mut q = self.world.query_filtered::<(
+                &crate::Position,
+                &crate::Facing,
+                &crate::PolygonIndex,
+            ), bevy_ecs::prelude::With<crate::Player>>();
+            q.iter(&self.world)
+                .next()
+                .map(|(pos, fac, poly)| (glam::Vec2::new(pos.0.x, pos.0.y), fac.0, poly.0))
+        };
+        let (player_pos, player_facing, player_poly) = player_data?;
+
+        let panels = self
+            .world
+            .get_resource::<crate::world_mechanics::panels::ControlPanels>()
+            .cloned()
+            .unwrap_or_default();
+        let geometry = self.world.resource::<MapGeometry>().clone();
+
+        crate::world_mechanics::action_key::find_action_key_target(
+            player_pos,
+            player_facing,
+            player_poly,
+            &geometry,
+            &panels,
+        )
+        .prompt_kind()
+    }
+
     /// Query the player's current weapon rendering state.
     ///
     /// Returns the shape collection, high-level shape index (based on weapon

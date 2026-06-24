@@ -42,6 +42,7 @@ struct VertexInput {
     @location(3) light: f32,
     @location(4) transfer_mode: u32,
     @location(5) polygon_index: u32,
+    @location(7) material_flags: u32,
 };
 
 struct VertexOutput {
@@ -52,7 +53,12 @@ struct VertexOutput {
     @location(3) @interpolate(flat) light: f32,
     @location(4) @interpolate(flat) transfer_mode: u32,
     @location(5) @interpolate(flat) polygon_index: u32,
+    @location(6) @interpolate(flat) material_flags: u32,
 };
+
+// material_flags bit: this surface is the face of a closed door. Mirrors
+// marathon-web::mesh::MATERIAL_DOOR.
+const MATERIAL_DOOR: u32 = 1u;
 
 @vertex
 fn vs_main(in: VertexInput) -> VertexOutput {
@@ -87,6 +93,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.light = resolved_light;
     out.transfer_mode = in.transfer_mode;
     out.polygon_index = in.polygon_index;
+    out.material_flags = in.material_flags;
     return out;
 }
 
@@ -265,5 +272,29 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    return vec4<f32>(color.rgb * light, color.a);
+    var rgb = color.rgb * light;
+
+    // Closed-door surfaces get a distinct, recognizable "door" look so a player
+    // reads them as doors at a distance instead of flat slabs. We keep the
+    // underlying texture but overlay: (1) a cool steel-cyan tint, (2) a paneled
+    // recessed border per texture tile (darker frame, slightly brighter inset),
+    // and (3) a soft emissive pulse so the surface gently glows as interactive.
+    if (in.material_flags & MATERIAL_DOOR) != 0u {
+        let door_tint = vec3<f32>(0.55, 0.85, 0.95);
+        rgb = mix(rgb, rgb * door_tint, 0.55);
+
+        // Per-tile panel framing. `tile` is the fractional position inside each
+        // 1-unit texture tile; `border` is the distance to the nearest tile edge.
+        let tile = fract(in.uv);
+        let edge = min(min(tile.x, 1.0 - tile.x), min(tile.y, 1.0 - tile.y));
+        let frame = smoothstep(0.0, 0.06, edge); // 0 at the seam, 1 in the panel
+        // Darken the recessed frame seams, lift the inset panel a touch.
+        rgb = rgb * mix(0.45, 1.12, frame);
+
+        // Subtle interactive glow (cool emissive), pulsing slowly.
+        let pulse = 0.5 + 0.5 * sin(camera.elapsed_time * 2.0);
+        rgb = rgb + door_tint * (0.06 + 0.05 * pulse);
+    }
+
+    return vec4<f32>(rgb, color.a);
 }

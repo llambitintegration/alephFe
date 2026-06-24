@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::tick::{EntityRenderState, WeaponRenderState};
 use crate::world::{PolyDynamicData, SimEvent, SimWorld};
+use crate::world_mechanics::action_key::ActionPromptKind;
 
 /// Camera + HUD source for the local player, packed into the render snapshot.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -35,6 +36,10 @@ pub struct WorldSnapshot {
     pub entities: Vec<EntityRenderState>,
     pub weapon: Option<WeaponRenderState>,
     pub events: Vec<SimEvent>,
+    /// What the player is currently facing within action-key range, if
+    /// anything. Drives the on-screen "Press Space" door/panel prompt. `None`
+    /// when nothing actionable is in range.
+    pub action_prompt: Option<ActionPromptKind>,
 }
 
 impl SimWorld {
@@ -63,6 +68,7 @@ impl SimWorld {
         let poly_dynamic = self.poly_dynamic_data();
         let entities = self.entities();
         let weapon = self.player_weapon_state();
+        let action_prompt = self.action_prompt();
         let tick_count = self.tick_count();
         let events = self.drain_events();
 
@@ -73,6 +79,7 @@ impl SimWorld {
             entities,
             weapon,
             events,
+            action_prompt,
         }
     }
 }
@@ -140,6 +147,7 @@ mod tests {
                 horizontal_position: 0.25,
             }),
             events: vec![SimEvent::ItemPickedUp { item_type: 5 }],
+            action_prompt: Some(ActionPromptKind::Door),
         };
 
         let bytes = bincode::serialize(&snap).expect("serialize");
@@ -152,6 +160,7 @@ mod tests {
         assert_eq!(back.entities.len(), 1);
         assert_eq!(back.entities[0].position, Vec3::new(7.0, 8.0, 9.0));
         assert!(back.weapon.is_some());
+        assert_eq!(back.action_prompt, Some(ActionPromptKind::Door));
         assert_eq!(back.events.len(), 1);
         match back.events[0] {
             SimEvent::ItemPickedUp { item_type } => assert_eq!(item_type, 5),
