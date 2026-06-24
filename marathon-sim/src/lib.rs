@@ -4,6 +4,7 @@ pub mod components;
 pub mod fader;
 pub mod fleet_bridge;
 pub mod monster;
+pub mod overhead;
 pub mod player;
 pub mod render_snapshot;
 pub mod tick;

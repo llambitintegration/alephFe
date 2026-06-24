@@ -129,6 +129,10 @@ impl SimWorld {
         self.process_action_key();
         // 4. Player physics
         self.run_player_physics();
+        // 4b. Overhead-map exploration update (box 2.2): reveal the player's
+        //     polygon + its non-solid-line neighbours now that PolygonIndex
+        //     reflects this tick's movement.
+        self.update_explored_map();
         // 5. Player weapons (depends on player position/facing)
         self.run_player_weapons();
         // 6. Update monsters (depends on player position)
