@@ -136,12 +136,7 @@ fn apply_shield(shield: &mut Shield, amount: i16) -> bool {
 /// 450 -> 450. Any other amount caps at its own magnitude (so a custom shield
 /// pickup behaves sensibly rather than being uncapped).
 fn shield_cap(amount: i16) -> i16 {
-    match amount {
-        150 => 150,
-        300 => 300,
-        450 => 450,
-        other => other,
-    }
+    amount
 }
 
 /// Box 4.5: clamp oxygen at [`MAX_OXYGEN`]. Wasted if already at the cap.
