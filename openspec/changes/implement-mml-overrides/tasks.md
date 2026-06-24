@@ -36,12 +36,12 @@
 
 ## 4. Physics Override Application
 
-- [ ] 4.1 Add `MonsterDefinition::apply_override(&mut self, ovr: &MonsterOverride)` method that sets each field from the override's `Some` values
+- [x] 4.1 Add `MonsterDefinition::apply_override(&mut self, ovr: &MonsterOverride)` method that sets each field from the override's `Some` values
 - [ ] 4.2 Add `WeaponDefinition::apply_override(&mut self, ovr: &WeaponOverride)` if weapon physics overrides are defined (or defer to when weapon override structs are implemented)
-- [ ] 4.3 Add `ProjectileDefinition::apply_override(&mut self, ovr: &ProjectileOverride)` method
-- [ ] 4.4 Add `EffectDefinition::apply_override(&mut self, ovr: &EffectOverride)` method
-- [ ] 4.5 Add `PhysicsData::apply_overrides(&mut self, overrides: &MmlOverrideSet)` method that iterates each override type and applies to the corresponding definition by index, silently skipping out-of-bounds indices
-- [ ] 4.6 Add tests: apply single monster override, apply multiple overlapping overrides, out-of-bounds index ignored, `None` fields preserve original values
+- [x] 4.3 Add `ProjectileDefinition::apply_override(&mut self, ovr: &ProjectileOverride)` method
+- [x] 4.4 Add `EffectDefinition::apply_override(&mut self, ovr: &EffectOverride)` method
+- [x] 4.5 Add `PhysicsData::apply_overrides(&mut self, overrides: &MmlOverrideSet)` method that iterates each override type and applies to the corresponding definition by index, silently skipping out-of-bounds indices
+- [x] 4.6 Add tests: apply single monster override, apply multiple overlapping overrides, out-of-bounds index ignored, `None` fields preserve original values
 
 ## 5. Integration into Level Loading Pipeline
 

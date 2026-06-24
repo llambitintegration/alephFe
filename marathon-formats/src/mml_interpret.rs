@@ -12,6 +12,7 @@
 //! written against AlephOne's forgiving parser.
 
 use crate::mml::{MmlDocument, MmlSection};
+use crate::physics::{EffectDefinition, MonsterDefinition, PhysicsData, ProjectileDefinition};
 
 /// Emit a non-fatal warning for a malformed attribute value.
 ///
@@ -920,6 +921,193 @@ impl MmlOverrideSet {
         }
 
         out
+    }
+}
+
+// ─── Override application to physics definitions (boxes 4.1, 4.3–4.5) ────────
+//
+// The `apply_override` / `apply_overrides` methods live in this module rather
+// than `physics`: `mml_interpret` already depends on `physics` (it imports the
+// `*Definition` types above), while `physics` has no dependency on this module.
+// Placing the impls here keeps the dependency edge one-directional and avoids a
+// circular `use`.
+
+impl MonsterDefinition {
+    /// Apply a [`MonsterOverride`] in place: every `Some` field on the override
+    /// replaces the corresponding definition field; `None` fields leave the
+    /// existing value untouched. `ovr.class` maps to `monster_class` (the MML
+    /// attribute is named `class`). `ovr.index` selects which definition to
+    /// apply to and is handled by [`PhysicsData::apply_overrides`], not here.
+    /// `must_be_exterminated` has no `MonsterDefinition` field, so it is ignored.
+    pub fn apply_override(&mut self, ovr: &MonsterOverride) {
+        if let Some(v) = ovr.vitality {
+            self.vitality = v;
+        }
+        if let Some(v) = ovr.immunities {
+            self.immunities = v;
+        }
+        if let Some(v) = ovr.weaknesses {
+            self.weaknesses = v;
+        }
+        if let Some(v) = ovr.flags {
+            self.flags = v;
+        }
+        if let Some(v) = ovr.class {
+            self.monster_class = v;
+        }
+        if let Some(v) = ovr.friends {
+            self.friends = v;
+        }
+        if let Some(v) = ovr.enemies {
+            self.enemies = v;
+        }
+        if let Some(v) = ovr.sound_pitch {
+            self.sound_pitch = v;
+        }
+        if let Some(v) = ovr.speed {
+            self.speed = v;
+        }
+        if let Some(v) = ovr.radius {
+            self.radius = v;
+        }
+        if let Some(v) = ovr.height {
+            self.height = v;
+        }
+        if let Some(v) = ovr.visual_range {
+            self.visual_range = v;
+        }
+        if let Some(v) = ovr.dark_visual_range {
+            self.dark_visual_range = v;
+        }
+        if let Some(v) = ovr.half_visual_arc {
+            self.half_visual_arc = v;
+        }
+        if let Some(v) = ovr.half_vertical_visual_arc {
+            self.half_vertical_visual_arc = v;
+        }
+        if let Some(v) = ovr.intelligence {
+            self.intelligence = v;
+        }
+        if let Some(v) = ovr.carrying_item_type {
+            self.carrying_item_type = v;
+        }
+    }
+}
+
+impl ProjectileDefinition {
+    /// Apply a [`ProjectileOverride`] in place: every `Some` field replaces the
+    /// corresponding definition field; `None` fields are left unchanged.
+    /// `ProjectileOverride` carries no `damage` field (the definition's `damage`
+    /// is a `DamageDefinition` sub-struct handled elsewhere), so `damage` is
+    /// never touched here.
+    pub fn apply_override(&mut self, ovr: &ProjectileOverride) {
+        if let Some(v) = ovr.collection {
+            self.collection = v;
+        }
+        if let Some(v) = ovr.shape {
+            self.shape = v;
+        }
+        if let Some(v) = ovr.detonation_effect {
+            self.detonation_effect = v;
+        }
+        if let Some(v) = ovr.media_detonation_effect {
+            self.media_detonation_effect = v;
+        }
+        if let Some(v) = ovr.contrail_effect {
+            self.contrail_effect = v;
+        }
+        if let Some(v) = ovr.ticks_between_contrails {
+            self.ticks_between_contrails = v;
+        }
+        if let Some(v) = ovr.maximum_contrails {
+            self.maximum_contrails = v;
+        }
+        if let Some(v) = ovr.radius {
+            self.radius = v;
+        }
+        if let Some(v) = ovr.area_of_effect {
+            self.area_of_effect = v;
+        }
+        if let Some(v) = ovr.flags {
+            self.flags = v;
+        }
+        if let Some(v) = ovr.speed {
+            self.speed = v;
+        }
+        if let Some(v) = ovr.maximum_range {
+            self.maximum_range = v;
+        }
+        if let Some(v) = ovr.sound_pitch {
+            self.sound_pitch = v;
+        }
+        if let Some(v) = ovr.flyby_sound {
+            self.flyby_sound = v;
+        }
+        if let Some(v) = ovr.rebound_sound {
+            self.rebound_sound = v;
+        }
+    }
+}
+
+impl EffectDefinition {
+    /// Apply an [`EffectOverride`] in place: every `Some` field replaces the
+    /// corresponding definition field; `None` fields are left unchanged.
+    pub fn apply_override(&mut self, ovr: &EffectOverride) {
+        if let Some(v) = ovr.collection {
+            self.collection = v;
+        }
+        if let Some(v) = ovr.shape {
+            self.shape = v;
+        }
+        if let Some(v) = ovr.sound_pitch {
+            self.sound_pitch = v;
+        }
+        if let Some(v) = ovr.flags {
+            self.flags = v;
+        }
+        if let Some(v) = ovr.delay {
+            self.delay = v;
+        }
+        if let Some(v) = ovr.delay_sound {
+            self.delay_sound = v;
+        }
+    }
+}
+
+impl PhysicsData {
+    /// Apply an entire [`MmlOverrideSet`] to the parsed physics definitions in
+    /// place. Each monster/projectile/effect override is applied to the
+    /// definition at its `index`; an out-of-bounds index (or an absent
+    /// definition list) is silently skipped — `Vec::get_mut` returns `None`,
+    /// so no panic occurs and nothing is changed.
+    ///
+    /// Weapon overrides (box 4.2) are intentionally **not** wired: box 1.4
+    /// produced shell-casing/cycling-order overrides, not `WeaponDefinition`
+    /// physics overrides, so there is no `WeaponOverride`-to-definition mapping
+    /// to apply yet. Items, dynamic limits, landscapes, etc. are likewise not
+    /// physics-definition overrides and are handled outside this method.
+    pub fn apply_overrides(&mut self, overrides: &MmlOverrideSet) {
+        for ovr in &overrides.monsters {
+            if let Some(defs) = self.monsters.as_mut() {
+                if let Some(def) = defs.get_mut(ovr.index) {
+                    def.apply_override(ovr);
+                }
+            }
+        }
+        for ovr in &overrides.projectiles {
+            if let Some(defs) = self.projectiles.as_mut() {
+                if let Some(def) = defs.get_mut(ovr.index) {
+                    def.apply_override(ovr);
+                }
+            }
+        }
+        for ovr in &overrides.effects {
+            if let Some(defs) = self.effects.as_mut() {
+                if let Some(def) = defs.get_mut(ovr.index) {
+                    def.apply_override(ovr);
+                }
+            }
+        }
     }
 }
 
