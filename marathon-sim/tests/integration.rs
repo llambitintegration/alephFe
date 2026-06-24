@@ -1259,7 +1259,7 @@ fn damage_application_full_lifecycle() {
         scale: 1.0,
     };
     let damage = calculate_damage(&def, 0, 0, &mut rng);
-    assert!(damage >= 50 && damage <= 60);
+    assert!((50..=60).contains(&damage));
 
     // Apply to entity with shield
     let (health, shield, result) = apply_damage(damage, 100, 80);
@@ -2043,7 +2043,7 @@ fn tick_loop_item_pickup_restores_health() {
         })
         .cloned()
         .collect();
-    assert!(items_before.len() >= 1, "should have at least 1 item");
+    assert!(!items_before.is_empty(), "should have at least 1 item");
 
     // Tick to trigger pickup
     world.tick(ActionFlags::default().into());
@@ -2207,10 +2207,7 @@ fn tick_loop_full_systems_no_panics() {
     assert_eq!(world.tick_count(), 100);
     // Player should still be alive
     let health = world.player_health().unwrap();
-    assert!(
-        health > 0 || health <= 0,
-        "player health should be a valid value"
-    );
+    assert!(health > 0, "player should still be alive after 100 ticks");
 }
 
 #[test]
@@ -3115,7 +3112,7 @@ fn starting_loadout_has_fists_and_magnum_equipped() {
     let inv = world.ecs_world_mut().resource::<WeaponInventory>();
 
     // Fists at index 0, magnum at index 1, both present.
-    let fists = inv.weapons.get(0).and_then(|s| s.as_ref());
+    let fists = inv.weapons.first().and_then(|s| s.as_ref());
     let magnum = inv.weapons.get(1).and_then(|s| s.as_ref());
     assert!(fists.is_some(), "fists should occupy index 0");
     assert!(magnum.is_some(), "magnum should occupy index 1");
