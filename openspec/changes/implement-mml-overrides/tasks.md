@@ -30,9 +30,9 @@
 
 - [x] 3.1 Define `MmlOverrideSet` struct in `marathon-formats/src/mml_interpret.rs` with typed fields for all section overrides (monster, weapon, projectile, effect, player, dynamic_limits, item, landscape, texture_loading, stringset, scenario, plus stubs for remaining sections)
 - [x] 3.2 Implement `MmlOverrideSet::from_document(doc: &MmlDocument) -> Self` that calls the appropriate `interpret_*` function for each populated section
-- [ ] 3.3 Implement `assemble_mml_cascade()` function (in marathon-formats or a new integration module) that takes global MML paths, local MML paths, scenario WAD entry, plugin metadata list, and current level WAD entry, layers all documents in cascade order, and returns the final merged `MmlDocument`
-- [ ] 3.4 Add `MmlCascadeCache` struct that stores the scenario+plugin MML base and provides `with_level_mml(level_entry: &WadEntry) -> MmlDocument` to layer level-embedded MML on top of the cached base
-- [ ] 3.5 Add tests for cascade ordering: global < local < scenario < plugin < level, plugin alphabetical order, level MML override reset on transition
+- [x] 3.3 Implement `assemble_mml_cascade()` function (in marathon-formats or a new integration module) that takes global MML paths, local MML paths, scenario WAD entry, plugin metadata list, and current level WAD entry, layers all documents in cascade order, and returns the final merged `MmlDocument`
+- [x] 3.4 Add `MmlCascadeCache` struct that stores the scenario+plugin MML base and provides `with_level_mml(level_entry: &WadEntry) -> MmlDocument` to layer level-embedded MML on top of the cached base
+- [x] 3.5 Add tests for cascade ordering: global < local < scenario < plugin < level, plugin alphabetical order, level MML override reset on transition
 
 ## 4. Physics Override Application
 
