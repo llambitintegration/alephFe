@@ -212,6 +212,7 @@ impl SimWorld {
         world.insert_resource(TickCounter(0));
         world.insert_resource(crate::tick::PrevActionKey::default());
         world.insert_resource(SimEvents::default());
+        world.insert_resource(ItemRespawnQueue::default());
         world.insert_resource(PhysicsTables {
             data: physics_data.clone(),
         });
@@ -840,7 +841,32 @@ fn spawn_map_objects(
                         "player physics constants".into(),
                     ))?;
 
-                world.spawn((
+                // Fists-only starting inventory attached to the player entity:
+                // weapon definition index 0 occupies slot 0 with infinite
+                // (melee) ammo. The richer resource-level inventory (fists +
+                // magnum, scenario-derived ammo) is built in `SimWorld::new`
+                // after spawning; this per-entity component lets entity queries
+                // locate the player's weapons.
+                let player_weapons = {
+                    use crate::player::inventory::{WeaponInventory, WeaponSlot, WeaponState};
+                    let mut inv = WeaponInventory {
+                        weapons: vec![None],
+                        current_weapon: 0,
+                        switch_cooldown: 0,
+                    };
+                    inv.weapons[0] = Some(WeaponSlot {
+                        definition_index: 0,
+                        primary_magazine: u16::MAX,
+                        primary_reserve: 0,
+                        secondary_magazine: 0,
+                        secondary_reserve: 0,
+                        state: WeaponState::Idle,
+                        cooldown_ticks: 0,
+                    });
+                    inv
+                };
+
+                let mut player = world.spawn((
                     Player,
                     Position(pos),
                     Velocity::default(),
@@ -854,6 +880,11 @@ fn spawn_map_objects(
                     Oxygen(600),
                     PolygonIndex(polygon),
                     Grounded(true),
+                ));
+                player.insert((
+                    PowerupTimers::default(),
+                    InventoryItems::default(),
+                    player_weapons,
                 ));
                 player_spawned = true;
             }
@@ -2186,5 +2217,117 @@ mod poly_dynamic_data_tests {
             polygon_count,
             "clear_changes must preserve changed_polygons length"
         );
+    }
+
+    /// Minimal physics data with a single player physics constant so that
+    /// `spawn_map_objects` can spawn a player entity (it requires
+    /// `physics.first()` to exist).
+    fn physics_with_player() -> PhysicsData {
+        use marathon_formats::physics::PhysicsConstants;
+        PhysicsData {
+            monsters: None,
+            effects: None,
+            projectiles: None,
+            physics: Some(vec![PhysicsConstants {
+                maximum_forward_velocity: 0.1,
+                maximum_backward_velocity: 0.05,
+                maximum_perpendicular_velocity: 0.08,
+                acceleration: 0.01,
+                deceleration: 0.005,
+                airborne_deceleration: 0.002,
+                gravitational_acceleration: 0.005,
+                climbing_acceleration: 0.01,
+                terminal_velocity: 0.5,
+                external_deceleration: 0.01,
+                angular_acceleration: 0.05,
+                angular_deceleration: 0.03,
+                maximum_angular_velocity: 0.2,
+                angular_recentering_velocity: 0.1,
+                fast_angular_velocity: 0.3,
+                fast_angular_maximum: 0.4,
+                maximum_elevation: 0.5,
+                external_angular_deceleration: 0.05,
+                step_delta: 0.25,
+                step_amplitude: 0.02,
+                radius: 0.25,
+                height: 0.8,
+                dead_height: 0.3,
+                camera_height: 0.6,
+                splash_height: 0.1,
+                half_camera_separation: 0.05,
+            }]),
+            weapons: None,
+        }
+    }
+
+    /// `platform_map` with a single player object placed in poly 0.
+    fn player_map() -> MapData {
+        use marathon_formats::{MapObject, WorldPoint3d};
+        let mut map = platform_map();
+        map.objects = vec![MapObject {
+            object_type: 3, // OBJECT_IS_PLAYER
+            index: 0,
+            facing: 0,
+            polygon_index: 0,
+            location: WorldPoint3d {
+                x: 512,
+                y: 512,
+                z: 0,
+            },
+            flags: 0,
+        }];
+        map
+    }
+
+    #[test]
+    fn player_entity_has_powerups_inventory_and_weapons() {
+        // boxes 2.1-2.4: a freshly constructed SimWorld must spawn the player
+        // entity carrying PowerupTimers, InventoryItems, and WeaponInventory
+        // (with fists in weapon definition slot 0).
+        use crate::player::inventory::WeaponInventory;
+
+        let map = player_map();
+        let mut world =
+            SimWorld::new(&map, &physics_with_player(), &SimConfig::default()).expect("world");
+        let w = &mut world.world;
+
+        // PowerupTimers attached to the player entity, default (all zero).
+        {
+            let mut q = w.query_filtered::<&PowerupTimers, With<Player>>();
+            let timers = q
+                .iter(w)
+                .next()
+                .expect("player entity must have PowerupTimers");
+            assert_eq!(timers.invincibility, 0);
+            assert_eq!(timers.invisibility, 0);
+            assert_eq!(timers.infravision, 0);
+            assert_eq!(timers.extravision, 0);
+        }
+
+        // InventoryItems attached to the player entity, default (empty).
+        {
+            let mut q = w.query_filtered::<&InventoryItems, With<Player>>();
+            let inv = q
+                .iter(w)
+                .next()
+                .expect("player entity must have InventoryItems");
+            assert!(inv.counts.is_empty());
+        }
+
+        // WeaponInventory attached to the player entity with fists (weapon
+        // definition index 0) occupying slot 0.
+        {
+            let mut q = w.query_filtered::<&WeaponInventory, With<Player>>();
+            let weapons = q
+                .iter(w)
+                .next()
+                .expect("player entity must have WeaponInventory");
+            let fists = weapons.weapons.first().and_then(|s| s.as_ref());
+            let fists = fists.expect("slot 0 must hold the fists weapon");
+            assert_eq!(
+                fists.definition_index, 0,
+                "fists must be weapon definition index 0 in slot 0"
+            );
+        }
     }
 }

@@ -2760,6 +2760,237 @@ mod tests {
             .expect("minimal world construction")
     }
 
+    /// Build a two-polygon SimWorld: a player room (poly 0) and an adjacent
+    /// door polygon (poly 1, `polygon_type == 5`) sharing one line. The loader's
+    /// implicit-door pass spawns a player-controllable `Platform` for poly 1, so
+    /// this is the real geometry a normal Space press must activate.
+    ///
+    /// Layout (map units, 1024 = 1 WU):
+    ///   poly 0 occupies x∈[0,2048], y∈[0,1024]  (room, world x∈[0,2])
+    ///   poly 1 occupies x∈[2048,4096], y∈[0,1024] (door, world x∈[2,4])
+    ///   shared line at x = 2048 (world x = 2).
+    fn door_sim_world() -> SimWorld {
+        use marathon_formats::map::LightData;
+        use marathon_formats::physics::PhysicsData;
+        use marathon_formats::{Endpoint, Line, MapData, Polygon, ShapeDescriptor, WorldPoint2d};
+
+        let mk_endpoint = |x: i16, y: i16| Endpoint {
+            flags: 0,
+            highest_adjacent_floor_height: 0,
+            lowest_adjacent_ceiling_height: 2048,
+            vertex: WorldPoint2d { x, y },
+            transformed: WorldPoint2d { x, y },
+            supporting_polygon_index: 0,
+        };
+        // Lines carry adjacency via the polygon's adjacent_polygon_indexes, but
+        // mark the shared line non-solid so it reads like a doorway.
+        let mk_line = |a: i16, b: i16, solid: bool| Line {
+            endpoint_indexes: [a, b],
+            flags: if solid { 0x4000 } else { 0 },
+            length: 1024,
+            highest_adjacent_floor: 0,
+            lowest_adjacent_ceiling: 2048,
+            clockwise_polygon_side_index: -1,
+            counterclockwise_polygon_side_index: -1,
+            clockwise_polygon_owner: -1,
+            counterclockwise_polygon_owner: -1,
+        };
+        let wp_zero = WorldPoint2d { x: 0, y: 0 };
+        let mk_poly =
+            |poly_type: i16, endpoints: [i16; 8], lines: [i16; 8], adj: [i16; 8]| -> Polygon {
+                Polygon {
+                    polygon_type: poly_type,
+                    flags: 0,
+                    permutation: 0,
+                    vertex_count: 4,
+                    endpoint_indexes: endpoints,
+                    line_indexes: lines,
+                    floor_texture: ShapeDescriptor(0xFFFF),
+                    ceiling_texture: ShapeDescriptor(0xFFFF),
+                    floor_height: 0,
+                    ceiling_height: 2048,
+                    floor_lightsource_index: 0,
+                    ceiling_lightsource_index: 0,
+                    area: 2048 * 1024,
+                    floor_transfer_mode: 0,
+                    ceiling_transfer_mode: 0,
+                    adjacent_polygon_indexes: adj,
+                    center: wp_zero,
+                    side_indexes: [-1; 8],
+                    floor_origin: wp_zero,
+                    ceiling_origin: wp_zero,
+                    media_index: -1,
+                    media_lightsource_index: -1,
+                    sound_source_indexes: -1,
+                    ambient_sound_image_index: -1,
+                    random_sound_image_index: -1,
+                }
+            };
+
+        // Endpoints: room corners 0..3, plus door's far corners 4,5.
+        //   0:(0,0) 1:(2048,0) 2:(2048,1024) 3:(0,1024)   (room)
+        //   4:(4096,0) 5:(4096,1024)                       (door far side)
+        let endpoints = vec![
+            mk_endpoint(0, 0),       // 0
+            mk_endpoint(2048, 0),    // 1
+            mk_endpoint(2048, 1024), // 2
+            mk_endpoint(0, 1024),    // 3
+            mk_endpoint(4096, 0),    // 4
+            mk_endpoint(4096, 1024), // 5
+        ];
+        // Lines (edge order matches each polygon's CCW winding):
+        //   poly 0 edges: 0(bottom 0→1), 1(shared 1→2), 2(top 2→3), 3(left 3→0)
+        //   poly 1 edges: 4(bottom 1→4), 5(right 4→5), 6(top 5→2), 1(shared 2→1)
+        let lines = vec![
+            mk_line(0, 1, true),  // 0
+            mk_line(1, 2, false), // 1 shared doorway
+            mk_line(2, 3, true),  // 2
+            mk_line(3, 0, true),  // 3
+            mk_line(1, 4, true),  // 4
+            mk_line(4, 5, true),  // 5
+            mk_line(5, 2, true),  // 6
+        ];
+
+        // poly 0: room, adjacent to poly 1 across edge index 1 (line 1).
+        let poly0 = mk_poly(
+            0,
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            [0, 1, 2, 3, -1, -1, -1, -1],
+            [-1, 1, -1, -1, -1, -1, -1, -1],
+        );
+        // poly 1: door (type 5), adjacent to poly 0 across its edge index 3.
+        let poly1 = mk_poly(
+            5,
+            [1, 4, 5, 2, -1, -1, -1, -1],
+            [4, 5, 6, 1, -1, -1, -1, -1],
+            [-1, -1, -1, 0, -1, -1, -1, -1],
+        );
+
+        let map = MapData {
+            endpoints,
+            lines,
+            sides: vec![],
+            polygons: vec![poly0, poly1],
+            objects: vec![],
+            lights: LightData::Static(vec![]),
+            platforms: vec![],
+            media: vec![],
+            annotations: vec![],
+            terminals: vec![],
+            ambient_sounds: vec![],
+            random_sounds: vec![],
+            map_info: None,
+            item_placement: vec![],
+            guard_paths: None,
+        };
+        let physics = PhysicsData {
+            monsters: None,
+            effects: None,
+            projectiles: None,
+            physics: None,
+            weapons: None,
+        };
+        SimWorld::new(&map, &physics, &crate::world::SimConfig::default())
+            .expect("door world construction")
+    }
+
+    /// REGRESSION (operator bug "a player cannot open doors"): a normal Space
+    /// press must open a reachable door through the REAL input path only — i.e.
+    /// `tick(TickInput { action_flags: ACTION, .. })` → `process_action_key` →
+    /// `find_action_key_target` → `activate_platform`. This deliberately does
+    /// NOT call `debug_face_nearest_door()` or any `__marathonDebug` hook (that
+    /// teleport hook is what masked the bug in the e2e suite). The player is
+    /// placed by hand within range and facing the door, exactly as a WASD
+    /// walk-up would leave them, and we assert the door platform actually leaves
+    /// `AtRest`.
+    #[test]
+    fn space_press_opens_reachable_door_via_real_input() {
+        use crate::components::{
+            AngularVelocity, Facing, Grounded, Health, Oxygen, PlatformState, Position, Shield,
+            VerticalLook,
+        };
+        use crate::{Platform, Player, PolygonIndex, Velocity};
+        use glam::Vec3;
+
+        let mut world = door_sim_world();
+
+        // Sanity: the loader spawned an at-rest, player-controllable door for the
+        // type-5 polygon (poly 1). If this regresses, the rest is moot.
+        let door_poly = {
+            let ecs = world.ecs_world_mut();
+            let mut q = ecs.query::<&Platform>();
+            let p = q
+                .iter(ecs)
+                .find(|p| p.polygon_index == 1)
+                .expect("a door platform must exist for the type-5 polygon");
+            assert_eq!(
+                p.state,
+                PlatformState::AtRest,
+                "door must start at rest so a press has an effect"
+            );
+            assert!(
+                crate::world_mechanics::platforms::should_activate(
+                    p,
+                    crate::world_mechanics::platforms::PlatformTrigger::ActionKey,
+                ),
+                "the implicit door must be activatable by the action key"
+            );
+            p.polygon_index
+        };
+        assert_eq!(door_poly, 1);
+
+        // Place the player INSIDE the room (poly 0), ~0.75 WU back from the
+        // shared door line at world x = 2.0, facing +X straight at the door.
+        // This is a position a player walking east with W would reach; no hook.
+        {
+            let ecs = world.ecs_world_mut();
+            ecs.spawn((
+                Player,
+                Position(Vec3::new(1.25, 0.5, 0.0)),
+                Velocity::default(),
+                Facing(0.0), // +X, toward the door line
+                VerticalLook::default(),
+                AngularVelocity::default(),
+                PolygonIndex(0),
+                Grounded(true),
+                Oxygen(600),
+                Health(150),
+                Shield(150),
+            ));
+        }
+
+        // One no-action tick disarms the ACTION edge (rising-edge detector), the
+        // same priming a fresh frame does before the first press.
+        world.tick(TickInput::default());
+
+        // Door is still closed/at-rest before the press.
+        {
+            let ecs = world.ecs_world_mut();
+            let mut q = ecs.query::<&Platform>();
+            let p = q.iter(ecs).find(|p| p.polygon_index == 1).unwrap();
+            assert_eq!(
+                p.state,
+                PlatformState::AtRest,
+                "no press yet: the door must remain at rest"
+            );
+        }
+
+        // THE REAL PRESS: ACTION flag set, exactly what `Space` produces via
+        // `Input::to_action_flags()` in the web build.
+        world.tick(TickInput::from(ActionFlags::new(ActionFlags::ACTION)));
+
+        // The door must have been activated: it left AtRest (opening).
+        let ecs = world.ecs_world_mut();
+        let mut q = ecs.query::<&Platform>();
+        let p = q.iter(ecs).find(|p| p.polygon_index == 1).unwrap();
+        assert_ne!(
+            p.state,
+            PlatformState::AtRest,
+            "a Space press while facing a reachable door must activate it \
+             (door state stayed AtRest — the action key did not open the door)"
+        );
+    }
+
     /// Box 4.3: `run_media_updates()` must query every `Media`, look up its
     /// linked `Light` by `light_index`, and recompute `current_height` from the
     /// light's `current_intensity` via `compute_media_height()`.
