@@ -259,6 +259,7 @@ mod tests {
             .build()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_sound_definition(
         sound_code: i16,
         behavior: i16,
@@ -595,19 +596,8 @@ mod tests {
 
         let group_offset = 260 + 64; // header + 1 definition
         let offsets = [0, 4000, 9500, 0, 0];
-        let def_data = build_sound_definition(
-            1,
-            0,
-            0,
-            0,
-            1.0,
-            0.0,
-            3,
-            group_offset as i32,
-            4000,
-            15000,
-            &offsets,
-        );
+        let def_data =
+            build_sound_definition(1, 0, 0, 0, 1.0, 0.0, 3, group_offset, 4000, 15000, &offsets);
 
         let data = build_minimal_sound_file(&[def_data], &all_audio);
         let sf = SoundsFile::from_bytes(&data).unwrap();

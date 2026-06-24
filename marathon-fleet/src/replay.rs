@@ -35,6 +35,10 @@
 /// keyframes can settle and be played in `event_time` order (box 7.2 / 7.4).
 pub const INTERP_DELAY: f64 = 0.1;
 
+/// The delay is a bounded positive interval — enforced at compile time so the
+/// live-mode invariant cannot silently regress to zero or negative.
+const _: () = assert!(INTERP_DELAY > 0.0);
+
 /// Lower bound of the bounded travel-time tween window, in seconds (box 7.5).
 pub const MIN_TRAVEL: f64 = 0.5;
 
@@ -507,10 +511,6 @@ mod tests {
         let rt = ViewClock::Live.render_time(now);
         assert_eq!(rt, now - INTERP_DELAY);
         assert!(rt < now, "live render time lags the stream head");
-        assert!(
-            INTERP_DELAY > 0.0,
-            "the delay is a bounded positive interval"
-        );
     }
 
     // Box 7.3: replay mode renders at the scrub position regardless of `now`.

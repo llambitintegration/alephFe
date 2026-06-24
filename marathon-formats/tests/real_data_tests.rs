@@ -98,7 +98,7 @@ fn test_map_geometry_parsing() {
     let wad = WadFile::open(&path).expect("failed to open Map file");
     let entry = wad.entry(0).unwrap();
 
-    let map = marathon_formats::map::MapData::from_entry(&entry).expect("failed to parse map data");
+    let map = marathon_formats::map::MapData::from_entry(entry).expect("failed to parse map data");
 
     // A real level should have geometry
     assert!(!map.endpoints.is_empty(), "level should have endpoints");
@@ -225,7 +225,7 @@ fn test_physics_parsing() {
     assert!(wad.entry_count() > 0, "physics WAD should have entries");
 
     let entry = wad.entry(0).unwrap();
-    let physics = marathon_formats::physics::PhysicsData::from_entry(&entry)
+    let physics = marathon_formats::physics::PhysicsData::from_entry(entry)
         .expect("failed to parse physics data");
 
     // Should have player physics (walking + running models)
@@ -397,13 +397,13 @@ fn test_community_scenario_cross_format() {
     // Parse map data from first level
     let entry = wad.entry(0).unwrap();
     let _map =
-        marathon_formats::map::MapData::from_entry(&entry).expect("Map geometry parse failed");
+        marathon_formats::map::MapData::from_entry(entry).expect("Map geometry parse failed");
 
     // If physics model exists, parse it too
     if let Some(phys_path) = fixture("Physics Model") {
         let phys_wad = WadFile::open(&phys_path).expect("Physics WAD parse failed");
         let phys_entry = phys_wad.entry(0).unwrap();
-        let _physics = marathon_formats::physics::PhysicsData::from_entry(&phys_entry)
+        let _physics = marathon_formats::physics::PhysicsData::from_entry(phys_entry)
             .expect("Physics parse failed");
     }
 
