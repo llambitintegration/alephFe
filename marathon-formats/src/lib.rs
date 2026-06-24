@@ -23,6 +23,7 @@ pub use map::{
 };
 pub use mml::{MmlDocument, MmlElement, MmlSection};
 pub use mml_cascade::{assemble_mml_cascade, cascade_documents, MmlCascadeCache, PluginMmlSource};
+pub use mml_interpret::{MmlOverrideSet, MonsterOverride};
 pub use physics::{
     AttackDefinition, EffectDefinition, MonsterDefinition, PhysicsConstants, PhysicsData,
     ProjectileDefinition, TriggerDefinition, WeaponDefinition,

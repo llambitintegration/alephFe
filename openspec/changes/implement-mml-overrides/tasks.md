@@ -62,5 +62,5 @@
 - [x] 6.5 Unit tests for `MmlOverrideSet::from_document()`: empty document, document with subset of sections, full document
 - [x] 6.6 Unit tests for `PhysicsData::apply_overrides()`: single override, multiple overrides, out-of-bounds, None fields, empty override set
 - [ ] 6.7 Integration tests with real MML snippets from Marathon 2 and Infinity scenarios: monster stats, weapon modifications, dynamic limits changes
-- [ ] 6.8 Integration test for full cascade: global + scenario + plugin + level MML layered and applied to physics data, verify final values match expected cascade order
+- [x] 6.8 Integration test for full cascade: global + scenario + plugin + level MML layered and applied to physics data, verify final values match expected cascade order
 - [ ] 6.9 Verify all tests pass in Docker CI (`cargo test` in `marathon-formats` crate)
