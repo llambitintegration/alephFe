@@ -82,5 +82,5 @@
 
 ## 14. Snapshot/Serialization Update
 
-- [ ] 14.1 Update `SimSnapshot` and the `snapshot()`/`deserialize()` methods in `world.rs` to include the new `Platform` fields (`platform_type`, `linked_platforms`, `linked_lights`). Since Platform already derives Serialize/Deserialize, adding the fields should work automatically.
-- [ ] 14.2 Add a round-trip serialization test with platforms that have non-default types and linked indices.
+- [x] 14.1 Update `SimSnapshot` and the `snapshot()`/`deserialize()` methods in `world.rs` to include the new `Platform` fields (`platform_type`, `linked_platforms`, `linked_lights`). Since Platform already derives Serialize/Deserialize, adding the fields should work automatically.
+- [x] 14.2 Add a round-trip serialization test with platforms that have non-default types and linked indices.
