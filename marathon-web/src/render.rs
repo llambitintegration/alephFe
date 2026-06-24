@@ -1462,6 +1462,16 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
     // weapon — and leave the muzzle flash on screen — the instant the player
     // clicks to take control. See `fire_allowed_while`.
     let s = state.clone();
+    // Mouse-button listeners are attached to the DOCUMENT, not the canvas.
+    // During pointer lock the canvas can miss the releasing `mouseup`, which
+    // left `fire_primary` latched true — the weapon kept firing and the gun
+    // stuck in its firing pose after every shot, with no way to release it
+    // (clearing on lock-loss doesn't help while the player stays locked). The
+    // document reliably receives button events while the pointer is locked.
+    let mouse_event_target: web_sys::EventTarget = web_sys::window()
+        .and_then(|w| w.document())
+        .expect("document for mouse listeners")
+        .into();
     let canvas_for_down = canvas.clone();
     let mousedown =
         Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |e: web_sys::MouseEvent| {
@@ -1483,7 +1493,7 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
                 _ => {}
             }
         });
-    canvas
+    mouse_event_target
         .add_event_listener_with_callback("mousedown", mousedown.as_ref().unchecked_ref())
         .unwrap();
     mousedown.forget();
@@ -1497,7 +1507,7 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
             _ => {}
         }
     });
-    canvas
+    mouse_event_target
         .add_event_listener_with_callback("mouseup", mouseup.as_ref().unchecked_ref())
         .unwrap();
     mouseup.forget();
