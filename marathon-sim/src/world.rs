@@ -211,6 +211,7 @@ impl SimWorld {
         world.insert_resource(SimRng(StdRng::seed_from_u64(config.random_seed)));
         world.insert_resource(TickCounter(0));
         world.insert_resource(crate::tick::PrevActionKey::default());
+        world.insert_resource(crate::tick::PrevPlatformActionKey::default());
         world.insert_resource(SimEvents::default());
         world.insert_resource(ItemRespawnQueue::default());
         world.insert_resource(PhysicsTables {
@@ -582,7 +583,7 @@ impl SimWorld {
     ///
     /// Field sources:
     /// - `floor_height` / `ceiling_height`: live values from `MapGeometry`,
-    ///   which `update_platforms` rewrites each tick as platforms/doors move.
+    ///   which `run_world_mechanics` rewrites each tick as platforms/doors move.
     /// - `media_height`: the current surface height of the `Media` referenced by
     ///   the polygon's `media_index` (animated by `update_media`); `0.0` when the
     ///   polygon has no media.
@@ -1102,6 +1103,8 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
             // current map data, so linked_lights is left empty for now. It will
             // be populated when line/side trigger data is parsed (design §2).
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         });
     }
 
@@ -1150,6 +1153,8 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
                 platform_type: PlatformType::FromFloor,
                 linked_platforms: Vec::new(),
                 linked_lights: Vec::new(),
+                start_sound: 0,
+                stop_sound: 0,
             });
         }
     }
@@ -1546,6 +1551,7 @@ impl SimWorld {
         });
         world.insert_resource(TickCounter(snapshot.tick_count));
         world.insert_resource(crate::tick::PrevActionKey::default());
+        world.insert_resource(crate::tick::PrevPlatformActionKey::default());
         world.insert_resource(SimEvents::default());
 
         // Restore RNG from seed
@@ -1954,6 +1960,91 @@ mod poly_dynamic_data_tests {
     }
 
     #[test]
+    fn serialize_roundtrip_preserves_platform_type_and_links() {
+        // boxes 14.1-14.2: a SimWorld whose platforms carry non-default
+        // `platform_type` plus non-empty `linked_platforms`/`linked_lights`
+        // survives a serialize/deserialize round-trip with those fields, and
+        // the platform's live state/current_floor, intact. `deserialize()`
+        // restores platforms straight from the snapshot's `Vec<Platform>`
+        // (it does NOT re-run `spawn_platforms` from raw map data), so every
+        // serialized field must come back unchanged.
+        let map = platform_map();
+        let mut world =
+            SimWorld::new(&map, &empty_physics(), &SimConfig::default()).expect("world");
+
+        // Tick once so the platform has some live runtime state to preserve.
+        world.tick(crate::tick::TickInput::default());
+
+        // Stamp the platform with non-default type + linked indices so a
+        // dropped field is detectable (the spawn path would leave type as a
+        // height-derived default and links empty for this single-platform map).
+        {
+            let w = world.ecs_world_mut();
+            let mut q = w.query::<&mut crate::components::Platform>();
+            for mut platform in q.iter_mut(w) {
+                if platform.polygon_index == 1 {
+                    platform.platform_type = crate::components::PlatformType::Teleporter;
+                    platform.linked_platforms = vec![3, 7];
+                    platform.linked_lights = vec![2, 5, 9];
+                    platform.state = crate::components::PlatformState::Returning;
+                }
+            }
+        }
+
+        let before = {
+            let w = world.ecs_world_mut();
+            let mut q = w.query::<&crate::components::Platform>();
+            q.iter(w)
+                .map(|p| {
+                    (
+                        p.polygon_index,
+                        p.platform_type,
+                        p.linked_platforms.clone(),
+                        p.linked_lights.clone(),
+                        p.state,
+                        p.current_floor,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        // Sanity: the platform we stamped is present with the new values.
+        assert!(
+            before.iter().any(|(idx, ty, lp, ll, _, _)| *idx == 1
+                && *ty == crate::components::PlatformType::Teleporter
+                && lp == &vec![3, 7]
+                && ll == &vec![2, 5, 9]),
+            "stamped platform present before round-trip"
+        );
+
+        let bytes = world.serialize().expect("serialize");
+        let mut restored =
+            SimWorld::deserialize(&bytes, &map, &empty_physics()).expect("deserialize");
+
+        let after = {
+            let w = restored.ecs_world_mut();
+            let mut q = w.query::<&crate::components::Platform>();
+            q.iter(w)
+                .map(|p| {
+                    (
+                        p.polygon_index,
+                        p.platform_type,
+                        p.linked_platforms.clone(),
+                        p.linked_lights.clone(),
+                        p.state,
+                        p.current_floor,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            after, before,
+            "platform_type, linked_platforms, linked_lights, state, and current_floor \
+             must survive the serialize/deserialize round-trip"
+        );
+    }
+
+    #[test]
     fn poly_dynamic_data_tracks_moving_platform() {
         let map = platform_map();
         let physics = empty_physics();
@@ -1962,7 +2053,7 @@ mod poly_dynamic_data_tests {
 
         // Tick once so `MapGeometry` is synced from the platform's current
         // (closed) state — the platform writes its live heights into geometry
-        // during `update_platforms`, which is what `poly_dynamic_data` reads.
+        // during `run_world_mechanics`, which is what `poly_dynamic_data` reads.
         world.tick(crate::tick::TickInput::default());
 
         let before = world.poly_dynamic_data();
