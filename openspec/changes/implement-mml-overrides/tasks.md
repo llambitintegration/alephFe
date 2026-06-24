@@ -1,8 +1,8 @@
 ## 1. MML Interpretation Layer
 
 - [x] 1.1 Create `marathon-formats/src/mml_interpret.rs` module with attribute parsing helpers: `parse_mml_i16`, `parse_mml_i32`, `parse_mml_u32`, `parse_mml_f32`, `parse_mml_bool` with AlephOne-compatible rules (decimal, hex 0x prefix, boolean 1/t/true/0/f/false), returning `Option<T>` and logging warnings for malformed values
-- [ ] 1.2 Define `MonsterOverride` struct with `index: usize` and `Option<T>` fields for all `MonsterDefinition` fields (vitality, immunities, weaknesses, flags, class, friends, enemies, sound_pitch, speed, radius, height, visual_range, etc.) plus `must_be_exterminated: Option<bool>`
-- [ ] 1.3 Implement `interpret_monsters(section: &MmlSection) -> Vec<MonsterOverride>` that iterates `<monster>` elements, parses `index` attribute, and maps each recognized attribute to the corresponding `MonsterOverride` field
+- [x] 1.2 Define `MonsterOverride` struct with `index: usize` and `Option<T>` fields for all `MonsterDefinition` fields (vitality, immunities, weaknesses, flags, class, friends, enemies, sound_pitch, speed, radius, height, visual_range, etc.) plus `must_be_exterminated: Option<bool>`
+- [x] 1.3 Implement `interpret_monsters(section: &MmlSection) -> Vec<MonsterOverride>` that iterates `<monster>` elements, parses `index` attribute, and maps each recognized attribute to the corresponding `MonsterOverride` field
 - [ ] 1.4 Define `ShellCasingOverride`, `WeaponOrderEntry`, and implement `interpret_weapons(section: &MmlSection)` producing shell casing overrides and weapon order data
 - [ ] 1.5 Define `ProjectileOverride` struct and implement `interpret_projectiles(section: &MmlSection) -> Vec<ProjectileOverride>` for all `ProjectileDefinition` fields
 - [ ] 1.6 Define `EffectOverride` struct and implement `interpret_effects(section: &MmlSection) -> Vec<EffectOverride>` for all `EffectDefinition` fields

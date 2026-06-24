@@ -104,6 +104,116 @@ pub fn parse_mml_bool(s: &str) -> Option<bool> {
     }
 }
 
+/// Overrides for one `<monster index="N">` element. Each field's inner type
+/// matches the corresponding [`MonsterDefinition`](crate::physics::MonsterDefinition)
+/// field so an override can be applied directly; `None` means "leave the engine
+/// default in place".
+///
+/// `class` maps to `MonsterDefinition::monster_class` (renamed because `class`
+/// is the MML attribute name). `immunities`/`weaknesses`/`flags` are bitfields
+/// (`u32`). `must_be_exterminated` has no dedicated `MonsterDefinition` field —
+/// it is a placement/objective attribute carried alongside the definition — so
+/// it is modeled as a standalone `Option<bool>`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MonsterOverride {
+    pub index: usize,
+    pub vitality: Option<i16>,
+    pub immunities: Option<u32>,
+    pub weaknesses: Option<u32>,
+    pub flags: Option<u32>,
+    pub class: Option<i32>,
+    pub friends: Option<i32>,
+    pub enemies: Option<i32>,
+    pub sound_pitch: Option<f32>,
+    pub speed: Option<i16>,
+    pub radius: Option<i16>,
+    pub height: Option<i16>,
+    pub visual_range: Option<i16>,
+    pub dark_visual_range: Option<i16>,
+    pub half_visual_arc: Option<i16>,
+    pub half_vertical_visual_arc: Option<i16>,
+    pub intelligence: Option<i16>,
+    pub carrying_item_type: Option<i16>,
+    pub must_be_exterminated: Option<bool>,
+}
+
+/// Interpret a merged `<monsters>` section into per-monster overrides. Each
+/// `<monster>` element's `index` attribute selects which monster definition to
+/// override; elements without a parseable `index` are skipped with a warning.
+/// Each recognized attribute is parsed into the corresponding typed field;
+/// unrecognized attributes are silently ignored, and a malformed value warns
+/// and leaves that field `None` without discarding the rest of the element.
+pub fn interpret_monsters(section: &MmlSection) -> Vec<MonsterOverride> {
+    let mut out = Vec::new();
+    for el in &section.elements {
+        if el.name != "monster" {
+            continue;
+        }
+        let index = match el.attributes.get("index") {
+            Some(raw) => match parse_mml_u32(raw) {
+                Some(i) => i as usize,
+                None => continue, // parse_mml_u32 already warned
+            },
+            None => {
+                eprintln!("[mml] warning: <monster> element without an index attribute, skipping");
+                continue;
+            }
+        };
+        out.push(MonsterOverride {
+            index,
+            vitality: el.attributes.get("vitality").and_then(|s| parse_mml_i16(s)),
+            immunities: el
+                .attributes
+                .get("immunities")
+                .and_then(|s| parse_mml_u32(s)),
+            weaknesses: el
+                .attributes
+                .get("weaknesses")
+                .and_then(|s| parse_mml_u32(s)),
+            flags: el.attributes.get("flags").and_then(|s| parse_mml_u32(s)),
+            class: el.attributes.get("class").and_then(|s| parse_mml_i32(s)),
+            friends: el.attributes.get("friends").and_then(|s| parse_mml_i32(s)),
+            enemies: el.attributes.get("enemies").and_then(|s| parse_mml_i32(s)),
+            sound_pitch: el
+                .attributes
+                .get("sound_pitch")
+                .and_then(|s| parse_mml_f32(s)),
+            speed: el.attributes.get("speed").and_then(|s| parse_mml_i16(s)),
+            radius: el.attributes.get("radius").and_then(|s| parse_mml_i16(s)),
+            height: el.attributes.get("height").and_then(|s| parse_mml_i16(s)),
+            visual_range: el
+                .attributes
+                .get("visual_range")
+                .and_then(|s| parse_mml_i16(s)),
+            dark_visual_range: el
+                .attributes
+                .get("dark_visual_range")
+                .and_then(|s| parse_mml_i16(s)),
+            half_visual_arc: el
+                .attributes
+                .get("half_visual_arc")
+                .and_then(|s| parse_mml_i16(s)),
+            half_vertical_visual_arc: el
+                .attributes
+                .get("half_vertical_visual_arc")
+                .and_then(|s| parse_mml_i16(s)),
+            intelligence: el
+                .attributes
+                .get("intelligence")
+                .and_then(|s| parse_mml_i16(s)),
+            carrying_item_type: el
+                .attributes
+                .get("carrying_item_type")
+                .and_then(|s| parse_mml_i16(s)),
+            must_be_exterminated: el
+                .attributes
+                .get("must_be_exterminated")
+                .and_then(|s| parse_mml_bool(s)),
+        });
+    }
+    out
+}
+
 /// Overrides for the `<dynamic_limits>` section. Each field mirrors an AlephOne
 /// dynamic-limit slot; `None` means "leave the engine default in place".
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -411,6 +521,83 @@ mod tests {
         for bad in ["2", "yes", "no", "", "tru"] {
             assert_eq!(parse_mml_bool(bad), None, "{bad:?} should be None");
         }
+    }
+
+    // ── boxes 1.2/1.3: monsters interpreter ──
+
+    #[test]
+    fn monster_override_subset_of_attributes() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"5\" vitality=\"300\" speed=\"10\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let monsters = interpret_monsters(&doc.monsters.unwrap());
+        assert_eq!(monsters.len(), 1);
+        assert_eq!(
+            monsters[0],
+            MonsterOverride {
+                index: 5,
+                vitality: Some(300),
+                speed: Some(10),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn monster_override_without_index_is_skipped() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster vitality=\"100\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let monsters = interpret_monsters(&doc.monsters.unwrap());
+        assert!(monsters.is_empty(), "index-less <monster> is skipped");
+    }
+
+    #[test]
+    fn monster_override_malformed_value_stays_none() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"5\" vitality=\"not_a_number\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let monsters = interpret_monsters(&doc.monsters.unwrap());
+        assert_eq!(monsters.len(), 1);
+        assert_eq!(monsters[0].index, 5);
+        assert_eq!(
+            monsters[0].vitality, None,
+            "malformed value -> None, element still produced"
+        );
+    }
+
+    #[test]
+    fn monster_override_full_attributes_and_ignores_unknown() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"2\" vitality=\"250\" immunities=\"0x1F\" weaknesses=\"4\" flags=\"8\" class=\"16\" friends=\"32\" enemies=\"64\" sound_pitch=\"1.5\" speed=\"12\" radius=\"256\" height=\"128\" visual_range=\"30\" dark_visual_range=\"10\" half_visual_arc=\"60\" half_vertical_visual_arc=\"45\" intelligence=\"5\" carrying_item_type=\"3\" must_be_exterminated=\"true\" bogus_attr=\"99\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let monsters = interpret_monsters(&doc.monsters.unwrap());
+        assert_eq!(monsters.len(), 1);
+        let m = &monsters[0];
+        assert_eq!(m.index, 2);
+        assert_eq!(m.vitality, Some(250));
+        assert_eq!(m.immunities, Some(31)); // 0x1F
+        assert_eq!(m.weaknesses, Some(4));
+        assert_eq!(m.flags, Some(8));
+        assert_eq!(m.class, Some(16));
+        assert_eq!(m.friends, Some(32));
+        assert_eq!(m.enemies, Some(64));
+        assert_eq!(m.sound_pitch, Some(1.5));
+        assert_eq!(m.speed, Some(12));
+        assert_eq!(m.radius, Some(256));
+        assert_eq!(m.height, Some(128));
+        assert_eq!(m.visual_range, Some(30));
+        assert_eq!(m.dark_visual_range, Some(10));
+        assert_eq!(m.half_visual_arc, Some(60));
+        assert_eq!(m.half_vertical_visual_arc, Some(45));
+        assert_eq!(m.intelligence, Some(5));
+        assert_eq!(m.carrying_item_type, Some(3));
+        assert_eq!(m.must_be_exterminated, Some(true));
+        // `bogus_attr` is unrecognized and silently ignored — no panic, no field.
     }
 
     // ── box 1.8: dynamic_limits interpreter ──
