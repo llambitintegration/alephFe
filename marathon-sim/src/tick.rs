@@ -77,6 +77,19 @@ pub struct TickInput {
 #[derive(Debug, Default, Clone, Copy, bevy_ecs::prelude::Resource)]
 pub struct PrevActionKey(pub bool);
 
+/// Edge-detection state for the ACTION key used by the *platform* activation
+/// pass in [`SimWorld::run_world_mechanics`] (box 6.2).
+///
+/// This is intentionally separate from [`PrevActionKey`], which is owned and
+/// mutated by [`SimWorld::process_action_key`] (the directional ray-cast that
+/// activates a door the player *faces* from an adjacent polygon). The
+/// run_world_mechanics action-key pass instead activates a platform the player
+/// is *standing on*, and runs later in the same tick — so it needs its own
+/// rising-edge latch to avoid both (a) consuming the ray-cast pass's edge and
+/// (b) firing every tick the key is held.
+#[derive(Debug, Default, Clone, Copy, bevy_ecs::prelude::Resource)]
+pub struct PrevPlatformActionKey(pub bool);
+
 impl From<ActionFlags> for TickInput {
     fn from(action_flags: ActionFlags) -> Self {
         TickInput {
@@ -108,8 +121,10 @@ impl SimWorld {
         self.run_light_updates();
         // 2. Update media (depends on light intensities)
         self.update_media();
-        // 3. Update platforms (before player physics so collision uses new heights)
-        self.update_platforms();
+        // 3. Platforms are no longer a standalone pass: ticking, height-sync,
+        //    activation, and crush all live in `run_world_mechanics()` (step 10,
+        //    boxes 5.x–8.x). The former `update_platforms()` was fully
+        //    consolidated there and removed.
         // 3b. Action key processing (doors and control panels)
         self.process_action_key();
         // 4. Player physics
@@ -132,8 +147,570 @@ impl SimWorld {
         // 11. Item respawns: count down queued respawns and re-spawn items (box 5.4).
         self.run_item_respawns();
 
+        // 10. World mechanics: tick platforms, sync their heights into the
+        //     authoritative MapGeometry, record dirty-polygon flags for the
+        //     renderer (boxes 5.1–5.4), run player/monster/projectile activation
+        //     (boxes 6.x–7.x), and resolve platform crush (boxes 8.1–8.3). Runs
+        //     after player physics, before the tick-counter increment.
+        self.run_world_mechanics();
+
         // Advance tick counter
         self.world.resource_mut::<TickCounter>().0 += 1;
+    }
+
+    /// World-mechanics orchestration pass (boxes 5.1–5.4).
+    ///
+    /// Runs after player physics. Ticks every `Platform`, writes each one's new
+    /// `current_floor`/`current_ceiling` back into the authoritative
+    /// [`MapGeometry`] resource (the same copy `run_player_physics` clones and
+    /// the renderer reads), and marks the platform's polygon dirty so the mesh
+    /// rebuild can be incremental.
+    ///
+    /// The dirty flags from the *previous* tick are cleared at the very start
+    /// (box 5.4) so the renderer/consumer always sees exactly this tick's
+    /// changes — clearing happens before the platform loop, never after.
+    ///
+    /// Borrow-checker pattern (mirrors the pre-existing `update_platforms`):
+    /// query `Platform` entities and collect `(polygon_index, floor, ceiling,
+    /// moved)` tuples first, then take a separate mutable borrow of the
+    /// `MapGeometry` resource to apply them. `moved` is computed by comparing
+    /// each platform's pre-tick floor/ceiling to its post-tick values.
+    fn run_world_mechanics(&mut self) {
+        // Box 5.4: wipe the prior tick's dirty flags before recording this tick's.
+        self.world.resource_mut::<MapGeometry>().clear_changes();
+
+        // Box 5.2 (collect phase): tick each platform, noting whether it moved.
+        //
+        // Box 9.1 (arrival detection): we also capture each platform's state
+        // BEFORE ticking and compare it to the post-tick state. A platform that
+        // was NOT at a destination before this tick but IS now (`AtExtended` or
+        // `AtRest`) JUST arrived this tick — that transition (not the steady
+        // state) is what fires the linked-platform / linked-light triggers, so
+        // they fire exactly once on arrival and never on the ticks the platform
+        // merely sits parked at its destination. Arrival platforms' linked
+        // indices are collected here and dispatched after the other passes.
+        let mut updates: Vec<(usize, f32, f32, bool)> = Vec::new();
+        let mut arrival_triggers: Vec<crate::world_mechanics::platforms::PlatformTriggerEvent> =
+            Vec::new();
+        // Boxes 11.1–11.3: sound triggers gathered from this tick's platform state
+        // transitions, as `sound_index` values. Collected in the SAME prev_state vs
+        // post_state comparison used for arrival detection (box 9.1) — no separate
+        // tracking pass — and pushed as `SimEvent::SoundTrigger` in the apply phase.
+        let mut sound_events: Vec<usize> = Vec::new();
+        {
+            use crate::PlatformState;
+            let mut query = self.world.query::<&mut crate::Platform>();
+            for mut platform in query.iter_mut(&mut self.world) {
+                // Box 10.2: a Teleporter platform (type 5) never moves geometry —
+                // it has no floor/ceiling motion. Skip ticking it and skip the
+                // height-sync update entirely, so it neither writes
+                // `MapGeometry.floor_heights`/`ceiling_heights` nor flags its
+                // polygon dirty. Its player-driven LevelTeleport is handled in the
+                // player-entry pass (box 10.1).
+                if platform.platform_type == crate::PlatformType::Teleporter {
+                    continue;
+                }
+
+                let prev_floor = platform.current_floor;
+                let prev_ceiling = platform.current_ceiling;
+                let prev_state = platform.state;
+                let (floor, ceiling) =
+                    crate::world_mechanics::platforms::tick_platform(&mut platform);
+                let moved = (floor - prev_floor).abs() > f32::EPSILON
+                    || (ceiling - prev_ceiling).abs() > f32::EPSILON;
+                updates.push((platform.polygon_index, floor, ceiling, moved));
+
+                // Box 9.1: detect the arrival TRANSITION (not the steady state).
+                let was_at_destination = matches!(
+                    prev_state,
+                    PlatformState::AtExtended | PlatformState::AtRest
+                );
+                let now_at_destination = matches!(
+                    platform.state,
+                    PlatformState::AtExtended | PlatformState::AtRest
+                );
+                if !was_at_destination && now_at_destination {
+                    arrival_triggers.extend(
+                        crate::world_mechanics::platforms::check_platform_triggers(
+                            &platform,
+                            &platform.linked_platforms,
+                            &platform.linked_lights,
+                        ),
+                    );
+                }
+
+                // Boxes 11.1–11.3: reuse the SAME prev_state→post_state comparison
+                // to emit movement sounds on exactly the transition tick.
+                //   * box 11.2 (movement START → `start_sound`): a platform that
+                //     just began moving — `AtRest`→`Extending` (started extending)
+                //     or `AtExtended`→`Returning` (started returning).
+                //   * box 11.3 (movement STOP → `stop_sound`): a platform that just
+                //     reached an endpoint — `now_at_destination` was false before
+                //     and true now, i.e. it reached `AtExtended` or `AtRest`.
+                // Both fire only on the tick `state` actually changed (prev != post),
+                // exactly like the box 9.1 arrival detection, so a moving platform
+                // mid-throw and a parked platform emit nothing.
+                let started_moving = matches!(
+                    (prev_state, platform.state),
+                    (PlatformState::AtRest, PlatformState::Extending)
+                        | (PlatformState::AtExtended, PlatformState::Returning)
+                );
+                if started_moving {
+                    sound_events.push(platform.start_sound as usize);
+                }
+                if !was_at_destination && now_at_destination {
+                    sound_events.push(platform.stop_sound as usize);
+                }
+            }
+        }
+
+        // Box 5.2 (apply phase): write heights into MapGeometry and flag movers.
+        {
+            let mut geometry = self.world.resource_mut::<MapGeometry>();
+            for &(poly_idx, floor, ceiling, moved) in &updates {
+                if poly_idx < geometry.floor_heights.len() {
+                    geometry.floor_heights[poly_idx] = floor;
+                }
+                if poly_idx < geometry.ceiling_heights.len() {
+                    geometry.ceiling_heights[poly_idx] = ceiling;
+                }
+                if moved && poly_idx < geometry.changed_polygons.len() {
+                    geometry.changed_polygons[poly_idx] = true;
+                    geometry.has_changes = true;
+                }
+            }
+        }
+
+        // Boxes 11.2–11.3 (apply phase): emit a `SimEvent::SoundTrigger` for each
+        // movement-start / movement-stop transition gathered above. The platform
+        // component carries no polygon center, so the sound is emitted at the
+        // origin (`Vec3::ZERO`); the consumer maps `sound_index` to the playing
+        // platform by its polygon if positional audio is needed later.
+        if !sound_events.is_empty() {
+            let mut events = self.world.resource_mut::<crate::world::SimEvents>();
+            for sound_index in sound_events {
+                events.push(crate::world::SimEvent::SoundTrigger {
+                    sound_index,
+                    position: glam::Vec3::ZERO,
+                });
+            }
+        }
+
+        // Boxes 6.1 + 6.2: platform activation triggered by the player.
+        //
+        // This is now the SINGLE owner of player-entry activation. The old copy
+        // in `update_platforms()` was removed when this pass landed, so a
+        // platform is activated at most once per trigger per tick (a second
+        // activation in the same tick would reverse a just-activated platform).
+        // The action-key ray-cast in `process_action_key()` activates a door the
+        // player *faces from an adjacent polygon*; this pass activates a platform
+        // the player is *standing on* — disjoint targets, no double-activation.
+        self.run_platform_player_triggers();
+
+        // Boxes 7.1 + 7.2: platform activation triggered by monsters and
+        // projectiles. Runs AFTER the player pass so a platform already activated
+        // by player-entry this tick is no longer `AtRest`, and `should_activate`
+        // (which gates on `AtRest`) returns false for it — entry triggers never
+        // reverse a just-activated platform. See `run_platform_entity_triggers`.
+        self.run_platform_entity_triggers();
+
+        // Boxes 8.1–8.3: platform-crush resolution. Runs last, after platforms
+        // have ticked and all activation passes have settled their states, so the
+        // crush check sees this tick's final platform geometry. This is the SINGLE
+        // owner of crush handling — the old copy in `update_platforms()` was
+        // removed when this pass landed, so crush runs exactly once per
+        // (platform, entity) per tick.
+        self.run_platform_crush();
+
+        // Boxes 9.1 + 9.2: dispatch the linked-platform / linked-light triggers
+        // gathered above for platforms that JUST arrived this tick. Runs last so
+        // the trigger set was frozen from this tick's arrivals before any target
+        // platform was mutated — a cascade-activated platform is not itself
+        // re-evaluated for arrival this tick, so a chain cannot fire more than
+        // one hop per tick and cannot self-trigger into a loop.
+        self.run_platform_linked_triggers(arrival_triggers);
+    }
+
+    /// Linked-platform cascade and linked-light toggle dispatch (boxes 9.1–9.2).
+    ///
+    /// Consumes the [`PlatformTriggerEvent`]s collected from platforms that
+    /// reached `AtExtended`/`AtRest` this tick (the arrival transition, gathered
+    /// in `run_world_mechanics`). For each event:
+    ///   * `ActivatePlatform` — activate the target platform. The event's
+    ///     `target_index` is a POLYGON index (the same index space the control-
+    ///     panel `ActivatePlatform { platform_index }` path resolves against in
+    ///     `execute_panel_action`): the target platform is the one whose
+    ///     `polygon_index` matches. `activate_platform` reverses a target that is
+    ///     already in motion and starts a resting one moving.
+    ///   * `ToggleLight` — toggle the target light directly (mirrors
+    ///     `execute_panel_action`'s `ToggleLight` arm). There is no light-toggle
+    ///     `SimEvent` variant, and the `Light` component is the live light state
+    ///     the renderer reads, so the toggle is applied straight to it: a lit
+    ///     light begins deactivating (snapped dark), a dark light begins
+    ///     activating (snapped lit).
+    ///
+    /// Borrow-checker discipline (collect-then-apply, as the other passes do):
+    /// the trigger list was fully gathered before this method runs, and the
+    /// platform and light mutations each take their own scoped query, so no
+    /// query borrow is held across a mutation. Targets are deduplicated so a
+    /// platform/light referenced by two arrivals in the same tick is activated
+    /// or toggled at most once, preventing an even/odd double-toggle.
+    fn run_platform_linked_triggers(
+        &mut self,
+        triggers: Vec<crate::world_mechanics::platforms::PlatformTriggerEvent>,
+    ) {
+        use crate::world_mechanics::platforms::PlatformTriggerEventType;
+
+        if triggers.is_empty() {
+            return;
+        }
+
+        // Box 9.2: partition into the set of platform polygons to activate and
+        // the set of light indices to toggle, deduplicating each so a target hit
+        // by multiple arrivals this tick is acted on exactly once.
+        let mut activate_polys: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut toggle_lights: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for ev in &triggers {
+            match ev.trigger_type {
+                PlatformTriggerEventType::ActivatePlatform => {
+                    activate_polys.insert(ev.target_index);
+                }
+                PlatformTriggerEventType::ToggleLight => {
+                    toggle_lights.insert(ev.target_index);
+                }
+            }
+        }
+
+        // Box 9.2: activate each linked target platform (resolved by polygon
+        // index). `activate_platform` handles re-activation/reversal internally.
+        if !activate_polys.is_empty() {
+            let mut q = self.world.query::<&mut crate::Platform>();
+            for mut platform in q.iter_mut(&mut self.world) {
+                if activate_polys.contains(&platform.polygon_index) {
+                    crate::world_mechanics::platforms::activate_platform(&mut platform);
+                }
+            }
+        }
+
+        // Box 9.2: toggle each linked light. Same snap-to-extreme behavior as the
+        // control-panel `ToggleLight` action so the toggle reads immediately and
+        // the light's own state machine carries on from the new state next tick.
+        if !toggle_lights.is_empty() {
+            let mut q = self.world.query::<&mut crate::Light>();
+            for mut light in q.iter_mut(&mut self.world) {
+                if toggle_lights.contains(&light.light_index) {
+                    let lit = light.current_intensity > 0.5;
+                    light.state = if lit {
+                        crate::components::LightState::BecomingInactive
+                    } else {
+                        crate::components::LightState::BecomingActive
+                    };
+                    light.initial_intensity = light.current_intensity;
+                    light.final_intensity = if lit { 0.0 } else { 1.0 };
+                    light.current_intensity = light.final_intensity;
+                    light.phase = 0;
+                }
+            }
+        }
+    }
+
+    /// Crush resolution for moving platforms (boxes 8.1–8.3).
+    ///
+    /// For each MOVING platform (`Extending`/`Returning` — a resting platform
+    /// cannot crush), gathers every `Player`/`Monster` entity standing on the
+    /// platform's polygon and calls
+    /// [`check_platform_crush`](crate::world_mechanics::platforms::check_platform_crush)
+    /// with the entity's `Position.0.z` and `EntityHeight.0`. Then:
+    ///   * box 8.2 — `PlatformCrushResult::Crush { damage }`: apply the damage to
+    ///     the entity and emit `SimEvent::EntityDamaged { entity, amount: damage,
+    ///     damage_type: PLATFORM_CRUSH_DAMAGE_TYPE }`.
+    ///   * box 8.3 — `PlatformCrushResult::Reverse`: toggle the obstructed
+    ///     platform's direction (`Extending` ↔ `Returning`).
+    ///
+    /// Borrow-checker discipline (mirrors the other platform passes): read-only
+    /// gather of entity (handle, z, height, polygon) data first, decide all
+    /// crush/reverse outcomes against each moving platform's geometry, then take
+    /// the mutable borrows to apply damage, push events, and toggle states.
+    fn run_platform_crush(&mut self) {
+        use crate::world_mechanics::platforms::{
+            check_platform_crush, PlatformCrushResult, PLATFORM_CRUSH_DAMAGE_TYPE,
+        };
+        use crate::PlatformState;
+
+        // Gather phase: every Player/Monster entity (handle, z, height, polygon).
+        let mut entities: Vec<(bevy_ecs::entity::Entity, f32, f32, usize)> = Vec::new();
+        {
+            let mut q = self.world.query_filtered::<(
+                bevy_ecs::entity::Entity,
+                &crate::Position,
+                &crate::EntityHeight,
+                &crate::PolygonIndex,
+            ), bevy_ecs::prelude::With<crate::Player>>();
+            for (e, pos, h, poly) in q.iter(&self.world) {
+                entities.push((e, pos.0.z, h.0, poly.0));
+            }
+        }
+        {
+            let mut q = self.world.query_filtered::<(
+                bevy_ecs::entity::Entity,
+                &crate::Position,
+                &crate::EntityHeight,
+                &crate::PolygonIndex,
+            ), bevy_ecs::prelude::With<crate::Monster>>();
+            for (e, pos, h, poly) in q.iter(&self.world) {
+                entities.push((e, pos.0.z, h.0, poly.0));
+            }
+        }
+        if entities.is_empty() {
+            return;
+        }
+
+        // Decide phase: for each MOVING platform (Extending/Returning — a resting
+        // platform cannot crush, box 8.1), resolve the crush against every entity
+        // on its polygon using that platform's current geometry. Collect damage to
+        // apply (entity, amount) and the set of polygons whose platform reverses.
+        let mut damage_to_apply: Vec<(bevy_ecs::entity::Entity, i16)> = Vec::new();
+        let mut reverse_polys: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        {
+            let mut q = self.world.query::<&crate::Platform>();
+            for platform in q.iter(&self.world) {
+                if !matches!(
+                    platform.state,
+                    PlatformState::Extending | PlatformState::Returning
+                ) {
+                    continue;
+                }
+                for &(entity, ez, eh, epoly) in &entities {
+                    if epoly != platform.polygon_index {
+                        continue;
+                    }
+                    match check_platform_crush(platform, ez, eh) {
+                        PlatformCrushResult::Crush { damage } => {
+                            damage_to_apply.push((entity, damage));
+                        }
+                        PlatformCrushResult::Reverse => {
+                            reverse_polys.insert(platform.polygon_index);
+                        }
+                        PlatformCrushResult::None => {}
+                    }
+                }
+            }
+        }
+
+        // Apply phase (box 8.2): damage each crushed entity and emit an event.
+        for (entity, damage) in damage_to_apply {
+            self.apply_damage_to_entity(entity, damage);
+            self.world.resource_mut::<crate::world::SimEvents>().push(
+                crate::world::SimEvent::EntityDamaged {
+                    entity,
+                    amount: damage,
+                    damage_type: PLATFORM_CRUSH_DAMAGE_TYPE,
+                },
+            );
+        }
+
+        // Apply phase (box 8.3): reverse obstructed non-crushing platforms.
+        if !reverse_polys.is_empty() {
+            let mut q = self.world.query::<&mut crate::Platform>();
+            for mut platform in q.iter_mut(&mut self.world) {
+                if reverse_polys.contains(&platform.polygon_index) {
+                    match platform.state {
+                        PlatformState::Extending => {
+                            platform.state = PlatformState::Returning;
+                        }
+                        PlatformState::Returning => {
+                            platform.state = PlatformState::Extending;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    /// Monster-entry (box 7.1) and projectile-impact (box 7.2) platform
+    /// activation.
+    ///
+    /// Mirrors [`SimWorld::run_platform_player_triggers`]: gather the polygons
+    /// occupied by `Monster`/`Projectile` entities first (read-only queries),
+    /// then take a single mutable platform query and activate the platform under
+    /// any such entity when `should_activate` agrees.
+    ///
+    /// `should_activate(MonsterEntry|ProjectileImpact)` early-returns false unless
+    /// the platform is `AtRest`, so this is *entry* activation — it starts a
+    /// resting platform moving and never reverses one already in motion. That
+    /// `AtRest` gate is also what prevents double-activation: a platform the
+    /// player-entry pass just moved off `AtRest` this tick is skipped here, and a
+    /// platform activated by a monster is skipped by the projectile sub-pass
+    /// (it left `AtRest`). Each platform is therefore activated at most once per
+    /// tick across all three entry passes.
+    fn run_platform_entity_triggers(&mut self) {
+        use crate::world_mechanics::platforms::{
+            activate_platform, should_activate, PlatformTrigger,
+        };
+
+        // Gather phase: polygons occupied by monsters, then by projectiles.
+        // Collected into sets first so the platform mutation below holds no
+        // outstanding entity borrow (borrow-checker discipline, as the player
+        // pass does).
+        let monster_polys: std::collections::HashSet<usize> = {
+            let mut q = self
+                .world
+                .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Monster>>();
+            q.iter(&self.world).map(|p| p.0).collect()
+        };
+        let projectile_polys: std::collections::HashSet<usize> = {
+            let mut q = self
+                .world
+                .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Projectile>>(
+                );
+            q.iter(&self.world).map(|p| p.0).collect()
+        };
+
+        // Apply phase: walk platforms once. For each platform, try the
+        // monster-entry trigger first, then the projectile-impact trigger. After
+        // a successful monster activation the platform is no longer `AtRest`, so
+        // the projectile `should_activate` returns false — no double-activation.
+        let mut query = self.world.query::<&mut crate::Platform>();
+        for mut platform in query.iter_mut(&mut self.world) {
+            // Box 7.1: monster-entry.
+            if monster_polys.contains(&platform.polygon_index)
+                && should_activate(&platform, PlatformTrigger::MonsterEntry)
+            {
+                activate_platform(&mut platform);
+                continue;
+            }
+
+            // Box 7.2: projectile-impact.
+            if projectile_polys.contains(&platform.polygon_index)
+                && should_activate(&platform, PlatformTrigger::ProjectileImpact)
+            {
+                activate_platform(&mut platform);
+            }
+        }
+    }
+
+    /// Player-entry (box 6.1) and action-key (box 6.2) platform activation.
+    ///
+    /// Runs after platforms have ticked (per box 6.1's "after ticking platforms").
+    /// Builds a polygon-index → platform-entity lookup, finds the platform (if
+    /// any) the player currently occupies, and:
+    ///   * 6.1 — activates it if `should_activate(PlayerEntry)` (the platform
+    ///     carries the player-entry flag and is `AtRest`).
+    ///   * 6.2 — on a rising ACTION edge, activates it via the extended
+    ///     `activate_platform()` (which reverses an already-moving platform) when
+    ///     the platform carries the `PLATFORM_ACTIVATE_ON_ACTION_KEY` flag.
+    ///
+    /// Borrow-checker pattern: gather the player's polygon and the ACTION edge
+    /// first, then take the mutable platform query — never hold a player borrow
+    /// across the platform mutation.
+    fn run_platform_player_triggers(&mut self) {
+        use crate::world_mechanics::platforms::{
+            activate_platform, should_activate, PlatformTrigger, PLATFORM_ACTIVATE_ON_ACTION_KEY,
+        };
+
+        // Gather phase: the player's current polygon.
+        let player_poly = {
+            let mut q = self
+                .world
+                .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Player>>();
+            q.iter(&self.world).next().map(|p| p.0)
+        };
+        let Some(player_poly) = player_poly else {
+            // No player → no player-driven activation, but still keep the
+            // action-key edge latch in sync so a press while playerless does not
+            // leave a stale armed edge.
+            let action_now = self
+                .world
+                .resource::<TickInput>()
+                .action_flags
+                .contains(ActionFlags::ACTION);
+            self.world.resource_mut::<PrevPlatformActionKey>().0 = action_now;
+            return;
+        };
+
+        // Gather phase: rising-edge detection for the ACTION key (box 6.2),
+        // using the platform-pass's own latch so it never collides with the
+        // ray-cast pass's `PrevActionKey`.
+        let action_now = self
+            .world
+            .resource::<TickInput>()
+            .action_flags
+            .contains(ActionFlags::ACTION);
+        let action_prev = self.world.resource::<PrevPlatformActionKey>().0;
+        self.world.resource_mut::<PrevPlatformActionKey>().0 = action_now;
+        let action_rising_edge = action_now && !action_prev;
+
+        // Gather phase: the destination level for a teleporter under the player
+        // is the player's polygon permutation (Marathon stores a teleporter
+        // polygon's target level there). Read it now, before the mutable platform
+        // borrow below (box 10.1).
+        let player_poly_permutation = self
+            .world
+            .resource::<MapGeometry>()
+            .polygon_permutations
+            .get(player_poly)
+            .copied()
+            .unwrap_or(0);
+
+        // Box 10.1: collect teleporter activations to emit after the platform
+        // query is released (collect-then-apply borrow discipline).
+        let mut teleport_targets: Vec<usize> = Vec::new();
+
+        // Apply phase: walk platforms, activate the one under the player.
+        let mut query = self.world.query::<&mut crate::Platform>();
+        for mut platform in query.iter_mut(&mut self.world) {
+            if platform.polygon_index != player_poly {
+                continue;
+            }
+
+            // Box 10.1: a Teleporter platform (type 5) the player stands on emits
+            // `SimEvent::LevelTeleport` instead of any height movement. It reuses
+            // the same `should_activate(PlayerEntry)` gate as a normal platform —
+            // which requires the player-entry flag AND `AtRest` — so it fires once
+            // per rest→fire cycle. To make that gate close after firing (the
+            // teleporter never moves, so it can't leave `AtRest` on its own), we
+            // park it at `AtExtended`; box 10.2 already skips it in height-sync, so
+            // this state change moves no geometry. While the player keeps standing
+            // on the (now `AtExtended`) teleporter, `should_activate` returns false
+            // and no further teleport is emitted.
+            if platform.platform_type == crate::PlatformType::Teleporter {
+                if should_activate(&platform, PlatformTrigger::PlayerEntry) {
+                    teleport_targets.push(player_poly_permutation as usize);
+                    platform.state = crate::PlatformState::AtExtended;
+                }
+                // A teleporter never participates in the action-key / movement
+                // branches below.
+                continue;
+            }
+
+            // Box 6.1: player-entry. `should_activate` already gates on the
+            // entry flag AND `AtRest`, so this fires once per rest→move cycle.
+            if should_activate(&platform, PlatformTrigger::PlayerEntry) {
+                activate_platform(&mut platform);
+                // A platform just activated by entry must not also be reversed by
+                // a same-tick ACTION press, so skip the action-key branch.
+                continue;
+            }
+
+            // Box 6.2: action-key. On a rising ACTION edge, an action-key
+            // platform under the player is (re)activated; `activate_platform`
+            // reverses it if it is already moving (box 6.3 case c).
+            if action_rising_edge
+                && platform.activation_flags & PLATFORM_ACTIVATE_ON_ACTION_KEY != 0
+            {
+                activate_platform(&mut platform);
+            }
+        }
+
+        // Box 10.1 (apply phase): emit the teleporter activations collected above,
+        // now that the mutable platform borrow is released.
+        if !teleport_targets.is_empty() {
+            let mut events = self.world.resource_mut::<crate::world::SimEvents>();
+            for target_level in teleport_targets {
+                events.push(crate::world::SimEvent::LevelTeleport { target_level });
+            }
+        }
     }
 
     fn run_player_physics(&mut self) {
@@ -503,118 +1080,6 @@ impl SimWorld {
                         terminal_index: idx,
                     },
                 );
-            }
-        }
-    }
-
-    fn update_platforms(&mut self) {
-        // Tick all platforms, collect height updates
-        let mut height_updates: Vec<(usize, f32, f32)> = Vec::new();
-        {
-            let mut query = self.world.query::<&mut crate::Platform>();
-            for mut platform in query.iter_mut(&mut self.world) {
-                let (floor, ceiling) =
-                    crate::world_mechanics::platforms::tick_platform(&mut platform);
-                height_updates.push((platform.polygon_index, floor, ceiling));
-            }
-        }
-
-        // Write back heights to MapGeometry
-        {
-            let mut geometry = self.world.resource_mut::<MapGeometry>();
-            for &(poly_idx, floor, ceiling) in &height_updates {
-                if poly_idx < geometry.floor_heights.len() {
-                    geometry.floor_heights[poly_idx] = floor;
-                }
-                if poly_idx < geometry.ceiling_heights.len() {
-                    geometry.ceiling_heights[poly_idx] = ceiling;
-                }
-            }
-        }
-
-        // Player-entry activation check
-        let player_poly = {
-            let mut q = self
-                .world
-                .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Player>>();
-            q.iter(&self.world).next().map(|p| p.0)
-        };
-
-        if let Some(player_poly) = player_poly {
-            let mut query = self.world.query::<&mut crate::Platform>();
-            for mut platform in query.iter_mut(&mut self.world) {
-                if platform.polygon_index == player_poly {
-                    use crate::world_mechanics::platforms::{
-                        activate_platform, should_activate, PlatformTrigger,
-                    };
-                    if should_activate(&platform, PlatformTrigger::PlayerEntry) {
-                        activate_platform(&mut platform);
-                    }
-                }
-            }
-        }
-
-        // Crush check
-        let player_data: Option<(f32, f32, usize)> = {
-            let mut q = self.world.query_filtered::<(
-                &crate::Position,
-                &crate::EntityHeight,
-                &crate::PolygonIndex,
-            ), bevy_ecs::prelude::With<crate::Player>>();
-            q.iter(&self.world)
-                .next()
-                .map(|(pos, h, poly)| (pos.0.z, h.0, poly.0))
-        };
-
-        if let Some((player_z, player_height, player_poly)) = player_data {
-            let mut crush_damage: Option<i16> = None;
-            let mut reverse_polys: Vec<usize> = Vec::new();
-
-            {
-                let mut query = self.world.query::<&crate::Platform>();
-                for platform in query.iter(&self.world) {
-                    if platform.polygon_index == player_poly {
-                        use crate::world_mechanics::platforms::{
-                            check_platform_crush, PlatformCrushResult,
-                        };
-                        match check_platform_crush(platform, player_z, player_height) {
-                            PlatformCrushResult::Crush { damage } => {
-                                crush_damage = Some(damage);
-                            }
-                            PlatformCrushResult::Reverse => {
-                                reverse_polys.push(platform.polygon_index);
-                            }
-                            PlatformCrushResult::None => {}
-                        }
-                    }
-                }
-            }
-
-            if let Some(damage) = crush_damage {
-                let mut q = self.world.query_filtered::<(
-                    &mut crate::Health,
-                    &mut crate::Shield,
-                ), bevy_ecs::prelude::With<crate::Player>>();
-                if let Some((mut health, mut shield)) = q.iter_mut(&mut self.world).next() {
-                    let (new_h, new_s, _) =
-                        crate::combat::damage::apply_damage(damage, health.0, shield.0);
-                    health.0 = new_h;
-                    shield.0 = new_s;
-                }
-            }
-
-            if !reverse_polys.is_empty() {
-                let mut query = self.world.query::<&mut crate::Platform>();
-                for mut platform in query.iter_mut(&mut self.world) {
-                    if reverse_polys.contains(&platform.polygon_index) {
-                        use crate::PlatformState;
-                        if platform.state == PlatformState::Extending {
-                            platform.state = PlatformState::Returning;
-                        } else if platform.state == PlatformState::Returning {
-                            platform.state = PlatformState::Extending;
-                        }
-                    }
-                }
             }
         }
     }
@@ -2830,6 +3295,734 @@ mod tests {
         assert!(flags.contains(ActionFlags::MOVE_FORWARD));
         assert!(flags.contains(ActionFlags::FIRE_PRIMARY));
         assert!(!flags.contains(ActionFlags::STRAFE_LEFT));
+    }
+
+    /// Boxes 5.1–5.4: ticking the world drives `run_world_mechanics()`, which
+    /// ticks each `Platform`, writes its new `current_floor`/`current_ceiling`
+    /// into `MapGeometry.floor_heights`/`ceiling_heights` for the platform's
+    /// polygon, and marks that polygon dirty (`changed_polygons[poly] == true`,
+    /// `has_changes == true`) for the renderer.
+    #[test]
+    fn run_world_mechanics_syncs_moving_platform_into_geometry_and_marks_dirty() {
+        use crate::components::{Platform, PlatformState, PlatformType};
+
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+
+        // Spawn a platform mid-motion (Extending) on poly 0, currently below its
+        // extended target so this tick it moves up by `speed`.
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5,
+            state: PlatformState::Extending,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
+        });
+
+        world.tick(TickInput::default());
+
+        let geo = world.world.resource::<MapGeometry>();
+        // (a) MapGeometry heights track the platform's new current heights.
+        assert!(
+            (geo.floor_heights[poly] - 0.5).abs() < 1e-6,
+            "floor_heights[{poly}] must follow the platform's new current_floor (0.5), got {}",
+            geo.floor_heights[poly]
+        );
+        assert!(
+            (geo.ceiling_heights[poly] - 3.0).abs() < 1e-6,
+            "ceiling_heights[{poly}] must follow the platform's current_ceiling (3.0), got {}",
+            geo.ceiling_heights[poly]
+        );
+        // (b) The moved polygon is flagged dirty for the renderer.
+        assert!(
+            geo.changed_polygons[poly],
+            "changed_polygons[{poly}] must be true after the platform moved"
+        );
+        assert!(
+            geo.has_changes,
+            "has_changes must be true after a platform moved this tick"
+        );
+    }
+
+    /// Box 7.1: a `Monster` standing on a platform's polygon, where the platform
+    /// carries `PLATFORM_ACTIVATE_ON_MONSTER_ENTRY` and is `AtRest`, must activate
+    /// the platform (leave `AtRest`); a monster on a platform WITHOUT the flag
+    /// must leave it at rest.
+    #[test]
+    fn monster_entry_activates_flagged_platform_only() {
+        use crate::components::{Monster, Platform, PlatformState, PlatformType, PolygonIndex};
+        use crate::world_mechanics::platforms::PLATFORM_ACTIVATE_ON_MONSTER_ENTRY;
+
+        // Helper: build a fresh world with one at-rest platform on `poly` whose
+        // activation_flags are `flags`, plus a monster occupying `poly`.
+        let build = |flags: u32| -> SimWorld {
+            let mut world = minimal_sim_world();
+            let poly = 0usize;
+            world.world.spawn(Platform {
+                polygon_index: poly,
+                floor_rest: 0.0,
+                floor_extended: 1.0,
+                ceiling_rest: 3.0,
+                ceiling_extended: 3.0,
+                current_floor: 0.0,
+                current_ceiling: 3.0,
+                speed: 0.5,
+                state: PlatformState::AtRest,
+                return_delay: 30,
+                delay_remaining: 0,
+                activation_flags: flags,
+                crushes: false,
+                platform_type: PlatformType::FromFloor,
+                linked_platforms: Vec::new(),
+                linked_lights: Vec::new(),
+                start_sound: 0,
+                stop_sound: 0,
+            });
+            world.world.spawn((
+                Monster {
+                    definition_index: 0,
+                },
+                PolygonIndex(poly),
+            ));
+            // `run_world_mechanics` reads `TickInput` (player/action-key pass).
+            world.world.insert_resource(TickInput::default());
+            world
+        };
+
+        // Flagged platform: monster entry must activate it.
+        let mut flagged = build(PLATFORM_ACTIVATE_ON_MONSTER_ENTRY);
+        flagged.run_world_mechanics();
+        {
+            let mut q = flagged.world.query::<&Platform>();
+            let p = q.iter(&flagged.world).next().expect("platform present");
+            assert_ne!(
+                p.state,
+                PlatformState::AtRest,
+                "a monster on a MONSTER_ENTRY platform's polygon must activate it"
+            );
+        }
+
+        // Unflagged platform: monster entry must NOT activate it.
+        let mut unflagged = build(0);
+        unflagged.run_world_mechanics();
+        {
+            let mut q = unflagged.world.query::<&Platform>();
+            let p = q.iter(&unflagged.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::AtRest,
+                "a monster on a non-MONSTER_ENTRY platform must leave it at rest"
+            );
+        }
+    }
+
+    /// Box 7.2: a `Projectile` on a platform's polygon, where the platform carries
+    /// `PLATFORM_ACTIVATE_ON_PROJECTILE` and is `AtRest`, must activate the
+    /// platform; a projectile on a platform WITHOUT the flag must not.
+    #[test]
+    fn projectile_impact_activates_flagged_platform_only() {
+        use crate::components::{Platform, PlatformState, PlatformType, PolygonIndex, Projectile};
+        use crate::world_mechanics::platforms::PLATFORM_ACTIVATE_ON_PROJECTILE;
+
+        let build = |flags: u32| -> SimWorld {
+            let mut world = minimal_sim_world();
+            let poly = 0usize;
+            world.world.spawn(Platform {
+                polygon_index: poly,
+                floor_rest: 0.0,
+                floor_extended: 1.0,
+                ceiling_rest: 3.0,
+                ceiling_extended: 3.0,
+                current_floor: 0.0,
+                current_ceiling: 3.0,
+                speed: 0.5,
+                state: PlatformState::AtRest,
+                return_delay: 30,
+                delay_remaining: 0,
+                activation_flags: flags,
+                crushes: false,
+                platform_type: PlatformType::FromFloor,
+                linked_platforms: Vec::new(),
+                linked_lights: Vec::new(),
+                start_sound: 0,
+                stop_sound: 0,
+            });
+            world.world.spawn((
+                Projectile {
+                    definition_index: 0,
+                    distance_traveled: 0.0,
+                    contrails_spawned: 0,
+                    ticks_alive: 0,
+                    current_polygon: poly,
+                },
+                PolygonIndex(poly),
+            ));
+            // `run_world_mechanics` reads `TickInput` (player/action-key pass).
+            world.world.insert_resource(TickInput::default());
+            world
+        };
+
+        // Flagged platform: projectile impact must activate it.
+        let mut flagged = build(PLATFORM_ACTIVATE_ON_PROJECTILE);
+        flagged.run_world_mechanics();
+        {
+            let mut q = flagged.world.query::<&Platform>();
+            let p = q.iter(&flagged.world).next().expect("platform present");
+            assert_ne!(
+                p.state,
+                PlatformState::AtRest,
+                "a projectile on a PROJECTILE platform's polygon must activate it"
+            );
+        }
+
+        // Unflagged platform: projectile impact must NOT activate it.
+        let mut unflagged = build(0);
+        unflagged.run_world_mechanics();
+        {
+            let mut q = unflagged.world.query::<&Platform>();
+            let p = q.iter(&unflagged.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::AtRest,
+                "a projectile on a non-PROJECTILE platform must leave it at rest"
+            );
+        }
+    }
+
+    /// Boxes 10.1–10.3: a Teleporter platform (type 5) the player stands on, when
+    /// activated, must emit `SimEvent::LevelTeleport { target_level }` (sourced
+    /// from the polygon's permutation) and must NOT move geometry — its polygon's
+    /// floor/ceiling heights in `MapGeometry` stay exactly as initialized, and it
+    /// is never flagged dirty. The teleport fires exactly once: a second tick with
+    /// the player still standing on the (already-fired) teleporter emits nothing.
+    #[test]
+    fn teleporter_platform_emits_level_teleport_and_does_not_move_geometry() {
+        use crate::components::{
+            EntityHeight, Health, Platform, PlatformState, PlatformType, Player, PolygonIndex,
+            Position, Shield,
+        };
+        use crate::world_mechanics::platforms::PLATFORM_ACTIVATE_ON_PLAYER_ENTRY;
+
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+        let target_level = 7i16;
+
+        // The teleporter's destination level lives in the polygon's permutation
+        // (Marathon's teleporter polygons store the target level there).
+        {
+            let mut geo = world.world.resource_mut::<MapGeometry>();
+            geo.polygon_permutations[poly] = target_level;
+        }
+
+        // Record the polygon's initial heights so we can assert they are untouched.
+        let (init_floor, init_ceiling) = {
+            let geo = world.world.resource::<MapGeometry>();
+            (geo.floor_heights[poly], geo.ceiling_heights[poly])
+        };
+
+        // An at-rest Teleporter platform that activates on player entry. Its
+        // floor_extended differs from floor_rest so that if it WERE (wrongly)
+        // ticked + synced, the geometry would visibly change.
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: init_floor,
+            floor_extended: init_floor + 1.0,
+            ceiling_rest: init_ceiling,
+            ceiling_extended: init_ceiling,
+            current_floor: init_floor,
+            current_ceiling: init_ceiling,
+            speed: 0.5,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: PLATFORM_ACTIVATE_ON_PLAYER_ENTRY,
+            crushes: false,
+            platform_type: PlatformType::Teleporter,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
+        });
+
+        let player = world
+            .world
+            .spawn((
+                Player,
+                Position(glam::Vec3::new(0.0, 0.0, init_floor)),
+                EntityHeight(0.8),
+                PolygonIndex(poly),
+                Health(100),
+                Shield(0),
+            ))
+            .id();
+        let _ = player;
+
+        world.world.insert_resource(TickInput::default());
+        world.run_world_mechanics();
+
+        // (a) A LevelTeleport event was emitted carrying the polygon permutation.
+        let events = world
+            .world
+            .resource_mut::<crate::world::SimEvents>()
+            .drain();
+        let teleport = events.iter().find_map(|e| match e {
+            crate::world::SimEvent::LevelTeleport { target_level } => Some(*target_level),
+            _ => None,
+        });
+        assert_eq!(
+            teleport,
+            Some(target_level as usize),
+            "a player on a Teleporter platform must emit LevelTeleport with the polygon permutation as target_level"
+        );
+
+        // (b) The teleporter did NOT move geometry: heights unchanged, not dirty.
+        {
+            let geo = world.world.resource::<MapGeometry>();
+            assert!(
+                (geo.floor_heights[poly] - init_floor).abs() < 1e-6,
+                "a Teleporter must not change floor_heights[{poly}] (was {init_floor}, now {})",
+                geo.floor_heights[poly]
+            );
+            assert!(
+                (geo.ceiling_heights[poly] - init_ceiling).abs() < 1e-6,
+                "a Teleporter must not change ceiling_heights[{poly}] (was {init_ceiling}, now {})",
+                geo.ceiling_heights[poly]
+            );
+            assert!(
+                !geo.changed_polygons[poly],
+                "a Teleporter must not flag its polygon dirty"
+            );
+        }
+
+        // (c) The teleporter platform itself never started moving.
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_ne!(
+                p.state,
+                PlatformState::Extending,
+                "a Teleporter must never start extending (it does not move)"
+            );
+        }
+
+        // (d) Fire-once: a second tick with the player still on it emits nothing.
+        world.run_world_mechanics();
+        let events2 = world
+            .world
+            .resource_mut::<crate::world::SimEvents>()
+            .drain();
+        assert!(
+            !events2
+                .iter()
+                .any(|e| matches!(e, crate::world::SimEvent::LevelTeleport { .. })),
+            "a teleporter that already fired must not re-emit LevelTeleport while the player stands on it"
+        );
+    }
+
+    /// Boxes 11.1–11.4: platform movement sounds. As a platform is driven through
+    /// its full cycle (`AtRest`→`Extending`→`AtExtended`→`Returning`→`AtRest`),
+    /// `run_world_mechanics` must emit a `SimEvent::SoundTrigger` on exactly the
+    /// state-CHANGE ticks, using the platform's `start_sound` for movement-START
+    /// transitions (`AtRest`→`Extending`, `AtExtended`→`Returning`) and its
+    /// `stop_sound` for movement-STOP transitions (reaching `AtExtended`, reaching
+    /// `AtRest`). No sound is emitted on the ticks the platform merely keeps moving
+    /// or sits parked.
+    #[test]
+    fn platform_state_transitions_emit_start_and_stop_sounds() {
+        use crate::components::{Platform, PlatformState, PlatformType};
+
+        const START_SOUND: u16 = 17;
+        const STOP_SOUND: u16 = 23;
+
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+
+        // A short-throw platform so each phase completes in a single tick: it
+        // extends 0.0→1.0 at speed 1.0 (one tick), no return delay, then returns
+        // 1.0→0.0 at speed 1.0 (one tick). Ceiling never moves.
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 1.0,
+            state: PlatformState::AtRest,
+            return_delay: 0,
+            delay_remaining: 0,
+            activation_flags: 0,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: START_SOUND,
+            stop_sound: STOP_SOUND,
+        });
+
+        world.world.insert_resource(TickInput::default());
+
+        // Helper: drain this tick's events and return the SoundTrigger sound_index
+        // values emitted (in order).
+        let sounds_this_tick = |world: &mut SimWorld| -> Vec<usize> {
+            world
+                .world
+                .resource_mut::<crate::world::SimEvents>()
+                .drain()
+                .iter()
+                .filter_map(|e| match e {
+                    crate::world::SimEvent::SoundTrigger { sound_index, .. } => Some(*sound_index),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // Activate the resting platform so it begins extending. The activation
+        // itself does not tick; the AtRest→Extending START sound fires on the next
+        // run_world_mechanics, when prev_state(AtRest) != post_state(Extending).
+        {
+            let mut q = world.world.query::<&mut Platform>();
+            let mut p = q
+                .iter_mut(&mut world.world)
+                .next()
+                .expect("platform present");
+            crate::world_mechanics::platforms::activate_platform(&mut p);
+            assert_eq!(p.state, PlatformState::Extending);
+        }
+
+        // Tick 1: Extending → reaches AtExtended (floor 0.0→1.0 in one tick). This
+        // tick the prev_state was Extending and the post_state is AtExtended — a
+        // movement-STOP transition (reaching extended) → STOP sound.
+        world.run_world_mechanics();
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::AtExtended,
+                "tick 1 reaches AtExtended"
+            );
+        }
+        assert_eq!(
+            sounds_this_tick(&mut world),
+            vec![STOP_SOUND as usize],
+            "reaching AtExtended must emit exactly the STOP sound"
+        );
+
+        // Tick 2: AtExtended (delay 0) → Returning — a movement-START transition
+        // (AtExtended→Returning) → START sound.
+        world.run_world_mechanics();
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(p.state, PlatformState::Returning, "tick 2 begins Returning");
+        }
+        assert_eq!(
+            sounds_this_tick(&mut world),
+            vec![START_SOUND as usize],
+            "AtExtended→Returning must emit exactly the START sound"
+        );
+
+        // Tick 3: Returning → reaches AtRest (floor 1.0→0.0 in one tick) — a
+        // movement-STOP transition (reaching rest) → STOP sound.
+        world.run_world_mechanics();
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(p.state, PlatformState::AtRest, "tick 3 reaches AtRest");
+        }
+        assert_eq!(
+            sounds_this_tick(&mut world),
+            vec![STOP_SOUND as usize],
+            "reaching AtRest must emit exactly the STOP sound"
+        );
+
+        // Tick 4: AtRest with no activation — platform sits parked, no transition,
+        // so NO sound is emitted.
+        world.run_world_mechanics();
+        assert!(
+            sounds_this_tick(&mut world).is_empty(),
+            "a parked AtRest platform must emit no sound"
+        );
+    }
+
+    /// Box 7.3 (cross-check): the monster-entry and projectile-impact passes are
+    /// independent — a monster-flagged platform is NOT activated by a projectile,
+    /// and a projectile-flagged platform is NOT activated by a monster. This
+    /// guards against a pass keying off the wrong trigger/flag.
+    #[test]
+    fn entity_triggers_do_not_cross_activate() {
+        use crate::components::{
+            Monster, Platform, PlatformState, PlatformType, PolygonIndex, Projectile,
+        };
+        use crate::world_mechanics::platforms::{
+            PLATFORM_ACTIVATE_ON_MONSTER_ENTRY, PLATFORM_ACTIVATE_ON_PROJECTILE,
+        };
+
+        // A platform that only accepts MONSTER_ENTRY, with a PROJECTILE on it.
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: PLATFORM_ACTIVATE_ON_MONSTER_ENTRY,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
+        });
+        world.world.spawn((
+            Projectile {
+                definition_index: 0,
+                distance_traveled: 0.0,
+                contrails_spawned: 0,
+                ticks_alive: 0,
+                current_polygon: poly,
+            },
+            PolygonIndex(poly),
+        ));
+        world.world.insert_resource(TickInput::default());
+        world.run_world_mechanics();
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::AtRest,
+                "a projectile must NOT activate a MONSTER_ENTRY-only platform"
+            );
+        }
+
+        // A platform that only accepts PROJECTILE, with a MONSTER on it.
+        let mut world = minimal_sim_world();
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: PLATFORM_ACTIVATE_ON_PROJECTILE,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
+        });
+        world.world.spawn((
+            Monster {
+                definition_index: 0,
+            },
+            PolygonIndex(poly),
+        ));
+        world.world.insert_resource(TickInput::default());
+        world.run_world_mechanics();
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::AtRest,
+                "a monster must NOT activate a PROJECTILE-only platform"
+            );
+        }
+    }
+
+    /// Box 8.x: a MOVING crushing platform whose floor has risen to pin an entity
+    /// (clearance < entity height) must damage that entity — `run_world_mechanics`
+    /// applies the crush damage AND emits a `SimEvent::EntityDamaged` carrying the
+    /// entity handle, the crush damage amount, and the platform-crush damage type.
+    #[test]
+    fn moving_crushing_platform_damages_entity_and_emits_event() {
+        use crate::components::{
+            EntityHeight, Health, Platform, PlatformState, PlatformType, Player, PolygonIndex,
+            Position, Shield,
+        };
+        use crate::world_mechanics::platforms::PLATFORM_CRUSH_DAMAGE_TYPE;
+
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+
+        // A platform mid-motion (Extending, so it is MOVING) whose rising floor
+        // has closed to within less than the player's height of the ceiling.
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 2.8,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 2.5,
+            current_ceiling: 3.0,
+            speed: 0.05,
+            state: PlatformState::Extending,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0,
+            crushes: true,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
+        });
+
+        let player = world
+            .world
+            .spawn((
+                Player,
+                Position(glam::Vec3::new(0.0, 0.0, 2.6)),
+                EntityHeight(0.8),
+                PolygonIndex(poly),
+                Health(100),
+                Shield(0),
+            ))
+            .id();
+
+        world.world.insert_resource(TickInput::default());
+        world.run_world_mechanics();
+
+        // Health reduced by the crush damage.
+        let hp = world.world.get::<Health>(player).expect("player health").0;
+        assert!(
+            hp < 100,
+            "a crushing platform must reduce the entity's health (was 100, now {hp})"
+        );
+
+        // An EntityDamaged event was emitted for the player with the crush type.
+        let events = world
+            .world
+            .resource_mut::<crate::world::SimEvents>()
+            .drain();
+        let crush_event = events.iter().find_map(|e| match e {
+            crate::world::SimEvent::EntityDamaged {
+                entity,
+                amount,
+                damage_type,
+            } if *entity == player => Some((*amount, *damage_type)),
+            _ => None,
+        });
+        let (amount, damage_type) = crush_event
+            .expect("a crushing platform must emit SimEvent::EntityDamaged for the entity");
+        assert!(
+            amount > 0,
+            "crush damage amount must be positive, got {amount}"
+        );
+        assert_eq!(
+            damage_type, PLATFORM_CRUSH_DAMAGE_TYPE,
+            "crush event must carry the platform-crush damage type"
+        );
+    }
+
+    /// Box 8.3: a MOVING non-crushing platform that obstructs an entity must
+    /// REVERSE rather than damage — an `Extending` obstructed platform flips to
+    /// `Returning`, and no `EntityDamaged` event is emitted.
+    #[test]
+    fn moving_obstructing_platform_reverses_without_damage() {
+        use crate::components::{
+            EntityHeight, Health, Platform, PlatformState, PlatformType, Player, PolygonIndex,
+            Position, Shield,
+        };
+
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+
+        // Extending (MOVING) non-crushing platform already pinning the player.
+        // floor_extended is above current_floor so the platform stays Extending
+        // after this tick (clearance < player height → obstruction → reverse).
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 2.8,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 2.5,
+            current_ceiling: 3.0,
+            speed: 0.05,
+            state: PlatformState::Extending,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
+        });
+
+        let player = world
+            .world
+            .spawn((
+                Player,
+                Position(glam::Vec3::new(0.0, 0.0, 2.6)),
+                EntityHeight(0.8),
+                PolygonIndex(poly),
+                Health(100),
+                Shield(0),
+            ))
+            .id();
+
+        world.world.insert_resource(TickInput::default());
+        world.run_world_mechanics();
+
+        // Platform reversed: Extending -> Returning.
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::Returning,
+                "an obstructed non-crushing Extending platform must reverse to Returning"
+            );
+        }
+
+        // No damage, no EntityDamaged event.
+        let hp = world.world.get::<Health>(player).expect("player health").0;
+        assert_eq!(
+            hp, 100,
+            "a non-crushing platform must not damage the entity"
+        );
+        let events = world
+            .world
+            .resource_mut::<crate::world::SimEvents>()
+            .drain();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, crate::world::SimEvent::EntityDamaged { .. })),
+            "a reversing (non-crushing) platform must not emit EntityDamaged"
+        );
     }
 
     /// Build a minimal single-square SimWorld (no lights/media in the map) so we

@@ -595,6 +595,8 @@ fn platform_moves_over_ticks() {
         platform_type: marathon_sim::PlatformType::FromFloor,
         linked_platforms: Vec::new(),
         linked_lights: Vec::new(),
+        start_sound: 0,
+        stop_sound: 0,
     };
 
     activate_platform(&mut platform);
@@ -1259,7 +1261,7 @@ fn damage_application_full_lifecycle() {
         scale: 1.0,
     };
     let damage = calculate_damage(&def, 0, 0, &mut rng);
-    assert!(damage >= 50 && damage <= 60);
+    assert!((50..=60).contains(&damage));
 
     // Apply to entity with shield
     let (health, shield, result) = apply_damage(damage, 100, 80);
@@ -1314,6 +1316,8 @@ fn platform_activation_by_trigger_type() {
         platform_type: PlatformType::FromFloor,
         linked_platforms: Vec::new(),
         linked_lights: Vec::new(),
+        start_sound: 0,
+        stop_sound: 0,
     };
 
     assert!(!should_activate(&platform, PlatformTrigger::PlayerEntry));
@@ -1352,6 +1356,8 @@ fn platform_crush_vs_reverse() {
         platform_type: PlatformType::FromFloor,
         linked_platforms: Vec::new(),
         linked_lights: Vec::new(),
+        start_sound: 0,
+        stop_sound: 0,
     };
 
     // Entity height 0.8, clearance = 3.0 - 2.5 = 0.5 < 0.8
@@ -2043,7 +2049,7 @@ fn tick_loop_item_pickup_restores_health() {
         })
         .cloned()
         .collect();
-    assert!(items_before.len() >= 1, "should have at least 1 item");
+    assert!(!items_before.is_empty(), "should have at least 1 item");
 
     // Tick to trigger pickup
     world.tick(ActionFlags::default().into());
@@ -2207,10 +2213,7 @@ fn tick_loop_full_systems_no_panics() {
     assert_eq!(world.tick_count(), 100);
     // Player should still be alive
     let health = world.player_health().unwrap();
-    assert!(
-        health > 0 || health <= 0,
-        "player health should be a valid value"
-    );
+    assert!(health > 0, "player should still be alive after 100 ticks");
 }
 
 #[test]
@@ -3115,7 +3118,7 @@ fn starting_loadout_has_fists_and_magnum_equipped() {
     let inv = world.ecs_world_mut().resource::<WeaponInventory>();
 
     // Fists at index 0, magnum at index 1, both present.
-    let fists = inv.weapons.get(0).and_then(|s| s.as_ref());
+    let fists = inv.weapons.first().and_then(|s| s.as_ref());
     let magnum = inv.weapons.get(1).and_then(|s| s.as_ref());
     assert!(fists.is_some(), "fists should occupy index 0");
     assert!(magnum.is_some(), "magnum should occupy index 1");
@@ -3433,6 +3436,481 @@ fn render_snapshot_no_player_yields_none_but_rest_present() {
         snap.poly_dynamic.len(),
         world.poly_dynamic_data().len(),
         "poly_dynamic still produced without a player"
+    );
+}
+
+// ──────────── Boxes 6.1–6.3: player-entry + action-key platform activation in run_world_mechanics ────────────
+
+/// Build a map whose platform sits on poly 0 — the polygon the player starts in
+/// (location 512,512). `static_flags` selects the activation trigger under test.
+/// Speed is slow (0.125 WU/tick) so the platform stays `Extending` for many
+/// ticks, making a single activation easy to distinguish from a per-tick flicker.
+fn make_platform_on_player_polygon(static_flags: u32) -> MapData {
+    let mut map = make_test_map();
+    map.platforms = vec![StaticPlatformData {
+        platform_type: 0,
+        speed: 128, // 0.125 WU/tick
+        delay: 30,
+        minimum_height: 0,
+        maximum_height: 1024, // 1 WU
+        polygon_index: 0,
+        static_flags,
+        tag: 0,
+    }];
+    map
+}
+
+#[test]
+fn box61_player_entry_on_platform_polygon_activates() {
+    use marathon_sim::PlatformState;
+
+    // Platform on poly 0 with ACTIVATE_ON_PLAYER_ENTRY (0x0001). The player
+    // starts in poly 0, so the player-entry pass in run_world_mechanics() must
+    // activate it on the first tick.
+    let map = make_platform_on_player_polygon(0x0001);
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // At rest before any tick.
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::AtRest,
+        "platform should be at rest before any tick"
+    );
+
+    // One tick with NO input: player-entry activation fires.
+    world.tick(ActionFlags::default().into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Extending,
+        "player on an entry-flagged platform polygon should activate it"
+    );
+
+    // Confirm exactly-one activation: the floor rises monotonically over the
+    // next ticks (a double-activation per tick would flip Extending<->Returning
+    // and stall the floor near rest).
+    let mut prev_floor = world.snapshot().platforms[0].current_floor;
+    for tick in 0..4 {
+        world.tick(ActionFlags::default().into());
+        let p = &world.snapshot().platforms[0];
+        assert_eq!(
+            p.state,
+            PlatformState::Extending,
+            "tick {tick}: a single activation must keep the platform Extending, \
+             not be re-activated/reversed each tick"
+        );
+        assert!(
+            p.current_floor >= prev_floor,
+            "tick {tick}: floor must rise monotonically under one activation; \
+             {prev_floor} -> {} indicates a double-activation flicker",
+            p.current_floor
+        );
+        prev_floor = p.current_floor;
+    }
+}
+
+#[test]
+fn box62_action_press_on_action_key_platform_polygon_activates() {
+    use marathon_sim::PlatformState;
+
+    // Platform on poly 0 with PLATFORM_IS_PLAYER_CONTROLLABLE (1 << 12) and NOT
+    // the entry flag, so ONLY a deliberate ACTION press while standing on it can
+    // move it. The player starts on poly 0.
+    let map = make_platform_on_player_polygon(1 << 12);
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // No input: must stay at rest (entry flag is absent).
+    world.tick(ActionFlags::default().into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::AtRest,
+        "action-key platform must not auto-activate without an ACTION press"
+    );
+
+    // Press ACTION: rising edge activates the platform under the player.
+    let action = ActionFlags::new(ActionFlags::ACTION);
+    world.tick(action.into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Extending,
+        "pressing ACTION on an action-key platform polygon should activate it"
+    );
+}
+
+#[test]
+fn box63_action_on_moving_platform_reverses_exactly_once() {
+    use marathon_sim::PlatformState;
+
+    // Action-key platform on the player's polygon (poly 0).
+    let map = make_platform_on_player_polygon(1 << 12);
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    let action = ActionFlags::new(ActionFlags::ACTION);
+    let none = ActionFlags::default();
+
+    // First press (rising edge) -> Extending.
+    world.tick(action.into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Extending,
+        "first ACTION press should start the platform extending"
+    );
+
+    // Let it climb a little with ACTION released (re-arms the edge).
+    for _ in 0..2 {
+        world.tick(none.into());
+    }
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Extending,
+        "platform should still be extending mid-travel"
+    );
+    let floor_before_reverse = world.snapshot().platforms[0].current_floor;
+
+    // Second press (fresh rising edge) while still Extending must reverse it to
+    // Returning — exactly once, not flip back to Extending on the same edge.
+    world.tick(action.into());
+    assert_eq!(
+        world.snapshot().platforms[0].state,
+        PlatformState::Returning,
+        "ACTION on a moving (Extending) platform must reverse it to Returning"
+    );
+
+    // With ACTION released it keeps Returning and the floor falls back — proof
+    // the reversal stuck (no second same-tick re-reversal).
+    world.tick(none.into());
+    let snap = world.snapshot();
+    assert!(
+        matches!(
+            snap.platforms[0].state,
+            PlatformState::Returning | PlatformState::AtRest
+        ),
+        "after reversal the platform should keep returning, got {:?}",
+        snap.platforms[0].state
+    );
+    assert!(
+        snap.platforms[0].current_floor <= floor_before_reverse,
+        "reversed platform floor should descend; {} -> {}",
+        floor_before_reverse,
+        snap.platforms[0].current_floor
+    );
+}
+
+/// Box 9.x: when a platform reaches the end of its travel (`AtExtended`), its
+/// `linked_platforms` are activated — a cascade. Platform A (player-entry
+/// activated, on the player's polygon) extends; B (on another polygon, at rest,
+/// no entry flag of its own) is listed in A's `linked_platforms` by B's polygon
+/// index. B must stay `AtRest` while A is in flight and only start moving on the
+/// tick A arrives at `AtExtended`.
+#[test]
+fn linked_platform_cascades_on_arrival() {
+    use marathon_sim::{Platform, PlatformState, PlatformType};
+
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Platform A on the player's polygon (0), player-entry activated, linked to
+    // a target platform sitting on polygon 1. Short travel so it arrives fast.
+    let poly_a = 0usize;
+    let poly_b = 1usize;
+    {
+        let ecs = world.ecs_world_mut();
+        ecs.spawn(Platform {
+            polygon_index: poly_a,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5, // reaches 1.0 in two ticks
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0x0001, // PLATFORM_ACTIVATE_ON_PLAYER_ENTRY
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: vec![poly_b], // cascade target (by polygon index)
+            linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
+        });
+        // Target platform B: at rest, NO entry flag of its own. The only thing
+        // that can start it moving is the cascade from A.
+        ecs.spawn(Platform {
+            polygon_index: poly_b,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
+        });
+    }
+
+    let state_of = |w: &mut SimWorld, poly: usize| -> PlatformState {
+        let snap = w.snapshot();
+        snap.platforms
+            .iter()
+            .find(|p| p.polygon_index == poly)
+            .expect("platform present")
+            .state
+    };
+
+    // Tick 1: player-entry activates A -> Extending; A still mid-travel; B at rest.
+    world.tick(ActionFlags::default().into());
+    assert_eq!(state_of(&mut world, poly_a), PlatformState::Extending);
+    assert_eq!(
+        state_of(&mut world, poly_b),
+        PlatformState::AtRest,
+        "B must not move while A is still extending"
+    );
+
+    // Drive A to its extended position. While A is in flight, B stays AtRest.
+    // On the tick A first reaches AtExtended, its arrival fires the
+    // linked-platform trigger, which activates B (B leaves AtRest).
+    let mut a_arrived = false;
+    for _ in 0..6 {
+        world.tick(ActionFlags::default().into());
+        if state_of(&mut world, poly_a) == PlatformState::AtExtended {
+            a_arrived = true;
+            break;
+        }
+        // Until A arrives, the cascade must not have fired.
+        assert_eq!(
+            state_of(&mut world, poly_b),
+            PlatformState::AtRest,
+            "B must not move before A arrives"
+        );
+    }
+    assert!(a_arrived, "A should reach its extended position");
+    assert_ne!(
+        state_of(&mut world, poly_b),
+        PlatformState::AtRest,
+        "B must be activated by A's arrival cascade (linked_platforms)"
+    );
+}
+
+/// Box 9.x: a platform reaching the end of its travel toggles its
+/// `linked_lights`. Platform A (player-entry activated) is linked to a light;
+/// the light starts fully lit (steady Constant function so the auto-cycle holds
+/// it). When A arrives at `AtExtended`, the light-toggle effect snaps the light
+/// to the opposite extreme (dark).
+#[test]
+fn linked_light_toggles_on_platform_arrival() {
+    use marathon_sim::{
+        Light, LightFunction, LightFunctionSpec, LightState, LightType, Platform, PlatformState,
+        PlatformType,
+    };
+
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    let poly_a = 0usize;
+    let light_idx = 5usize;
+
+    // A Constant lighting spec at full intensity: update_lights holds the light
+    // steady (no auto-ramp), so the only thing that can change its intensity is
+    // the platform-arrival light-toggle. Mirrors the light-switch test pattern.
+    let spec = LightFunctionSpec {
+        function: LightFunction::Constant,
+        period: 1,
+        delta_period: 0,
+        intensity: 1.0,
+        delta_intensity: 0.0,
+    };
+    {
+        let ecs = world.ecs_world_mut();
+        ecs.spawn(Platform {
+            polygon_index: poly_a,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0x0001, // PLATFORM_ACTIVATE_ON_PLAYER_ENTRY
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: vec![light_idx], // toggle target (by light index)
+            start_sound: 0,
+            stop_sound: 0,
+        });
+        ecs.spawn(Light {
+            light_index: light_idx,
+            light_type: LightType::Normal,
+            state: LightState::PrimaryActive,
+            flags: 0,
+            phase: 0,
+            period: 1,
+            current_intensity: 1.0,
+            initial_intensity: 1.0,
+            final_intensity: 1.0,
+            functions: [spec; 6],
+            tag: 0,
+        });
+    }
+
+    let light_intensity = |w: &mut SimWorld| -> f32 {
+        w.light_intensities()
+            .get(light_idx)
+            .copied()
+            .expect("light present")
+    };
+
+    // Lit before any arrival.
+    assert!(light_intensity(&mut world) > 0.5, "light starts lit");
+
+    // Tick 1: player-entry activates A -> Extending. Not arrived yet, no toggle.
+    world.tick(ActionFlags::default().into());
+    assert!(
+        light_intensity(&mut world) > 0.5,
+        "light must stay lit while platform is still extending"
+    );
+
+    // Drive A to AtExtended. While in flight the light stays lit; on the arrival
+    // tick the linked-light toggle snaps the lit light to dark.
+    let mut arrived = false;
+    for _ in 0..6 {
+        world.tick(ActionFlags::default().into());
+        if world.snapshot().platforms[0].state == PlatformState::AtExtended {
+            arrived = true;
+            break;
+        }
+        assert!(
+            light_intensity(&mut world) > 0.5,
+            "light must stay lit before the platform arrives"
+        );
+    }
+    assert!(arrived, "platform should have arrived at AtExtended");
+    assert!(
+        light_intensity(&mut world) < 0.5,
+        "platform arrival must toggle the linked light off (was lit, expected dark), got {}",
+        light_intensity(&mut world)
+    );
+}
+
+// ──────────── Boxes 12.1–12.2: control-panel ACTION activates the linked platform ────────────
+
+/// Box 12.2: a player facing a `PanelAction::ActivatePlatform` control panel
+/// who presses ACTION must drive the *full tick path*
+/// (`process_action_key` rising-edge → `find_action_key_target` →
+/// `ActionTarget::Panel` → `execute_panel_action` → `activate_platform`) and
+/// leave the linked target platform extending, even though the platform carries
+/// NO activation flags of its own (it is purely panel-driven).
+///
+/// Geometry (from `make_test_map`): the player starts in poly 0 at world
+/// (512,512) = (0.5, 0.5) WU, facing 0 (east, +X). The shared wall between poly
+/// 0 and poly 1 is line 0, running from (1.0, 0.0) to (1.0, 1.0) WU. A ray east
+/// from the player crosses line 0 at distance 0.5 WU — within the 1.5 WU
+/// control-panel activation range — so a panel on line 0 is the ACTION target.
+/// The panel targets the platform whose `polygon_index == 1`.
+#[test]
+fn box122_control_panel_action_activates_linked_platform() {
+    use marathon_sim::world_mechanics::panels::{ControlPanel, ControlPanels, PanelAction};
+    use marathon_sim::{Platform, PlatformState, PlatformType};
+
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    {
+        let ecs = world.ecs_world_mut();
+
+        // The panel-driven target platform sits on poly 1, currently at rest.
+        // It carries NO static activation flags, so nothing but the panel can
+        // move it — that isolates the control-panel path under test.
+        ecs.spawn(Platform {
+            polygon_index: 1,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.125,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0, // no self-activation: only the panel can move it
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
+        });
+
+        // A control panel on line 0 (the shared east wall the player faces)
+        // whose action activates the platform on polygon 1.
+        ecs.insert_resource(ControlPanels(vec![ControlPanel {
+            line_index: 0,
+            side: 0,
+            action: PanelAction::ActivatePlatform { platform_index: 1 },
+            max_distance: 1.5,
+        }]));
+    }
+
+    // Before any ACTION press the panel-driven platform is at rest.
+    let target_state = |w: &mut SimWorld| -> PlatformState {
+        let ecs = w.ecs_world_mut();
+        let mut q = ecs.query::<&Platform>();
+        q.iter(ecs)
+            .find(|p| p.polygon_index == 1)
+            .map(|p| p.state)
+            .expect("panel-target platform present")
+    };
+
+    assert_eq!(
+        target_state(&mut world),
+        PlatformState::AtRest,
+        "panel-driven platform must start at rest (no ACTION pressed yet)"
+    );
+
+    // A tick with NO input must leave it at rest — the platform has no
+    // self-activation flags, so only the panel can move it.
+    world.tick(ActionFlags::default().into());
+    assert_eq!(
+        target_state(&mut world),
+        PlatformState::AtRest,
+        "without an ACTION press the panel must not fire and the platform stays at rest"
+    );
+
+    // Press ACTION while facing the panel: rising edge -> raycast hits the
+    // panel on line 0 -> execute_panel_action -> activate_platform on poly 1.
+    let action = ActionFlags::new(ActionFlags::ACTION);
+    world.tick(action.into());
+    assert_eq!(
+        target_state(&mut world),
+        PlatformState::Extending,
+        "pressing ACTION while facing the ActivatePlatform panel must activate \
+         (start extending) the linked platform on polygon 1"
     );
 }
 

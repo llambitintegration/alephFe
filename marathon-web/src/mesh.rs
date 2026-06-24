@@ -1060,7 +1060,7 @@ mod tests {
         let mut p1 = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
         p1.floor_height = 2048; // very different absolute height
         let map = make_map_data(endpoints, vec![p0, p1], vec![], vec![]);
-        let poly_info = vec![make_info(), make_info()];
+        let poly_info = [make_info(), make_info()];
 
         let mut v0 = Vec::new();
         let mut i0 = Vec::new();

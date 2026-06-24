@@ -581,7 +581,7 @@ mod tests {
         assert_eq!(config.base_intensity, 0.75);
 
         // Copy + Clone + Debug derives are usable.
-        let cloned = config.clone();
+        let cloned = config;
         let copied = config;
         let _ = format!("{copied:?}");
         assert_eq!(cloned, copied);
@@ -893,7 +893,7 @@ mod tests {
         }
 
         // Copy + Clone + Debug derives are usable on the struct.
-        let cloned = fader.clone();
+        let cloned = fader;
         let copied = fader;
         let _ = format!("{copied:?}");
         assert_eq!(cloned.tag, copied.tag);
