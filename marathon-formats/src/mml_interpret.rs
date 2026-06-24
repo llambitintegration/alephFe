@@ -11,7 +11,8 @@
 //! rather than failing the whole document — matching decades of community MML
 //! written against AlephOne's forgiving parser.
 
-use crate::mml::MmlSection;
+use crate::mml::{MmlDocument, MmlSection};
+use crate::physics::{EffectDefinition, MonsterDefinition, PhysicsData, ProjectileDefinition};
 
 /// Emit a non-fatal warning for a malformed attribute value.
 ///
@@ -102,6 +103,116 @@ pub fn parse_mml_bool(s: &str) -> Option<bool> {
             None
         }
     }
+}
+
+/// Overrides for one `<monster index="N">` element. Each field's inner type
+/// matches the corresponding [`MonsterDefinition`](crate::physics::MonsterDefinition)
+/// field so an override can be applied directly; `None` means "leave the engine
+/// default in place".
+///
+/// `class` maps to `MonsterDefinition::monster_class` (renamed because `class`
+/// is the MML attribute name). `immunities`/`weaknesses`/`flags` are bitfields
+/// (`u32`). `must_be_exterminated` has no dedicated `MonsterDefinition` field —
+/// it is a placement/objective attribute carried alongside the definition — so
+/// it is modeled as a standalone `Option<bool>`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MonsterOverride {
+    pub index: usize,
+    pub vitality: Option<i16>,
+    pub immunities: Option<u32>,
+    pub weaknesses: Option<u32>,
+    pub flags: Option<u32>,
+    pub class: Option<i32>,
+    pub friends: Option<i32>,
+    pub enemies: Option<i32>,
+    pub sound_pitch: Option<f32>,
+    pub speed: Option<i16>,
+    pub radius: Option<i16>,
+    pub height: Option<i16>,
+    pub visual_range: Option<i16>,
+    pub dark_visual_range: Option<i16>,
+    pub half_visual_arc: Option<i16>,
+    pub half_vertical_visual_arc: Option<i16>,
+    pub intelligence: Option<i16>,
+    pub carrying_item_type: Option<i16>,
+    pub must_be_exterminated: Option<bool>,
+}
+
+/// Interpret a merged `<monsters>` section into per-monster overrides. Each
+/// `<monster>` element's `index` attribute selects which monster definition to
+/// override; elements without a parseable `index` are skipped with a warning.
+/// Each recognized attribute is parsed into the corresponding typed field;
+/// unrecognized attributes are silently ignored, and a malformed value warns
+/// and leaves that field `None` without discarding the rest of the element.
+pub fn interpret_monsters(section: &MmlSection) -> Vec<MonsterOverride> {
+    let mut out = Vec::new();
+    for el in &section.elements {
+        if el.name != "monster" {
+            continue;
+        }
+        let index = match el.attributes.get("index") {
+            Some(raw) => match parse_mml_u32(raw) {
+                Some(i) => i as usize,
+                None => continue, // parse_mml_u32 already warned
+            },
+            None => {
+                eprintln!("[mml] warning: <monster> element without an index attribute, skipping");
+                continue;
+            }
+        };
+        out.push(MonsterOverride {
+            index,
+            vitality: el.attributes.get("vitality").and_then(|s| parse_mml_i16(s)),
+            immunities: el
+                .attributes
+                .get("immunities")
+                .and_then(|s| parse_mml_u32(s)),
+            weaknesses: el
+                .attributes
+                .get("weaknesses")
+                .and_then(|s| parse_mml_u32(s)),
+            flags: el.attributes.get("flags").and_then(|s| parse_mml_u32(s)),
+            class: el.attributes.get("class").and_then(|s| parse_mml_i32(s)),
+            friends: el.attributes.get("friends").and_then(|s| parse_mml_i32(s)),
+            enemies: el.attributes.get("enemies").and_then(|s| parse_mml_i32(s)),
+            sound_pitch: el
+                .attributes
+                .get("sound_pitch")
+                .and_then(|s| parse_mml_f32(s)),
+            speed: el.attributes.get("speed").and_then(|s| parse_mml_i16(s)),
+            radius: el.attributes.get("radius").and_then(|s| parse_mml_i16(s)),
+            height: el.attributes.get("height").and_then(|s| parse_mml_i16(s)),
+            visual_range: el
+                .attributes
+                .get("visual_range")
+                .and_then(|s| parse_mml_i16(s)),
+            dark_visual_range: el
+                .attributes
+                .get("dark_visual_range")
+                .and_then(|s| parse_mml_i16(s)),
+            half_visual_arc: el
+                .attributes
+                .get("half_visual_arc")
+                .and_then(|s| parse_mml_i16(s)),
+            half_vertical_visual_arc: el
+                .attributes
+                .get("half_vertical_visual_arc")
+                .and_then(|s| parse_mml_i16(s)),
+            intelligence: el
+                .attributes
+                .get("intelligence")
+                .and_then(|s| parse_mml_i16(s)),
+            carrying_item_type: el
+                .attributes
+                .get("carrying_item_type")
+                .and_then(|s| parse_mml_i16(s)),
+            must_be_exterminated: el
+                .attributes
+                .get("must_be_exterminated")
+                .and_then(|s| parse_mml_bool(s)),
+        });
+    }
+    out
 }
 
 /// Overrides for the `<dynamic_limits>` section. Each field mirrors an AlephOne
@@ -311,6 +422,182 @@ pub fn interpret_scenario(section: &MmlSection) -> ScenarioIdOverride {
     }
 }
 
+/// Overrides for one `<projectile index="N">` element. Each field's inner type
+/// matches the corresponding
+/// [`ProjectileDefinition`](crate::physics::ProjectileDefinition) field so an
+/// override can be applied directly; `None` means "leave the engine default in
+/// place".
+///
+/// DEVIATION: `ProjectileDefinition::damage` is a
+/// [`DamageDefinition`](crate::types::DamageDefinition) sub-struct, not a single
+/// scalar attribute, so it is **not** modeled here — only the scalar fields the
+/// spec lists are mapped. (AlephOne expresses projectile damage as a nested
+/// `<damage>` element, which is a richer cascade-merge concern handled
+/// elsewhere.) `media_projectile_promotion` exists on the definition but is not
+/// in the spec's attribute list, so it is also omitted.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProjectileOverride {
+    pub index: usize,
+    pub collection: Option<i16>,
+    pub shape: Option<i16>,
+    pub detonation_effect: Option<i16>,
+    pub media_detonation_effect: Option<i16>,
+    pub contrail_effect: Option<i16>,
+    pub ticks_between_contrails: Option<i16>,
+    pub maximum_contrails: Option<i16>,
+    pub radius: Option<i16>,
+    pub area_of_effect: Option<i16>,
+    pub flags: Option<u32>,
+    pub speed: Option<i16>,
+    pub maximum_range: Option<i16>,
+    pub sound_pitch: Option<f32>,
+    pub flyby_sound: Option<i16>,
+    pub rebound_sound: Option<i16>,
+}
+
+/// Interpret a merged `<projectiles>` section into per-projectile overrides.
+/// Each `<projectile>` element's `index` attribute selects which projectile
+/// definition to override; elements without a parseable `index` are skipped with
+/// a warning. Each recognized attribute is parsed into the corresponding typed
+/// field; unrecognized attributes (and the non-scalar `damage`) are silently
+/// ignored, and a malformed value warns and leaves that field `None` without
+/// discarding the rest of the element.
+pub fn interpret_projectiles(section: &MmlSection) -> Vec<ProjectileOverride> {
+    let mut out = Vec::new();
+    for el in &section.elements {
+        if el.name != "projectile" {
+            continue;
+        }
+        let index = match el.attributes.get("index") {
+            Some(raw) => match parse_mml_u32(raw) {
+                Some(i) => i as usize,
+                None => continue, // parse_mml_u32 already warned
+            },
+            None => {
+                eprintln!(
+                    "[mml] warning: <projectile> element without an index attribute, skipping"
+                );
+                continue;
+            }
+        };
+        out.push(ProjectileOverride {
+            index,
+            collection: el
+                .attributes
+                .get("collection")
+                .and_then(|s| parse_mml_i16(s)),
+            shape: el.attributes.get("shape").and_then(|s| parse_mml_i16(s)),
+            detonation_effect: el
+                .attributes
+                .get("detonation_effect")
+                .and_then(|s| parse_mml_i16(s)),
+            media_detonation_effect: el
+                .attributes
+                .get("media_detonation_effect")
+                .and_then(|s| parse_mml_i16(s)),
+            contrail_effect: el
+                .attributes
+                .get("contrail_effect")
+                .and_then(|s| parse_mml_i16(s)),
+            ticks_between_contrails: el
+                .attributes
+                .get("ticks_between_contrails")
+                .and_then(|s| parse_mml_i16(s)),
+            maximum_contrails: el
+                .attributes
+                .get("maximum_contrails")
+                .and_then(|s| parse_mml_i16(s)),
+            radius: el.attributes.get("radius").and_then(|s| parse_mml_i16(s)),
+            area_of_effect: el
+                .attributes
+                .get("area_of_effect")
+                .and_then(|s| parse_mml_i16(s)),
+            flags: el.attributes.get("flags").and_then(|s| parse_mml_u32(s)),
+            speed: el.attributes.get("speed").and_then(|s| parse_mml_i16(s)),
+            maximum_range: el
+                .attributes
+                .get("maximum_range")
+                .and_then(|s| parse_mml_i16(s)),
+            sound_pitch: el
+                .attributes
+                .get("sound_pitch")
+                .and_then(|s| parse_mml_f32(s)),
+            flyby_sound: el
+                .attributes
+                .get("flyby_sound")
+                .and_then(|s| parse_mml_i16(s)),
+            rebound_sound: el
+                .attributes
+                .get("rebound_sound")
+                .and_then(|s| parse_mml_i16(s)),
+        });
+    }
+    out
+}
+
+/// Overrides for one `<effect index="N">` element. Each field's inner type
+/// matches the corresponding
+/// [`EffectDefinition`](crate::physics::EffectDefinition) field so an override
+/// can be applied directly; `None` means "leave the engine default in place".
+/// `flags` is a `u16` bitfield on the definition.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EffectOverride {
+    pub index: usize,
+    pub collection: Option<i16>,
+    pub shape: Option<i16>,
+    pub sound_pitch: Option<f32>,
+    pub flags: Option<u16>,
+    pub delay: Option<i16>,
+    pub delay_sound: Option<i16>,
+}
+
+/// Interpret a merged `<effects>` section into per-effect overrides. Each
+/// `<effect>` element's `index` attribute selects which effect definition to
+/// override; elements without a parseable `index` are skipped with a warning.
+/// Each recognized attribute is parsed into the corresponding typed field;
+/// unrecognized attributes are silently ignored, and a malformed value warns and
+/// leaves that field `None` without discarding the rest of the element.
+pub fn interpret_effects(section: &MmlSection) -> Vec<EffectOverride> {
+    let mut out = Vec::new();
+    for el in &section.elements {
+        if el.name != "effect" {
+            continue;
+        }
+        let index = match el.attributes.get("index") {
+            Some(raw) => match parse_mml_u32(raw) {
+                Some(i) => i as usize,
+                None => continue, // parse_mml_u32 already warned
+            },
+            None => {
+                eprintln!("[mml] warning: <effect> element without an index attribute, skipping");
+                continue;
+            }
+        };
+        out.push(EffectOverride {
+            index,
+            collection: el
+                .attributes
+                .get("collection")
+                .and_then(|s| parse_mml_i16(s)),
+            shape: el.attributes.get("shape").and_then(|s| parse_mml_i16(s)),
+            sound_pitch: el
+                .attributes
+                .get("sound_pitch")
+                .and_then(|s| parse_mml_f32(s)),
+            flags: el
+                .attributes
+                .get("flags")
+                .and_then(|s| parse_mml_u32(s).and_then(|v| u16::try_from(v).ok())),
+            delay: el.attributes.get("delay").and_then(|s| parse_mml_i16(s)),
+            delay_sound: el
+                .attributes
+                .get("delay_sound")
+                .and_then(|s| parse_mml_i16(s)),
+        });
+    }
+    out
+}
+
 /// A `<stringset index="R">` override: each entry maps a
 /// `(resource_id, string_index)` pair to its replacement text. One
 /// [`StringSetOverride`] corresponds to a single `<stringset>` section (one
@@ -349,6 +636,487 @@ pub fn interpret_stringset(section: &MmlSection) -> StringSetOverride {
         entries.push(((resource_id, idx), text));
     }
     StringSetOverride { entries }
+}
+
+/// Overrides for one `<shell_casings index="N">` element under `<weapons>`.
+///
+/// AlephOne has no standalone shell-casing *definition* struct in this crate's
+/// [`physics`](crate::physics) module (shell-casing state is engine-internal),
+/// so every field is modeled as `Option<i16>` to match the integer values the
+/// spec scenario uses. `collection` carries the `coll` attribute and `sequence`
+/// carries `seq` (renamed for clarity); the remaining fields keep their MML
+/// names. `x0`/`y0` are spawn offsets and `vx0`/`vy0`/`dvx`/`dvy` are velocity
+/// and velocity-delta components (AlephOne fixed-point integers). `None` means
+/// "leave the engine default in place".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShellCasingOverride {
+    pub index: usize,
+    pub collection: Option<i16>,
+    pub sequence: Option<i16>,
+    pub x0: Option<i16>,
+    pub y0: Option<i16>,
+    pub vx0: Option<i16>,
+    pub vy0: Option<i16>,
+    pub dvx: Option<i16>,
+    pub dvy: Option<i16>,
+}
+
+/// One `<order index="S" weapon="W"/>` entry under `<weapons>`: it places weapon
+/// `weapon` at cycling slot `index`. The spec scenario
+/// (`<order index="0" weapon="3"/>`) maps a slot index to a weapon index, so
+/// both values are captured. An `<order>` element without a parseable `index`
+/// is skipped; a missing/malformed `weapon` leaves `weapon = None`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WeaponOrderEntry {
+    pub index: usize,
+    pub weapon: Option<usize>,
+}
+
+/// Result of interpreting a `<weapons>` section: the per-`<shell_casings>`
+/// overrides plus the `<order>` (weapon cycling) entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WeaponOverrides {
+    pub shell_casings: Vec<ShellCasingOverride>,
+    pub order: Vec<WeaponOrderEntry>,
+}
+
+/// Interpret a merged `<weapons>` section into shell-casing overrides and the
+/// weapon cycling order.
+///
+/// `<shell_casings>` elements are matched by `index` and parsed into typed
+/// [`ShellCasingOverride`] structs; elements without a parseable `index` are
+/// skipped with a warning, malformed attribute values warn and leave that field
+/// `None`, and unrecognized attributes are ignored. `<order>` elements are
+/// matched by `index` (the cycling slot) and produce [`WeaponOrderEntry`] values
+/// carrying the `weapon` index; an `<order>` without a parseable `index` is
+/// skipped. Any other child element is ignored.
+pub fn interpret_weapons(section: &MmlSection) -> WeaponOverrides {
+    let mut out = WeaponOverrides::default();
+    for el in &section.elements {
+        match el.name.as_str() {
+            "shell_casings" => {
+                let index = match el.attributes.get("index") {
+                    Some(raw) => match parse_mml_u32(raw) {
+                        Some(i) => i as usize,
+                        None => continue, // parse_mml_u32 already warned
+                    },
+                    None => {
+                        eprintln!(
+                            "[mml] warning: <shell_casings> element without an index attribute, skipping"
+                        );
+                        continue;
+                    }
+                };
+                out.shell_casings.push(ShellCasingOverride {
+                    index,
+                    collection: el.attributes.get("coll").and_then(|s| parse_mml_i16(s)),
+                    sequence: el.attributes.get("seq").and_then(|s| parse_mml_i16(s)),
+                    x0: el.attributes.get("x0").and_then(|s| parse_mml_i16(s)),
+                    y0: el.attributes.get("y0").and_then(|s| parse_mml_i16(s)),
+                    vx0: el.attributes.get("vx0").and_then(|s| parse_mml_i16(s)),
+                    vy0: el.attributes.get("vy0").and_then(|s| parse_mml_i16(s)),
+                    dvx: el.attributes.get("dvx").and_then(|s| parse_mml_i16(s)),
+                    dvy: el.attributes.get("dvy").and_then(|s| parse_mml_i16(s)),
+                });
+            }
+            "order" => {
+                let index = match el.attributes.get("index") {
+                    Some(raw) => match parse_mml_u32(raw) {
+                        Some(i) => i as usize,
+                        None => continue, // parse_mml_u32 already warned
+                    },
+                    None => {
+                        eprintln!(
+                            "[mml] warning: <order> element without an index attribute, skipping"
+                        );
+                        continue;
+                    }
+                };
+                out.order.push(WeaponOrderEntry {
+                    index,
+                    weapon: el
+                        .attributes
+                        .get("weapon")
+                        .and_then(|s| parse_mml_u32(s))
+                        .map(|w| w as usize),
+                });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Placeholder value returned by the stub interpreters (box 1.14) for sections
+/// that are parsed structurally but not yet interpreted into typed overrides
+/// (`interface`, `motion_sensor`, `overhead_map`, `infravision`,
+/// `animated_textures`, `control_panels`, `platforms`, `liquids`, `sounds`,
+/// `faders`, `view`, `scenery`, `opengl`, `software`, `console`, `logging`).
+///
+/// Each stub interpreter logs a single "not yet implemented" warning and returns
+/// a [`StubOverride`]. When real interpreters land they replace the stub and its
+/// return type; until then [`StubOverride`] keeps the cascade-assembly code
+/// (box 3.x) uniform without pretending these sections carry data.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StubOverride;
+
+/// One stub-section dispatch entry: the optional document section, its name for
+/// the not-yet-implemented notice, and the interpreter stub to invoke.
+type StubEntry<'a> = (
+    &'a Option<MmlSection>,
+    &'a str,
+    fn(&MmlSection) -> StubOverride,
+);
+
+/// Emit the one-time "not yet implemented" notice for a stubbed section.
+fn warn_stub(section_name: &str) {
+    eprintln!("[mml] section <{section_name}> not yet implemented; ignoring overrides");
+}
+
+macro_rules! stub_interpreter {
+    ($fn_name:ident, $section_name:literal) => {
+        #[doc = concat!("Stub interpreter for the `<", $section_name, ">` section (box 1.14). ")]
+        #[doc = "Logs a \"not yet implemented\" warning and returns an empty [`StubOverride`]."]
+        pub fn $fn_name(_section: &MmlSection) -> StubOverride {
+            warn_stub($section_name);
+            StubOverride
+        }
+    };
+}
+
+stub_interpreter!(interpret_interface, "interface");
+stub_interpreter!(interpret_motion_sensor, "motion_sensor");
+stub_interpreter!(interpret_overhead_map, "overhead_map");
+stub_interpreter!(interpret_infravision, "infravision");
+stub_interpreter!(interpret_animated_textures, "animated_textures");
+stub_interpreter!(interpret_control_panels, "control_panels");
+stub_interpreter!(interpret_platforms, "platforms");
+stub_interpreter!(interpret_liquids, "liquids");
+stub_interpreter!(interpret_sounds, "sounds");
+stub_interpreter!(interpret_faders, "faders");
+stub_interpreter!(interpret_view, "view");
+stub_interpreter!(interpret_scenery, "scenery");
+stub_interpreter!(interpret_opengl, "opengl");
+stub_interpreter!(interpret_software, "software");
+stub_interpreter!(interpret_console, "console");
+stub_interpreter!(interpret_logging, "logging");
+
+/// The complete set of typed overrides interpreted from a single (already
+/// layered) [`MmlDocument`] (boxes 3.1/3.2). Each field holds the result of the
+/// matching `interpret_*` function for a populated section, or that override
+/// type's default/empty value for an absent section.
+///
+/// Only sections with **implemented** interpreters get typed fields. The
+/// remaining structurally-parsed sections (box 1.14 stubs) are tracked by
+/// [`stub_sections`](Self::stub_sections): the list of section names that were
+/// present on the document but only have stub interpreters.
+///
+/// `player` is intentionally **omitted**: box 1.7 (`PlayerOverride` /
+/// `interpret_player`) is not yet implemented (no spec Requirement), so there is
+/// no typed override to aggregate. When box 1.7 lands, add a `player:
+/// PlayerOverride` field and wire it in [`from_document`](Self::from_document).
+///
+/// DEVIATION: `interpret_projectiles` and `interpret_effects` exist, but
+/// `MmlDocument` has **no** `projectiles`/`effects` section field (projectile
+/// and effect overrides are carried under other sections in the source MML), so
+/// those fields can never be populated from a document today and stay at their
+/// default empty `Vec`. They are kept here so the aggregate type is complete and
+/// ready once a corresponding document section is added.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MmlOverrideSet {
+    /// Per-monster overrides (`<monsters>` → [`interpret_monsters`]).
+    pub monsters: Vec<MonsterOverride>,
+    /// Shell-casing and weapon-order overrides (`<weapons>` → [`interpret_weapons`]).
+    pub weapons: WeaponOverrides,
+    /// Per-projectile overrides. No `MmlDocument` section field exists yet, so
+    /// always empty (see type-level DEVIATION note).
+    pub projectiles: Vec<ProjectileOverride>,
+    /// Per-effect overrides. No `MmlDocument` section field exists yet, so always
+    /// empty (see type-level DEVIATION note).
+    pub effects: Vec<EffectOverride>,
+    /// Dynamic-limit overrides (`<dynamic_limits>` → [`interpret_dynamic_limits`]).
+    pub dynamic_limits: DynamicLimitsOverride,
+    /// Per-item overrides (`<items>` → [`interpret_items`]).
+    pub items: Vec<ItemOverride>,
+    /// Landscape overrides and clears (`<landscapes>` → [`interpret_landscapes`]).
+    pub landscapes: LandscapesOverride,
+    /// Texture-loading overrides (`<texture_loading>` → [`interpret_texture_loading`]).
+    pub texture_loading: TextureLoadingOverride,
+    /// String-set overrides (`<stringset>` → [`interpret_stringset`]).
+    pub stringset: StringSetOverride,
+    /// Scenario-identity override (`<scenario>` → [`interpret_scenario`]).
+    pub scenario: ScenarioIdOverride,
+    /// Names of sections that were present on the document but only have stub
+    /// interpreters (box 1.14). Each is logged once via its stub interpreter
+    /// during [`from_document`](Self::from_document).
+    pub stub_sections: Vec<String>,
+}
+
+impl MmlOverrideSet {
+    /// Aggregate every implemented section override from `doc` into one
+    /// [`MmlOverrideSet`] (box 3.2). Each populated `doc.<section>` calls the
+    /// matching `interpret_*` function; absent sections leave that field at its
+    /// default/empty value.
+    ///
+    /// Sections that only have stub interpreters (box 1.14) are handled by
+    /// calling their stub (so the one-time "not yet implemented" warning fires)
+    /// and recording the section name in [`stub_sections`](Self::stub_sections);
+    /// the returned [`StubOverride`] carries no data and is discarded.
+    ///
+    /// `projectiles`/`effects` are left default because `MmlDocument` has no
+    /// matching section field (see the type-level DEVIATION note). `player` is
+    /// omitted entirely pending box 1.7.
+    pub fn from_document(doc: &MmlDocument) -> Self {
+        let mut out = MmlOverrideSet::default();
+
+        if let Some(section) = &doc.monsters {
+            out.monsters = interpret_monsters(section);
+        }
+        if let Some(section) = &doc.weapons {
+            out.weapons = interpret_weapons(section);
+        }
+        if let Some(section) = &doc.dynamic_limits {
+            out.dynamic_limits = interpret_dynamic_limits(section);
+        }
+        if let Some(section) = &doc.items {
+            out.items = interpret_items(section);
+        }
+        if let Some(section) = &doc.landscapes {
+            out.landscapes = interpret_landscapes(section);
+        }
+        if let Some(section) = &doc.texture_loading {
+            out.texture_loading = interpret_texture_loading(section);
+        }
+        if let Some(section) = &doc.stringset {
+            out.stringset = interpret_stringset(section);
+        }
+        if let Some(section) = &doc.scenario {
+            out.scenario = interpret_scenario(section);
+        }
+
+        // Stub sections (box 1.14): call the stub to emit the notice, record the
+        // name. `view` has no dedicated MmlDocument field, so it is not checked.
+        let stubs: [StubEntry<'_>; 15] = [
+            (&doc.interface, "interface", interpret_interface),
+            (&doc.motion_sensor, "motion_sensor", interpret_motion_sensor),
+            (&doc.overhead_map, "overhead_map", interpret_overhead_map),
+            (&doc.infravision, "infravision", interpret_infravision),
+            (
+                &doc.animated_textures,
+                "animated_textures",
+                interpret_animated_textures,
+            ),
+            (
+                &doc.control_panels,
+                "control_panels",
+                interpret_control_panels,
+            ),
+            (&doc.platforms, "platforms", interpret_platforms),
+            (&doc.liquids, "liquids", interpret_liquids),
+            (&doc.sounds, "sounds", interpret_sounds),
+            (&doc.faders, "faders", interpret_faders),
+            (&doc.scenery, "scenery", interpret_scenery),
+            (&doc.opengl, "opengl", interpret_opengl),
+            (&doc.software, "software", interpret_software),
+            (&doc.console, "console", interpret_console),
+            (&doc.logging, "logging", interpret_logging),
+        ];
+        for (slot, name, interp) in stubs {
+            if let Some(section) = slot {
+                let _ = interp(section);
+                out.stub_sections.push(name.to_string());
+            }
+        }
+
+        out
+    }
+}
+
+// ─── Override application to physics definitions (boxes 4.1, 4.3–4.5) ────────
+//
+// The `apply_override` / `apply_overrides` methods live in this module rather
+// than `physics`: `mml_interpret` already depends on `physics` (it imports the
+// `*Definition` types above), while `physics` has no dependency on this module.
+// Placing the impls here keeps the dependency edge one-directional and avoids a
+// circular `use`.
+
+impl MonsterDefinition {
+    /// Apply a [`MonsterOverride`] in place: every `Some` field on the override
+    /// replaces the corresponding definition field; `None` fields leave the
+    /// existing value untouched. `ovr.class` maps to `monster_class` (the MML
+    /// attribute is named `class`). `ovr.index` selects which definition to
+    /// apply to and is handled by [`PhysicsData::apply_overrides`], not here.
+    /// `must_be_exterminated` has no `MonsterDefinition` field, so it is ignored.
+    pub fn apply_override(&mut self, ovr: &MonsterOverride) {
+        if let Some(v) = ovr.vitality {
+            self.vitality = v;
+        }
+        if let Some(v) = ovr.immunities {
+            self.immunities = v;
+        }
+        if let Some(v) = ovr.weaknesses {
+            self.weaknesses = v;
+        }
+        if let Some(v) = ovr.flags {
+            self.flags = v;
+        }
+        if let Some(v) = ovr.class {
+            self.monster_class = v;
+        }
+        if let Some(v) = ovr.friends {
+            self.friends = v;
+        }
+        if let Some(v) = ovr.enemies {
+            self.enemies = v;
+        }
+        if let Some(v) = ovr.sound_pitch {
+            self.sound_pitch = v;
+        }
+        if let Some(v) = ovr.speed {
+            self.speed = v;
+        }
+        if let Some(v) = ovr.radius {
+            self.radius = v;
+        }
+        if let Some(v) = ovr.height {
+            self.height = v;
+        }
+        if let Some(v) = ovr.visual_range {
+            self.visual_range = v;
+        }
+        if let Some(v) = ovr.dark_visual_range {
+            self.dark_visual_range = v;
+        }
+        if let Some(v) = ovr.half_visual_arc {
+            self.half_visual_arc = v;
+        }
+        if let Some(v) = ovr.half_vertical_visual_arc {
+            self.half_vertical_visual_arc = v;
+        }
+        if let Some(v) = ovr.intelligence {
+            self.intelligence = v;
+        }
+        if let Some(v) = ovr.carrying_item_type {
+            self.carrying_item_type = v;
+        }
+    }
+}
+
+impl ProjectileDefinition {
+    /// Apply a [`ProjectileOverride`] in place: every `Some` field replaces the
+    /// corresponding definition field; `None` fields are left unchanged.
+    /// `ProjectileOverride` carries no `damage` field (the definition's `damage`
+    /// is a `DamageDefinition` sub-struct handled elsewhere), so `damage` is
+    /// never touched here.
+    pub fn apply_override(&mut self, ovr: &ProjectileOverride) {
+        if let Some(v) = ovr.collection {
+            self.collection = v;
+        }
+        if let Some(v) = ovr.shape {
+            self.shape = v;
+        }
+        if let Some(v) = ovr.detonation_effect {
+            self.detonation_effect = v;
+        }
+        if let Some(v) = ovr.media_detonation_effect {
+            self.media_detonation_effect = v;
+        }
+        if let Some(v) = ovr.contrail_effect {
+            self.contrail_effect = v;
+        }
+        if let Some(v) = ovr.ticks_between_contrails {
+            self.ticks_between_contrails = v;
+        }
+        if let Some(v) = ovr.maximum_contrails {
+            self.maximum_contrails = v;
+        }
+        if let Some(v) = ovr.radius {
+            self.radius = v;
+        }
+        if let Some(v) = ovr.area_of_effect {
+            self.area_of_effect = v;
+        }
+        if let Some(v) = ovr.flags {
+            self.flags = v;
+        }
+        if let Some(v) = ovr.speed {
+            self.speed = v;
+        }
+        if let Some(v) = ovr.maximum_range {
+            self.maximum_range = v;
+        }
+        if let Some(v) = ovr.sound_pitch {
+            self.sound_pitch = v;
+        }
+        if let Some(v) = ovr.flyby_sound {
+            self.flyby_sound = v;
+        }
+        if let Some(v) = ovr.rebound_sound {
+            self.rebound_sound = v;
+        }
+    }
+}
+
+impl EffectDefinition {
+    /// Apply an [`EffectOverride`] in place: every `Some` field replaces the
+    /// corresponding definition field; `None` fields are left unchanged.
+    pub fn apply_override(&mut self, ovr: &EffectOverride) {
+        if let Some(v) = ovr.collection {
+            self.collection = v;
+        }
+        if let Some(v) = ovr.shape {
+            self.shape = v;
+        }
+        if let Some(v) = ovr.sound_pitch {
+            self.sound_pitch = v;
+        }
+        if let Some(v) = ovr.flags {
+            self.flags = v;
+        }
+        if let Some(v) = ovr.delay {
+            self.delay = v;
+        }
+        if let Some(v) = ovr.delay_sound {
+            self.delay_sound = v;
+        }
+    }
+}
+
+impl PhysicsData {
+    /// Apply an entire [`MmlOverrideSet`] to the parsed physics definitions in
+    /// place. Each monster/projectile/effect override is applied to the
+    /// definition at its `index`; an out-of-bounds index (or an absent
+    /// definition list) is silently skipped — `Vec::get_mut` returns `None`,
+    /// so no panic occurs and nothing is changed.
+    ///
+    /// Weapon overrides (box 4.2) are intentionally **not** wired: box 1.4
+    /// produced shell-casing/cycling-order overrides, not `WeaponDefinition`
+    /// physics overrides, so there is no `WeaponOverride`-to-definition mapping
+    /// to apply yet. Items, dynamic limits, landscapes, etc. are likewise not
+    /// physics-definition overrides and are handled outside this method.
+    pub fn apply_overrides(&mut self, overrides: &MmlOverrideSet) {
+        for ovr in &overrides.monsters {
+            if let Some(defs) = self.monsters.as_mut() {
+                if let Some(def) = defs.get_mut(ovr.index) {
+                    def.apply_override(ovr);
+                }
+            }
+        }
+        for ovr in &overrides.projectiles {
+            if let Some(defs) = self.projectiles.as_mut() {
+                if let Some(def) = defs.get_mut(ovr.index) {
+                    def.apply_override(ovr);
+                }
+            }
+        }
+        for ovr in &overrides.effects {
+            if let Some(defs) = self.effects.as_mut() {
+                if let Some(def) = defs.get_mut(ovr.index) {
+                    def.apply_override(ovr);
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -411,6 +1179,83 @@ mod tests {
         for bad in ["2", "yes", "no", "", "tru"] {
             assert_eq!(parse_mml_bool(bad), None, "{bad:?} should be None");
         }
+    }
+
+    // ── boxes 1.2/1.3: monsters interpreter ──
+
+    #[test]
+    fn monster_override_subset_of_attributes() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"5\" vitality=\"300\" speed=\"10\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let monsters = interpret_monsters(&doc.monsters.unwrap());
+        assert_eq!(monsters.len(), 1);
+        assert_eq!(
+            monsters[0],
+            MonsterOverride {
+                index: 5,
+                vitality: Some(300),
+                speed: Some(10),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn monster_override_without_index_is_skipped() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster vitality=\"100\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let monsters = interpret_monsters(&doc.monsters.unwrap());
+        assert!(monsters.is_empty(), "index-less <monster> is skipped");
+    }
+
+    #[test]
+    fn monster_override_malformed_value_stays_none() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"5\" vitality=\"not_a_number\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let monsters = interpret_monsters(&doc.monsters.unwrap());
+        assert_eq!(monsters.len(), 1);
+        assert_eq!(monsters[0].index, 5);
+        assert_eq!(
+            monsters[0].vitality, None,
+            "malformed value -> None, element still produced"
+        );
+    }
+
+    #[test]
+    fn monster_override_full_attributes_and_ignores_unknown() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"2\" vitality=\"250\" immunities=\"0x1F\" weaknesses=\"4\" flags=\"8\" class=\"16\" friends=\"32\" enemies=\"64\" sound_pitch=\"1.5\" speed=\"12\" radius=\"256\" height=\"128\" visual_range=\"30\" dark_visual_range=\"10\" half_visual_arc=\"60\" half_vertical_visual_arc=\"45\" intelligence=\"5\" carrying_item_type=\"3\" must_be_exterminated=\"true\" bogus_attr=\"99\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let monsters = interpret_monsters(&doc.monsters.unwrap());
+        assert_eq!(monsters.len(), 1);
+        let m = &monsters[0];
+        assert_eq!(m.index, 2);
+        assert_eq!(m.vitality, Some(250));
+        assert_eq!(m.immunities, Some(31)); // 0x1F
+        assert_eq!(m.weaknesses, Some(4));
+        assert_eq!(m.flags, Some(8));
+        assert_eq!(m.class, Some(16));
+        assert_eq!(m.friends, Some(32));
+        assert_eq!(m.enemies, Some(64));
+        assert_eq!(m.sound_pitch, Some(1.5));
+        assert_eq!(m.speed, Some(12));
+        assert_eq!(m.radius, Some(256));
+        assert_eq!(m.height, Some(128));
+        assert_eq!(m.visual_range, Some(30));
+        assert_eq!(m.dark_visual_range, Some(10));
+        assert_eq!(m.half_visual_arc, Some(60));
+        assert_eq!(m.half_vertical_visual_arc, Some(45));
+        assert_eq!(m.intelligence, Some(5));
+        assert_eq!(m.carrying_item_type, Some(3));
+        assert_eq!(m.must_be_exterminated, Some(true));
+        // `bogus_attr` is unrecognized and silently ignored — no panic, no field.
     }
 
     // ── box 1.8: dynamic_limits interpreter ──
@@ -623,5 +1468,803 @@ mod tests {
         .unwrap();
         let out = interpret_stringset(&doc.stringset.unwrap());
         assert!(out.entries.is_empty(), "no resource id -> no entries");
+    }
+
+    // ── test helpers: build a section of one element with the given attrs ──
+
+    fn section_with(elem_name: &str, attrs: &[(&str, &str)]) -> MmlSection {
+        let mut attributes = std::collections::HashMap::new();
+        for (k, v) in attrs {
+            attributes.insert((*k).to_string(), (*v).to_string());
+        }
+        MmlSection {
+            attributes: std::collections::HashMap::new(),
+            elements: vec![crate::mml::MmlElement {
+                name: elem_name.to_string(),
+                attributes,
+                children: Vec::new(),
+                text: None,
+            }],
+        }
+    }
+
+    // ── box 1.5: projectiles interpreter ──
+
+    #[test]
+    fn projectile_override_subset_of_attributes() {
+        let section = section_with(
+            "projectile",
+            &[("index", "5"), ("radius", "128"), ("speed", "20")],
+        );
+        let projectiles = interpret_projectiles(&section);
+        assert_eq!(projectiles.len(), 1);
+        assert_eq!(
+            projectiles[0],
+            ProjectileOverride {
+                index: 5,
+                radius: Some(128),
+                speed: Some(20),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn projectile_override_without_index_is_skipped() {
+        let section = section_with("projectile", &[("radius", "100")]);
+        let projectiles = interpret_projectiles(&section);
+        assert!(projectiles.is_empty(), "index-less <projectile> is skipped");
+    }
+
+    #[test]
+    fn projectile_override_malformed_value_stays_none() {
+        let section = section_with("projectile", &[("index", "5"), ("radius", "not_a_number")]);
+        let projectiles = interpret_projectiles(&section);
+        assert_eq!(projectiles.len(), 1);
+        assert_eq!(projectiles[0].index, 5);
+        assert_eq!(
+            projectiles[0].radius, None,
+            "malformed value -> None, element still produced"
+        );
+    }
+
+    #[test]
+    fn projectile_override_full_attributes_and_ignores_unknown() {
+        let section = section_with(
+            "projectile",
+            &[
+                ("index", "3"),
+                ("collection", "7"),
+                ("shape", "2"),
+                ("detonation_effect", "10"),
+                ("media_detonation_effect", "11"),
+                ("contrail_effect", "12"),
+                ("ticks_between_contrails", "4"),
+                ("maximum_contrails", "8"),
+                ("radius", "256"),
+                ("area_of_effect", "512"),
+                ("flags", "0x1F"),
+                ("speed", "30"),
+                ("maximum_range", "1024"),
+                ("sound_pitch", "1.25"),
+                ("flyby_sound", "5"),
+                ("rebound_sound", "6"),
+                ("bogus_attr", "99"),
+            ],
+        );
+        let projectiles = interpret_projectiles(&section);
+        assert_eq!(projectiles.len(), 1);
+        let p = &projectiles[0];
+        assert_eq!(p.index, 3);
+        assert_eq!(p.collection, Some(7));
+        assert_eq!(p.shape, Some(2));
+        assert_eq!(p.detonation_effect, Some(10));
+        assert_eq!(p.media_detonation_effect, Some(11));
+        assert_eq!(p.contrail_effect, Some(12));
+        assert_eq!(p.ticks_between_contrails, Some(4));
+        assert_eq!(p.maximum_contrails, Some(8));
+        assert_eq!(p.radius, Some(256));
+        assert_eq!(p.area_of_effect, Some(512));
+        assert_eq!(p.flags, Some(31)); // 0x1F
+        assert_eq!(p.speed, Some(30));
+        assert_eq!(p.maximum_range, Some(1024));
+        assert_eq!(p.sound_pitch, Some(1.25));
+        assert_eq!(p.flyby_sound, Some(5));
+        assert_eq!(p.rebound_sound, Some(6));
+        // `bogus_attr` and the non-scalar `damage` are not modeled here.
+    }
+
+    // ── box 1.6: effects interpreter ──
+
+    #[test]
+    fn effect_override_subset_of_attributes() {
+        let section = section_with("effect", &[("index", "4"), ("delay", "15")]);
+        let effects = interpret_effects(&section);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(
+            effects[0],
+            EffectOverride {
+                index: 4,
+                delay: Some(15),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn effect_override_without_index_is_skipped() {
+        let section = section_with("effect", &[("delay", "10")]);
+        let effects = interpret_effects(&section);
+        assert!(effects.is_empty(), "index-less <effect> is skipped");
+    }
+
+    #[test]
+    fn effect_override_malformed_value_stays_none() {
+        let section = section_with("effect", &[("index", "4"), ("delay", "oops")]);
+        let effects = interpret_effects(&section);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].index, 4);
+        assert_eq!(
+            effects[0].delay, None,
+            "malformed value -> None, element still produced"
+        );
+    }
+
+    #[test]
+    fn effect_override_full_attributes_and_ignores_unknown() {
+        let section = section_with(
+            "effect",
+            &[
+                ("index", "2"),
+                ("collection", "9"),
+                ("shape", "1"),
+                ("sound_pitch", "0.75"),
+                ("flags", "0x3"),
+                ("delay", "20"),
+                ("delay_sound", "7"),
+                ("bogus_attr", "99"),
+            ],
+        );
+        let effects = interpret_effects(&section);
+        assert_eq!(effects.len(), 1);
+        let e = &effects[0];
+        assert_eq!(e.index, 2);
+        assert_eq!(e.collection, Some(9));
+        assert_eq!(e.shape, Some(1));
+        assert_eq!(e.sound_pitch, Some(0.75));
+        assert_eq!(e.flags, Some(3)); // 0x3 — u16 bitfield
+        assert_eq!(e.delay, Some(20));
+        assert_eq!(e.delay_sound, Some(7));
+        // `bogus_attr` is unrecognized and silently ignored.
+    }
+
+    // ── box 1.4: weapons interpreter (shell_casings + order) ──
+
+    #[test]
+    fn shell_casing_override_scenario() {
+        // Spec scenario: <weapons><shell_casings index="0" coll="14" seq="2"/></weapons>
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><shell_casings index=\"0\" coll=\"14\" seq=\"2\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert_eq!(out.shell_casings.len(), 1);
+        assert_eq!(
+            out.shell_casings[0],
+            ShellCasingOverride {
+                index: 0,
+                collection: Some(14),
+                sequence: Some(2),
+                ..Default::default()
+            }
+        );
+        // position/velocity fields are None
+        let sc = &out.shell_casings[0];
+        assert_eq!(sc.x0, None);
+        assert_eq!(sc.y0, None);
+        assert_eq!(sc.vx0, None);
+        assert_eq!(sc.vy0, None);
+        assert_eq!(sc.dvx, None);
+        assert_eq!(sc.dvy, None);
+        assert!(out.order.is_empty());
+    }
+
+    #[test]
+    fn shell_casing_without_index_is_skipped() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><shell_casings coll=\"14\" seq=\"2\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert!(
+            out.shell_casings.is_empty(),
+            "index-less <shell_casings> is skipped"
+        );
+    }
+
+    #[test]
+    fn shell_casing_malformed_value_stays_none() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><shell_casings index=\"0\" coll=\"not_a_number\" seq=\"2\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert_eq!(out.shell_casings.len(), 1);
+        assert_eq!(out.shell_casings[0].index, 0);
+        assert_eq!(
+            out.shell_casings[0].collection, None,
+            "malformed value -> None, element still produced"
+        );
+        assert_eq!(out.shell_casings[0].sequence, Some(2));
+    }
+
+    #[test]
+    fn shell_casing_full_attributes_and_ignores_unknown() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><shell_casings index=\"1\" coll=\"14\" seq=\"2\" x0=\"10\" y0=\"20\" vx0=\"-5\" vy0=\"6\" dvx=\"1\" dvy=\"-1\" bogus_attr=\"99\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert_eq!(out.shell_casings.len(), 1);
+        assert_eq!(
+            out.shell_casings[0],
+            ShellCasingOverride {
+                index: 1,
+                collection: Some(14),
+                sequence: Some(2),
+                x0: Some(10),
+                y0: Some(20),
+                vx0: Some(-5),
+                vy0: Some(6),
+                dvx: Some(1),
+                dvy: Some(-1),
+            }
+        );
+        // `bogus_attr` is unrecognized and silently ignored.
+    }
+
+    #[test]
+    fn weapon_order_definition() {
+        // Spec scenario: <order index="0" weapon="3"/><order index="1" weapon="0"/>
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><order index=\"0\" weapon=\"3\"/><order index=\"1\" weapon=\"0\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert!(out.shell_casings.is_empty());
+        assert_eq!(
+            out.order,
+            vec![
+                WeaponOrderEntry {
+                    index: 0,
+                    weapon: Some(3)
+                },
+                WeaponOrderEntry {
+                    index: 1,
+                    weapon: Some(0)
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn weapon_order_without_index_is_skipped() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><order weapon=\"3\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert!(out.order.is_empty(), "index-less <order> is skipped");
+    }
+
+    #[test]
+    fn weapons_section_mixes_shell_casings_and_order() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><shell_casings index=\"0\" coll=\"14\"/><order index=\"0\" weapon=\"3\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert_eq!(out.shell_casings.len(), 1);
+        assert_eq!(out.shell_casings[0].index, 0);
+        assert_eq!(out.shell_casings[0].collection, Some(14));
+        assert_eq!(out.order.len(), 1);
+        assert_eq!(out.order[0].index, 0);
+        assert_eq!(out.order[0].weapon, Some(3));
+    }
+
+    // ── boxes 3.1/3.2: MmlOverrideSet aggregation ──
+
+    #[test]
+    fn override_set_from_empty_document_is_all_defaults() {
+        let doc = MmlDocument::from_bytes(b"<marathon></marathon>").unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set, MmlOverrideSet::default());
+        assert!(set.monsters.is_empty());
+        assert!(set.items.is_empty());
+        assert!(set.projectiles.is_empty());
+        assert!(set.effects.is_empty());
+        assert!(set.stub_sections.is_empty());
+        assert_eq!(set.dynamic_limits, DynamicLimitsOverride::default());
+        assert_eq!(set.scenario, ScenarioIdOverride::default());
+    }
+
+    #[test]
+    fn override_set_wires_populated_sections() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"5\" vitality=\"300\"/></monsters><items><item index=\"7\" maximum=\"5\"/></items></marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+
+        // monsters interpreted into the monsters field
+        assert_eq!(set.monsters.len(), 1);
+        assert_eq!(
+            set.monsters[0],
+            MonsterOverride {
+                index: 5,
+                vitality: Some(300),
+                ..Default::default()
+            }
+        );
+        // items interpreted into the items field
+        assert_eq!(set.items.len(), 1);
+        assert_eq!(
+            set.items[0],
+            ItemOverride {
+                index: 7,
+                maximum: Some(5),
+                ..Default::default()
+            }
+        );
+        // untouched sections stay at default/empty
+        assert_eq!(set.dynamic_limits, DynamicLimitsOverride::default());
+        assert!(set.landscapes.landscapes.is_empty());
+        assert!(set.stub_sections.is_empty());
+    }
+
+    #[test]
+    fn override_set_wires_scenario_and_dynamic_limits() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><scenario name=\"Marathon 2\" version=\"1\" id=\"M2\"/><dynamic_limits><monsters>1024</monsters></dynamic_limits></marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set.scenario.name.as_deref(), Some("Marathon 2"));
+        assert_eq!(set.scenario.version, Some(1));
+        assert_eq!(set.dynamic_limits.monsters, Some(1024));
+    }
+
+    #[test]
+    fn override_set_records_stub_sections() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><platforms><platform index=\"0\"/></platforms><liquids/></marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert!(set.stub_sections.iter().any(|s| s == "platforms"));
+        assert!(set.stub_sections.iter().any(|s| s == "liquids"));
+        // stub sections carry no typed data
+        assert!(set.monsters.is_empty());
+    }
+}
+
+/// Section 6 (boxes 6.1–6.6): comprehensive unit-test coverage that FILLS the
+/// gaps left by the per-feature tests above — parse-helper hex/sign/edge forms,
+/// **empty-section** interpreter behavior, direct `MmlSection::merge`
+/// exercise, the `MmlDocument::layer` only-base/only-overlay/both matrix,
+/// `from_document` subset/full, and `apply_overrides` empty-set no-op. It does
+/// not duplicate the existing tests; it covers scenarios they skip.
+#[cfg(test)]
+mod section6_coverage {
+    use super::*;
+    use crate::mml::{MmlDocument, MmlElement, MmlSection};
+    use std::collections::HashMap;
+
+    // ── helpers ──
+
+    /// Build an `MmlElement` with the given name and `(key, value)` attributes.
+    fn elem(name: &str, attrs: &[(&str, &str)]) -> MmlElement {
+        let mut attributes = HashMap::new();
+        for (k, v) in attrs {
+            attributes.insert((*k).to_string(), (*v).to_string());
+        }
+        MmlElement {
+            name: name.to_string(),
+            attributes,
+            children: Vec::new(),
+            text: None,
+        }
+    }
+
+    /// Build an `MmlSection` from section-level attrs plus a list of elements.
+    fn section(section_attrs: &[(&str, &str)], elements: Vec<MmlElement>) -> MmlSection {
+        let mut attributes = HashMap::new();
+        for (k, v) in section_attrs {
+            attributes.insert((*k).to_string(), (*v).to_string());
+        }
+        MmlSection {
+            attributes,
+            elements,
+        }
+    }
+
+    /// An empty section: no section attributes and no child elements.
+    fn empty_section() -> MmlSection {
+        MmlSection::default()
+    }
+
+    // ─── box 6.1: parse_mml_* helpers — hex / sign / boolean / edge forms ─────
+    //
+    // The existing tests cover the common decimal/hex/bool/malformed cases. These
+    // fill the remaining documented-but-untested forms: leading `+`, `0x0`, the
+    // full bool truth table including the AlephOne short forms in mixed case, and
+    // confirmation that unsupported forms (`yes`/`no`/empty/whitespace-only) map
+    // to `None` as the helper actually implements them.
+
+    #[test]
+    fn box61_int_helpers_sign_and_zero_hex_forms() {
+        // explicit `+` sign accepted (normalize_int strips it)
+        assert_eq!(parse_mml_i16("+7"), Some(7));
+        assert_eq!(parse_mml_i32("+2000000000"), Some(2_000_000_000));
+        assert_eq!(parse_mml_u32("+42"), Some(42));
+        // 0x0 / 0X0 hex zero
+        assert_eq!(parse_mml_i16("0x0"), Some(0));
+        assert_eq!(parse_mml_i32("0X0"), Some(0));
+        assert_eq!(parse_mml_u32("0x0"), Some(0));
+        // lowercase and uppercase hex digits both parse
+        assert_eq!(parse_mml_i32("0xabcdef"), Some(0x00AB_CDEF));
+        assert_eq!(parse_mml_u32("0XABCDEF"), Some(0x00AB_CDEF));
+    }
+
+    #[test]
+    fn box61_int_helpers_reject_more_malformed_forms() {
+        // bare "0x" with no digits, internal spaces, plus floats handed to ints
+        assert_eq!(parse_mml_i16("0x"), None);
+        assert_eq!(parse_mml_i32("1 2"), None);
+        assert_eq!(parse_mml_u32("3.5"), None);
+        assert_eq!(parse_mml_i16("  "), None); // whitespace-only
+                                               // u32 still rejects a hex negative
+        assert_eq!(parse_mml_u32("-0xFF"), None);
+    }
+
+    #[test]
+    fn box61_f32_edge_forms() {
+        // scientific notation, leading dot, explicit positive
+        assert_eq!(parse_mml_f32("1e3"), Some(1000.0));
+        assert_eq!(parse_mml_f32(".5"), Some(0.5));
+        assert_eq!(parse_mml_f32("+2.0"), Some(2.0));
+        // no hex floats, empty/whitespace-only -> None
+        assert_eq!(parse_mml_f32("0xA"), None);
+        assert_eq!(parse_mml_f32(""), None);
+        assert_eq!(parse_mml_f32("   "), None);
+    }
+
+    #[test]
+    fn box61_bool_full_truth_table_and_unsupported_forms() {
+        // every accepted true spelling (case-insensitive, whitespace-tolerant)
+        for t in ["1", "t", "T", "true", "TRUE", "True", " true ", "\tt\n"] {
+            assert_eq!(parse_mml_bool(t), Some(true), "{t:?} -> true");
+        }
+        // every accepted false spelling
+        for f in ["0", "f", "F", "false", "FALSE", "False", " false ", "\tf\n"] {
+            assert_eq!(parse_mml_bool(f), Some(false), "{f:?} -> false");
+        }
+        // AlephOne's parser here does NOT accept yes/no/on/off — confirm they are None
+        for bad in [
+            "yes", "no", "on", "off", "y", "n", "2", "-1", "", "  ", "tru",
+        ] {
+            assert_eq!(parse_mml_bool(bad), None, "{bad:?} -> None");
+        }
+    }
+
+    // ─── box 6.2: interpret_* on EMPTY sections (no child elements) ───────────
+    //
+    // Every interpreter must produce an empty/default result for an empty section
+    // — the scenario the per-feature tests above do not cover. Also exercises a
+    // section that contains only non-matching elements (still empty result).
+
+    #[test]
+    fn box62_interpreters_on_empty_sections_yield_defaults() {
+        let s = empty_section();
+        assert!(interpret_monsters(&s).is_empty());
+        assert!(interpret_projectiles(&s).is_empty());
+        assert!(interpret_effects(&s).is_empty());
+        assert!(interpret_items(&s).is_empty());
+        assert_eq!(
+            interpret_dynamic_limits(&s),
+            DynamicLimitsOverride::default()
+        );
+        assert_eq!(interpret_landscapes(&s), LandscapesOverride::default());
+        assert_eq!(
+            interpret_texture_loading(&s),
+            TextureLoadingOverride::default()
+        );
+        assert_eq!(interpret_weapons(&s), WeaponOverrides::default());
+        // scenario reads only section attributes; an empty section -> all None
+        assert_eq!(interpret_scenario(&s), ScenarioIdOverride::default());
+    }
+
+    #[test]
+    fn box62_stringset_empty_section_has_no_resource_id() {
+        // An empty <stringset> has no `index` attribute -> no resource id ->
+        // empty entries (warned). With an index but no <string> children it is
+        // also empty.
+        assert_eq!(
+            interpret_stringset(&empty_section()),
+            StringSetOverride::default()
+        );
+        let only_index = section(&[("index", "128")], Vec::new());
+        assert_eq!(
+            interpret_stringset(&only_index),
+            StringSetOverride::default(),
+            "resource id present but no <string> children -> no entries"
+        );
+    }
+
+    #[test]
+    fn box62_texture_loading_empty_elements_keeps_section_flag() {
+        // texture_loading reads `landscapes` from the SECTION attributes; an
+        // empty element list still surfaces that flag with zero texture_envs.
+        let s = section(&[("landscapes", "true")], Vec::new());
+        let out = interpret_texture_loading(&s);
+        assert_eq!(out.landscapes, Some(true));
+        assert!(out.texture_envs.is_empty());
+    }
+
+    #[test]
+    fn box62_interpreters_ignore_only_nonmatching_elements() {
+        // A section whose only children are the wrong element name still yields
+        // an empty result (the loops `continue` past non-matching names).
+        let monsters = section(&[], vec![elem("not_a_monster", &[("index", "0")])]);
+        assert!(interpret_monsters(&monsters).is_empty());
+        let items = section(&[], vec![elem("widget", &[("index", "0")])]);
+        assert!(interpret_items(&items).is_empty());
+        let landscapes = section(&[], vec![elem("noise", &[("coll", "1")])]);
+        assert_eq!(
+            interpret_landscapes(&landscapes),
+            LandscapesOverride::default()
+        );
+    }
+
+    // ─── box 6.3: MmlSection::merge() exercised DIRECTLY ─────────────────────
+    //
+    // The existing tests drive merge only through MmlDocument::layer. These call
+    // MmlSection::merge() directly to cover: index matching, attribute
+    // preservation (overlay wins / base kept), recursive child merge, and
+    // non-indexed element handling (always appended, never matched).
+
+    #[test]
+    fn box63_merge_matches_by_name_and_index() {
+        let base = section(
+            &[],
+            vec![
+                elem("monster", &[("index", "0"), ("vitality", "10")]),
+                elem("monster", &[("index", "1"), ("vitality", "20")]),
+            ],
+        );
+        let overlay = section(
+            &[],
+            vec![elem("monster", &[("index", "1"), ("vitality", "99")])],
+        );
+        let merged = MmlSection::merge(base, overlay);
+        assert_eq!(merged.elements.len(), 2, "siblings preserved, no duplicate");
+        assert_eq!(
+            merged.find_element("monster", "0").unwrap().attributes["vitality"],
+            "10"
+        );
+        assert_eq!(
+            merged.find_element("monster", "1").unwrap().attributes["vitality"],
+            "99",
+            "matched element's attribute overridden"
+        );
+    }
+
+    #[test]
+    fn box63_merge_attribute_preservation_section_and_element() {
+        // Section-level attributes: overlay wins, base-only preserved.
+        let base = section(
+            &[("name", "Base"), ("id", "B")],
+            vec![elem("e", &[("index", "0"), ("a", "1"), ("b", "2")])],
+        );
+        let overlay = section(
+            &[("name", "Over")],
+            vec![elem("e", &[("index", "0"), ("a", "9")])],
+        );
+        let merged = MmlSection::merge(base, overlay);
+        assert_eq!(
+            merged.attributes["name"], "Over",
+            "overlay section attr wins"
+        );
+        assert_eq!(merged.attributes["id"], "B", "base-only section attr kept");
+        let e = merged.find_element("e", "0").unwrap();
+        assert_eq!(e.attributes["a"], "9", "overlay element attr wins");
+        assert_eq!(e.attributes["b"], "2", "base-only element attr kept");
+    }
+
+    #[test]
+    fn box63_merge_recursive_child_merge() {
+        let mut base_weapon = elem("weapon", &[("index", "0")]);
+        base_weapon.children = vec![elem("trigger", &[("index", "0"), ("rounds", "10")])];
+        let mut overlay_weapon = elem("weapon", &[("index", "0")]);
+        overlay_weapon.children = vec![
+            elem("trigger", &[("index", "0"), ("rounds", "20")]),
+            elem("trigger", &[("index", "1"), ("rounds", "5")]),
+        ];
+        let merged = MmlSection::merge(
+            section(&[], vec![base_weapon]),
+            section(&[], vec![overlay_weapon]),
+        );
+        let weapon = merged.find_element("weapon", "0").unwrap();
+        assert_eq!(weapon.children.len(), 2, "new child trigger appended");
+        let t0 = weapon
+            .children
+            .iter()
+            .find(|c| c.attributes.get("index").map(String::as_str) == Some("0"))
+            .unwrap();
+        assert_eq!(
+            t0.attributes["rounds"], "20",
+            "matched child merged recursively"
+        );
+    }
+
+    #[test]
+    fn box63_merge_non_indexed_elements_always_appended() {
+        // Elements without an `index` attribute are never matched: both the base's
+        // and the overlay's non-indexed elements are kept side by side.
+        let base = section(&[], vec![elem("clear", &[("coll", "1")])]);
+        let overlay = section(&[], vec![elem("clear", &[("coll", "2")])]);
+        let merged = MmlSection::merge(base, overlay);
+        assert_eq!(
+            merged.elements.len(),
+            2,
+            "non-indexed overlay element appended, base kept"
+        );
+        let colls: Vec<&str> = merged
+            .elements
+            .iter()
+            .map(|e| e.attributes["coll"].as_str())
+            .collect();
+        assert!(colls.contains(&"1") && colls.contains(&"2"));
+    }
+
+    #[test]
+    fn box63_merge_unmatched_overlay_index_is_appended() {
+        let base = section(&[], vec![elem("monster", &[("index", "0")])]);
+        let overlay = section(&[], vec![elem("monster", &[("index", "5")])]);
+        let merged = MmlSection::merge(base, overlay);
+        assert_eq!(merged.elements.len(), 2);
+        assert!(merged.find_element("monster", "0").is_some());
+        assert!(merged.find_element("monster", "5").is_some());
+    }
+
+    // ─── box 6.4: MmlDocument::layer() — only-base / only-overlay / both ──────
+
+    #[test]
+    fn box64_layer_section_only_in_overlay_is_carried_through() {
+        let base = MmlDocument::from_bytes(b"<marathon><monsters/></marathon>").unwrap();
+        let overlay = MmlDocument::from_bytes(b"<marathon><weapons/></marathon>").unwrap();
+        let result = MmlDocument::layer(base, overlay);
+        assert!(
+            result.monsters.is_some(),
+            "base-only section carried through"
+        );
+        assert!(
+            result.weapons.is_some(),
+            "overlay-only section carried through"
+        );
+    }
+
+    #[test]
+    fn box64_layer_section_only_in_base_is_carried_through() {
+        let base =
+            MmlDocument::from_bytes(b"<marathon><monsters/><dynamic_limits/></marathon>").unwrap();
+        let overlay = MmlDocument::from_bytes(b"<marathon><weapons/></marathon>").unwrap();
+        let result = MmlDocument::layer(base, overlay);
+        assert!(result.monsters.is_some());
+        assert!(
+            result.dynamic_limits.is_some(),
+            "base-only section survives layering"
+        );
+        assert!(result.weapons.is_some());
+    }
+
+    #[test]
+    fn box64_layer_section_in_both_merges_at_element_level() {
+        // Backward-compatible behavior plus element-level merge: a section present
+        // in both documents is merged (not replaced), keeping base siblings.
+        let base = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"0\" vitality=\"10\"/><monster index=\"1\" vitality=\"20\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let overlay = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"1\" vitality=\"99\"/></monsters></marathon>",
+        )
+        .unwrap();
+        let monsters = MmlDocument::layer(base, overlay).monsters.unwrap();
+        assert_eq!(
+            monsters.elements.len(),
+            2,
+            "base sibling kept (not replaced)"
+        );
+        assert_eq!(
+            monsters.find_element("monster", "0").unwrap().attributes["vitality"],
+            "10"
+        );
+        assert_eq!(
+            monsters.find_element("monster", "1").unwrap().attributes["vitality"],
+            "99"
+        );
+    }
+
+    #[test]
+    fn box64_layer_empty_over_empty_is_empty() {
+        // Backward compatibility: layering two empty documents stays empty.
+        let base = MmlDocument::from_bytes(b"<marathon></marathon>").unwrap();
+        let overlay = MmlDocument::from_bytes(b"<marathon></marathon>").unwrap();
+        assert!(MmlDocument::layer(base, overlay).is_empty());
+    }
+
+    // ─── box 6.5: MmlOverrideSet::from_document — empty / subset / full ───────
+
+    #[test]
+    fn box65_from_document_empty_is_all_defaults() {
+        let doc = MmlDocument::default();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set, MmlOverrideSet::default());
+    }
+
+    #[test]
+    fn box65_from_document_subset_of_sections() {
+        // Only two implemented sections present; the rest stay default/empty.
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><items><item index=\"3\" maximum=\"9\"/></items><landscapes><clear coll=\"7\"/></landscapes></marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set.items.len(), 1);
+        assert_eq!(set.items[0].maximum, Some(9));
+        assert_eq!(set.landscapes.clears, vec![7]);
+        // untouched implemented sections at default
+        assert!(set.monsters.is_empty());
+        assert_eq!(set.dynamic_limits, DynamicLimitsOverride::default());
+        assert_eq!(set.scenario, ScenarioIdOverride::default());
+        assert!(set.stub_sections.is_empty());
+    }
+
+    #[test]
+    fn box65_from_document_full_many_sections() {
+        // Every implemented section populated plus two stub sections, all in one
+        // document — the "full document" scenario.
+        let doc = MmlDocument::from_bytes(
+            b"<marathon>\
+                <monsters><monster index=\"0\" vitality=\"500\"/></monsters>\
+                <weapons><order index=\"0\" weapon=\"3\"/></weapons>\
+                <items><item index=\"1\" maximum=\"4\"/></items>\
+                <dynamic_limits><monsters>2048</monsters></dynamic_limits>\
+                <landscapes><landscape coll=\"27\"/></landscapes>\
+                <texture_loading landscapes=\"true\"><texture_env index=\"0\" which=\"1\" coll=\"5\"/></texture_loading>\
+                <stringset index=\"128\"><string index=\"0\">Hi</string></stringset>\
+                <scenario name=\"Infinity\" version=\"2\" id=\"INF\"/>\
+                <platforms><platform index=\"0\"/></platforms>\
+                <sounds/>\
+              </marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set.monsters.len(), 1);
+        assert_eq!(set.monsters[0].vitality, Some(500));
+        assert_eq!(set.weapons.order.len(), 1);
+        assert_eq!(set.weapons.order[0].weapon, Some(3));
+        assert_eq!(set.items.len(), 1);
+        assert_eq!(set.dynamic_limits.monsters, Some(2048));
+        assert_eq!(set.landscapes.landscapes.len(), 1);
+        assert_eq!(set.texture_loading.landscapes, Some(true));
+        assert_eq!(set.texture_loading.texture_envs.len(), 1);
+        assert_eq!(set.stringset.entries, vec![((128, 0), "Hi".to_string())]);
+        assert_eq!(set.scenario.name.as_deref(), Some("Infinity"));
+        assert_eq!(set.scenario.version, Some(2));
+        // both stub sections recorded
+        assert!(set.stub_sections.iter().any(|s| s == "platforms"));
+        assert!(set.stub_sections.iter().any(|s| s == "sounds"));
     }
 }

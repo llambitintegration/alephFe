@@ -837,4 +837,235 @@ mod tests {
         assert!((records[0].maximum_forward_velocity - 1.0).abs() < 0.001);
         assert!((records[1].maximum_forward_velocity - 2.0).abs() < 0.001);
     }
+
+    // ─── box 4.6: override application to physics definitions ────────────────
+
+    use crate::mml_interpret::{
+        EffectOverride, MmlOverrideSet, MonsterOverride, ProjectileOverride,
+    };
+
+    /// Parse one `MonsterDefinition` from the byte builder for override tests.
+    fn parse_monster(collection: i16, vitality: i16, flags: u32) -> MonsterDefinition {
+        let data = build_monster(collection, vitality, flags);
+        MonsterDefinition::read(&mut Cursor::new(&data[..])).unwrap()
+    }
+
+    #[test]
+    fn apply_override_monster_sets_some_fields_only() {
+        // box 4.1 + 4.6(a)/(d): a single override changes only its `Some`
+        // fields; `None` fields preserve the original definition values.
+        let mut m = parse_monster(5, 100, 0x0002);
+        let original_radius = m.radius; // 256 from build_monster
+        let original_collection = m.collection; // 5, no override field
+
+        let ovr = MonsterOverride {
+            index: 0,
+            vitality: Some(300),
+            speed: Some(12),
+            class: Some(16),
+            ..Default::default()
+        };
+        m.apply_override(&ovr);
+
+        assert_eq!(m.vitality, 300, "Some field applied");
+        assert_eq!(m.speed, 12, "Some field applied");
+        assert_eq!(m.monster_class, 16, "class -> monster_class");
+        assert_eq!(m.radius, original_radius, "None field preserved");
+        assert_eq!(
+            m.collection, original_collection,
+            "field with no override slot untouched"
+        );
+    }
+
+    #[test]
+    fn apply_override_projectile_and_effect() {
+        // box 4.3 / 4.4: projectile and effect apply_override map Some fields,
+        // leave None fields and the (unmapped) damage sub-struct intact.
+        let pdata = build_projectile(2, 0x0010);
+        let mut p = ProjectileDefinition::read(&mut Cursor::new(&pdata[..])).unwrap();
+        let original_damage_base = p.damage.base; // 10, never overridden
+        let original_speed = p.speed; // 128
+
+        p.apply_override(&ProjectileOverride {
+            index: 0,
+            radius: Some(200),
+            ..Default::default()
+        });
+        assert_eq!(p.radius, 200, "Some field applied");
+        assert_eq!(p.speed, original_speed, "None field preserved");
+        assert_eq!(
+            p.damage.base, original_damage_base,
+            "damage sub-struct untouched (no override field)"
+        );
+
+        let edata = build_effect(3, 7, 0x0001);
+        let mut e = EffectDefinition::read(&mut Cursor::new(&edata[..])).unwrap();
+        let original_delay_sound = e.delay_sound; // -1
+        e.apply_override(&EffectOverride {
+            index: 0,
+            collection: Some(9),
+            flags: Some(0x0004),
+            ..Default::default()
+        });
+        assert_eq!(e.collection, 9, "Some field applied");
+        assert_eq!(e.flags, 0x0004, "Some field applied");
+        assert_eq!(e.shape, 7, "None field preserved");
+        assert_eq!(e.delay_sound, original_delay_sound, "None field preserved");
+    }
+
+    /// Build a `PhysicsData` with two monsters, one projectile, one effect for
+    /// the `apply_overrides` tests.
+    fn physics_data_fixture() -> PhysicsData {
+        let mut monster_bytes = build_monster(0, 50, 0);
+        monster_bytes.extend_from_slice(&build_monster(1, 75, 0));
+        let wad_data = WadBuilder::new()
+            .version(4)
+            .add_entry(
+                0,
+                vec![
+                    TagData::new(WadTag::MonsterPhysics, monster_bytes),
+                    TagData::new(WadTag::ProjectilePhysics, build_projectile(2, 0)),
+                    TagData::new(WadTag::EffectsPhysics, build_effect(3, 7, 0)),
+                ],
+            )
+            .build();
+        let wad = WadFile::from_bytes(&wad_data).unwrap();
+        let entry = wad.entry(0).unwrap();
+        PhysicsData::from_entry(entry).unwrap()
+    }
+
+    #[test]
+    fn apply_overrides_single_monster_by_index() {
+        // box 4.5 / 4.6(a): one override applies to the definition at its index.
+        let mut pd = physics_data_fixture();
+        let overrides = MmlOverrideSet {
+            monsters: vec![MonsterOverride {
+                index: 1,
+                vitality: Some(999),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        pd.apply_overrides(&overrides);
+
+        let monsters = pd.monsters.as_ref().unwrap();
+        assert_eq!(monsters[0].vitality, 50, "index 0 untouched");
+        assert_eq!(monsters[1].vitality, 999, "index 1 overridden");
+    }
+
+    #[test]
+    fn apply_overrides_multiple_overlapping() {
+        // box 4.6(b): multiple overrides; each applies to its index, and a later
+        // override targeting an already-touched index applies on top.
+        let mut pd = physics_data_fixture();
+        let overrides = MmlOverrideSet {
+            monsters: vec![
+                MonsterOverride {
+                    index: 0,
+                    vitality: Some(111),
+                    speed: Some(7),
+                    ..Default::default()
+                },
+                MonsterOverride {
+                    index: 1,
+                    vitality: Some(222),
+                    ..Default::default()
+                },
+                MonsterOverride {
+                    index: 0,
+                    vitality: Some(333), // later override on index 0 wins
+                    ..Default::default()
+                },
+            ],
+            projectiles: vec![ProjectileOverride {
+                index: 0,
+                radius: Some(500),
+                ..Default::default()
+            }],
+            effects: vec![EffectOverride {
+                index: 0,
+                collection: Some(42),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        pd.apply_overrides(&overrides);
+
+        let monsters = pd.monsters.as_ref().unwrap();
+        assert_eq!(monsters[0].vitality, 333, "later override on index 0 wins");
+        assert_eq!(monsters[0].speed, 7, "earlier non-conflicting field kept");
+        assert_eq!(monsters[1].vitality, 222);
+        assert_eq!(pd.projectiles.as_ref().unwrap()[0].radius, 500);
+        assert_eq!(pd.effects.as_ref().unwrap()[0].collection, 42);
+    }
+
+    #[test]
+    fn apply_overrides_out_of_bounds_index_ignored() {
+        // box 4.6(c): an out-of-bounds index is silently skipped — no panic,
+        // no change to any existing definition.
+        let mut pd = physics_data_fixture();
+        let overrides = MmlOverrideSet {
+            monsters: vec![MonsterOverride {
+                index: 99, // only indices 0,1 exist
+                vitality: Some(1),
+                ..Default::default()
+            }],
+            projectiles: vec![ProjectileOverride {
+                index: 5, // only index 0 exists
+                radius: Some(1),
+                ..Default::default()
+            }],
+            effects: vec![EffectOverride {
+                index: 5, // only index 0 exists
+                collection: Some(1),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        pd.apply_overrides(&overrides); // must not panic
+
+        let monsters = pd.monsters.as_ref().unwrap();
+        assert_eq!(monsters[0].vitality, 50, "unchanged");
+        assert_eq!(monsters[1].vitality, 75, "unchanged");
+        assert_eq!(pd.projectiles.as_ref().unwrap()[0].radius, 64, "unchanged");
+        assert_eq!(pd.effects.as_ref().unwrap()[0].collection, 3, "unchanged");
+    }
+
+    #[test]
+    fn apply_overrides_empty_set_is_noop() {
+        // box 6.6: an empty override set leaves every definition exactly as
+        // parsed — applying `MmlOverrideSet::default()` must not change anything
+        // and must not panic.
+        let mut pd = physics_data_fixture();
+        let before_monsters: Vec<i16> = pd
+            .monsters
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|m| m.vitality)
+            .collect();
+        let before_proj_radius = pd.projectiles.as_ref().unwrap()[0].radius;
+        let before_effect_coll = pd.effects.as_ref().unwrap()[0].collection;
+
+        pd.apply_overrides(&MmlOverrideSet::default());
+
+        let after_monsters: Vec<i16> = pd
+            .monsters
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|m| m.vitality)
+            .collect();
+        assert_eq!(before_monsters, after_monsters, "monsters unchanged");
+        assert_eq!(
+            pd.projectiles.as_ref().unwrap()[0].radius,
+            before_proj_radius,
+            "projectile unchanged"
+        );
+        assert_eq!(
+            pd.effects.as_ref().unwrap()[0].collection,
+            before_effect_coll,
+            "effect unchanged"
+        );
+    }
 }
