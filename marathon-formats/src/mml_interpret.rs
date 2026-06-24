@@ -421,6 +421,182 @@ pub fn interpret_scenario(section: &MmlSection) -> ScenarioIdOverride {
     }
 }
 
+/// Overrides for one `<projectile index="N">` element. Each field's inner type
+/// matches the corresponding
+/// [`ProjectileDefinition`](crate::physics::ProjectileDefinition) field so an
+/// override can be applied directly; `None` means "leave the engine default in
+/// place".
+///
+/// DEVIATION: `ProjectileDefinition::damage` is a
+/// [`DamageDefinition`](crate::types::DamageDefinition) sub-struct, not a single
+/// scalar attribute, so it is **not** modeled here — only the scalar fields the
+/// spec lists are mapped. (AlephOne expresses projectile damage as a nested
+/// `<damage>` element, which is a richer cascade-merge concern handled
+/// elsewhere.) `media_projectile_promotion` exists on the definition but is not
+/// in the spec's attribute list, so it is also omitted.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ProjectileOverride {
+    pub index: usize,
+    pub collection: Option<i16>,
+    pub shape: Option<i16>,
+    pub detonation_effect: Option<i16>,
+    pub media_detonation_effect: Option<i16>,
+    pub contrail_effect: Option<i16>,
+    pub ticks_between_contrails: Option<i16>,
+    pub maximum_contrails: Option<i16>,
+    pub radius: Option<i16>,
+    pub area_of_effect: Option<i16>,
+    pub flags: Option<u32>,
+    pub speed: Option<i16>,
+    pub maximum_range: Option<i16>,
+    pub sound_pitch: Option<f32>,
+    pub flyby_sound: Option<i16>,
+    pub rebound_sound: Option<i16>,
+}
+
+/// Interpret a merged `<projectiles>` section into per-projectile overrides.
+/// Each `<projectile>` element's `index` attribute selects which projectile
+/// definition to override; elements without a parseable `index` are skipped with
+/// a warning. Each recognized attribute is parsed into the corresponding typed
+/// field; unrecognized attributes (and the non-scalar `damage`) are silently
+/// ignored, and a malformed value warns and leaves that field `None` without
+/// discarding the rest of the element.
+pub fn interpret_projectiles(section: &MmlSection) -> Vec<ProjectileOverride> {
+    let mut out = Vec::new();
+    for el in &section.elements {
+        if el.name != "projectile" {
+            continue;
+        }
+        let index = match el.attributes.get("index") {
+            Some(raw) => match parse_mml_u32(raw) {
+                Some(i) => i as usize,
+                None => continue, // parse_mml_u32 already warned
+            },
+            None => {
+                eprintln!(
+                    "[mml] warning: <projectile> element without an index attribute, skipping"
+                );
+                continue;
+            }
+        };
+        out.push(ProjectileOverride {
+            index,
+            collection: el
+                .attributes
+                .get("collection")
+                .and_then(|s| parse_mml_i16(s)),
+            shape: el.attributes.get("shape").and_then(|s| parse_mml_i16(s)),
+            detonation_effect: el
+                .attributes
+                .get("detonation_effect")
+                .and_then(|s| parse_mml_i16(s)),
+            media_detonation_effect: el
+                .attributes
+                .get("media_detonation_effect")
+                .and_then(|s| parse_mml_i16(s)),
+            contrail_effect: el
+                .attributes
+                .get("contrail_effect")
+                .and_then(|s| parse_mml_i16(s)),
+            ticks_between_contrails: el
+                .attributes
+                .get("ticks_between_contrails")
+                .and_then(|s| parse_mml_i16(s)),
+            maximum_contrails: el
+                .attributes
+                .get("maximum_contrails")
+                .and_then(|s| parse_mml_i16(s)),
+            radius: el.attributes.get("radius").and_then(|s| parse_mml_i16(s)),
+            area_of_effect: el
+                .attributes
+                .get("area_of_effect")
+                .and_then(|s| parse_mml_i16(s)),
+            flags: el.attributes.get("flags").and_then(|s| parse_mml_u32(s)),
+            speed: el.attributes.get("speed").and_then(|s| parse_mml_i16(s)),
+            maximum_range: el
+                .attributes
+                .get("maximum_range")
+                .and_then(|s| parse_mml_i16(s)),
+            sound_pitch: el
+                .attributes
+                .get("sound_pitch")
+                .and_then(|s| parse_mml_f32(s)),
+            flyby_sound: el
+                .attributes
+                .get("flyby_sound")
+                .and_then(|s| parse_mml_i16(s)),
+            rebound_sound: el
+                .attributes
+                .get("rebound_sound")
+                .and_then(|s| parse_mml_i16(s)),
+        });
+    }
+    out
+}
+
+/// Overrides for one `<effect index="N">` element. Each field's inner type
+/// matches the corresponding
+/// [`EffectDefinition`](crate::physics::EffectDefinition) field so an override
+/// can be applied directly; `None` means "leave the engine default in place".
+/// `flags` is a `u16` bitfield on the definition.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EffectOverride {
+    pub index: usize,
+    pub collection: Option<i16>,
+    pub shape: Option<i16>,
+    pub sound_pitch: Option<f32>,
+    pub flags: Option<u16>,
+    pub delay: Option<i16>,
+    pub delay_sound: Option<i16>,
+}
+
+/// Interpret a merged `<effects>` section into per-effect overrides. Each
+/// `<effect>` element's `index` attribute selects which effect definition to
+/// override; elements without a parseable `index` are skipped with a warning.
+/// Each recognized attribute is parsed into the corresponding typed field;
+/// unrecognized attributes are silently ignored, and a malformed value warns and
+/// leaves that field `None` without discarding the rest of the element.
+pub fn interpret_effects(section: &MmlSection) -> Vec<EffectOverride> {
+    let mut out = Vec::new();
+    for el in &section.elements {
+        if el.name != "effect" {
+            continue;
+        }
+        let index = match el.attributes.get("index") {
+            Some(raw) => match parse_mml_u32(raw) {
+                Some(i) => i as usize,
+                None => continue, // parse_mml_u32 already warned
+            },
+            None => {
+                eprintln!("[mml] warning: <effect> element without an index attribute, skipping");
+                continue;
+            }
+        };
+        out.push(EffectOverride {
+            index,
+            collection: el
+                .attributes
+                .get("collection")
+                .and_then(|s| parse_mml_i16(s)),
+            shape: el.attributes.get("shape").and_then(|s| parse_mml_i16(s)),
+            sound_pitch: el
+                .attributes
+                .get("sound_pitch")
+                .and_then(|s| parse_mml_f32(s)),
+            flags: el
+                .attributes
+                .get("flags")
+                .and_then(|s| parse_mml_u32(s).and_then(|v| u16::try_from(v).ok())),
+            delay: el.attributes.get("delay").and_then(|s| parse_mml_i16(s)),
+            delay_sound: el
+                .attributes
+                .get("delay_sound")
+                .and_then(|s| parse_mml_i16(s)),
+        });
+    }
+    out
+}
+
 /// A `<stringset index="R">` override: each entry maps a
 /// `(resource_id, string_index)` pair to its replacement text. One
 /// [`StringSetOverride`] corresponds to a single `<stringset>` section (one
@@ -810,5 +986,173 @@ mod tests {
         .unwrap();
         let out = interpret_stringset(&doc.stringset.unwrap());
         assert!(out.entries.is_empty(), "no resource id -> no entries");
+    }
+
+    // ── test helpers: build a section of one element with the given attrs ──
+
+    fn section_with(elem_name: &str, attrs: &[(&str, &str)]) -> MmlSection {
+        let mut attributes = std::collections::HashMap::new();
+        for (k, v) in attrs {
+            attributes.insert((*k).to_string(), (*v).to_string());
+        }
+        MmlSection {
+            attributes: std::collections::HashMap::new(),
+            elements: vec![crate::mml::MmlElement {
+                name: elem_name.to_string(),
+                attributes,
+                children: Vec::new(),
+                text: None,
+            }],
+        }
+    }
+
+    // ── box 1.5: projectiles interpreter ──
+
+    #[test]
+    fn projectile_override_subset_of_attributes() {
+        let section = section_with(
+            "projectile",
+            &[("index", "5"), ("radius", "128"), ("speed", "20")],
+        );
+        let projectiles = interpret_projectiles(&section);
+        assert_eq!(projectiles.len(), 1);
+        assert_eq!(
+            projectiles[0],
+            ProjectileOverride {
+                index: 5,
+                radius: Some(128),
+                speed: Some(20),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn projectile_override_without_index_is_skipped() {
+        let section = section_with("projectile", &[("radius", "100")]);
+        let projectiles = interpret_projectiles(&section);
+        assert!(projectiles.is_empty(), "index-less <projectile> is skipped");
+    }
+
+    #[test]
+    fn projectile_override_malformed_value_stays_none() {
+        let section = section_with("projectile", &[("index", "5"), ("radius", "not_a_number")]);
+        let projectiles = interpret_projectiles(&section);
+        assert_eq!(projectiles.len(), 1);
+        assert_eq!(projectiles[0].index, 5);
+        assert_eq!(
+            projectiles[0].radius, None,
+            "malformed value -> None, element still produced"
+        );
+    }
+
+    #[test]
+    fn projectile_override_full_attributes_and_ignores_unknown() {
+        let section = section_with(
+            "projectile",
+            &[
+                ("index", "3"),
+                ("collection", "7"),
+                ("shape", "2"),
+                ("detonation_effect", "10"),
+                ("media_detonation_effect", "11"),
+                ("contrail_effect", "12"),
+                ("ticks_between_contrails", "4"),
+                ("maximum_contrails", "8"),
+                ("radius", "256"),
+                ("area_of_effect", "512"),
+                ("flags", "0x1F"),
+                ("speed", "30"),
+                ("maximum_range", "1024"),
+                ("sound_pitch", "1.25"),
+                ("flyby_sound", "5"),
+                ("rebound_sound", "6"),
+                ("bogus_attr", "99"),
+            ],
+        );
+        let projectiles = interpret_projectiles(&section);
+        assert_eq!(projectiles.len(), 1);
+        let p = &projectiles[0];
+        assert_eq!(p.index, 3);
+        assert_eq!(p.collection, Some(7));
+        assert_eq!(p.shape, Some(2));
+        assert_eq!(p.detonation_effect, Some(10));
+        assert_eq!(p.media_detonation_effect, Some(11));
+        assert_eq!(p.contrail_effect, Some(12));
+        assert_eq!(p.ticks_between_contrails, Some(4));
+        assert_eq!(p.maximum_contrails, Some(8));
+        assert_eq!(p.radius, Some(256));
+        assert_eq!(p.area_of_effect, Some(512));
+        assert_eq!(p.flags, Some(31)); // 0x1F
+        assert_eq!(p.speed, Some(30));
+        assert_eq!(p.maximum_range, Some(1024));
+        assert_eq!(p.sound_pitch, Some(1.25));
+        assert_eq!(p.flyby_sound, Some(5));
+        assert_eq!(p.rebound_sound, Some(6));
+        // `bogus_attr` and the non-scalar `damage` are not modeled here.
+    }
+
+    // ── box 1.6: effects interpreter ──
+
+    #[test]
+    fn effect_override_subset_of_attributes() {
+        let section = section_with("effect", &[("index", "4"), ("delay", "15")]);
+        let effects = interpret_effects(&section);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(
+            effects[0],
+            EffectOverride {
+                index: 4,
+                delay: Some(15),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn effect_override_without_index_is_skipped() {
+        let section = section_with("effect", &[("delay", "10")]);
+        let effects = interpret_effects(&section);
+        assert!(effects.is_empty(), "index-less <effect> is skipped");
+    }
+
+    #[test]
+    fn effect_override_malformed_value_stays_none() {
+        let section = section_with("effect", &[("index", "4"), ("delay", "oops")]);
+        let effects = interpret_effects(&section);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(effects[0].index, 4);
+        assert_eq!(
+            effects[0].delay, None,
+            "malformed value -> None, element still produced"
+        );
+    }
+
+    #[test]
+    fn effect_override_full_attributes_and_ignores_unknown() {
+        let section = section_with(
+            "effect",
+            &[
+                ("index", "2"),
+                ("collection", "9"),
+                ("shape", "1"),
+                ("sound_pitch", "0.75"),
+                ("flags", "0x3"),
+                ("delay", "20"),
+                ("delay_sound", "7"),
+                ("bogus_attr", "99"),
+            ],
+        );
+        let effects = interpret_effects(&section);
+        assert_eq!(effects.len(), 1);
+        let e = &effects[0];
+        assert_eq!(e.index, 2);
+        assert_eq!(e.collection, Some(9));
+        assert_eq!(e.shape, Some(1));
+        assert_eq!(e.sound_pitch, Some(0.75));
+        assert_eq!(e.flags, Some(3)); // 0x3 — u16 bitfield
+        assert_eq!(e.delay, Some(20));
+        assert_eq!(e.delay_sound, Some(7));
+        // `bogus_attr` is unrecognized and silently ignored.
     }
 }

@@ -4,8 +4,8 @@
 - [x] 1.2 Define `MonsterOverride` struct with `index: usize` and `Option<T>` fields for all `MonsterDefinition` fields (vitality, immunities, weaknesses, flags, class, friends, enemies, sound_pitch, speed, radius, height, visual_range, etc.) plus `must_be_exterminated: Option<bool>`
 - [x] 1.3 Implement `interpret_monsters(section: &MmlSection) -> Vec<MonsterOverride>` that iterates `<monster>` elements, parses `index` attribute, and maps each recognized attribute to the corresponding `MonsterOverride` field
 - [ ] 1.4 Define `ShellCasingOverride`, `WeaponOrderEntry`, and implement `interpret_weapons(section: &MmlSection)` producing shell casing overrides and weapon order data
-- [ ] 1.5 Define `ProjectileOverride` struct and implement `interpret_projectiles(section: &MmlSection) -> Vec<ProjectileOverride>` for all `ProjectileDefinition` fields
-- [ ] 1.6 Define `EffectOverride` struct and implement `interpret_effects(section: &MmlSection) -> Vec<EffectOverride>` for all `EffectDefinition` fields
+- [x] 1.5 Define `ProjectileOverride` struct and implement `interpret_projectiles(section: &MmlSection) -> Vec<ProjectileOverride>` for all `ProjectileDefinition` fields
+- [x] 1.6 Define `EffectOverride` struct and implement `interpret_effects(section: &MmlSection) -> Vec<EffectOverride>` for all `EffectDefinition` fields
 - [ ] 1.7 Define `PlayerOverride` struct and implement `interpret_player(section: &MmlSection) -> PlayerOverride` for player attributes (energy, oxygen, light, visual arcs, swim, powerup durations, starting items)
 - [x] 1.8 Define `DynamicLimitsOverride` struct and implement `interpret_dynamic_limits(section: &MmlSection) -> DynamicLimitsOverride` parsing child element text content as integers
 - [x] 1.9 Define `ItemOverride` struct and implement `interpret_items(section: &MmlSection) -> Vec<ItemOverride>` for item type, names, maximum, invalid flag
