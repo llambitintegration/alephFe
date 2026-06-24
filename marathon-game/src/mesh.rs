@@ -85,6 +85,10 @@ pub struct LevelMesh {
     /// which are emitted FIRST. Indices in `0..opaque_index_count` are opaque;
     /// indices in `opaque_index_count..indices.len()` are alpha-blended media
     /// surfaces. Lets the renderer draw opaque-then-media in two sub-passes.
+    // Produced here (boxes 1.1-1.5) and asserted by tests; the native
+    // marathon-game renderer that reads it lands in a later box, so the
+    // non-test build sees it as write-only until then.
+    #[allow(dead_code)]
     pub opaque_index_count: u32,
 }
 
