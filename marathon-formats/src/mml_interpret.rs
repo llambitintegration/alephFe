@@ -637,6 +637,115 @@ pub fn interpret_stringset(section: &MmlSection) -> StringSetOverride {
     StringSetOverride { entries }
 }
 
+/// Overrides for one `<shell_casings index="N">` element under `<weapons>`.
+///
+/// AlephOne has no standalone shell-casing *definition* struct in this crate's
+/// [`physics`](crate::physics) module (shell-casing state is engine-internal),
+/// so every field is modeled as `Option<i16>` to match the integer values the
+/// spec scenario uses. `collection` carries the `coll` attribute and `sequence`
+/// carries `seq` (renamed for clarity); the remaining fields keep their MML
+/// names. `x0`/`y0` are spawn offsets and `vx0`/`vy0`/`dvx`/`dvy` are velocity
+/// and velocity-delta components (AlephOne fixed-point integers). `None` means
+/// "leave the engine default in place".
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ShellCasingOverride {
+    pub index: usize,
+    pub collection: Option<i16>,
+    pub sequence: Option<i16>,
+    pub x0: Option<i16>,
+    pub y0: Option<i16>,
+    pub vx0: Option<i16>,
+    pub vy0: Option<i16>,
+    pub dvx: Option<i16>,
+    pub dvy: Option<i16>,
+}
+
+/// One `<order index="S" weapon="W"/>` entry under `<weapons>`: it places weapon
+/// `weapon` at cycling slot `index`. The spec scenario
+/// (`<order index="0" weapon="3"/>`) maps a slot index to a weapon index, so
+/// both values are captured. An `<order>` element without a parseable `index`
+/// is skipped; a missing/malformed `weapon` leaves `weapon = None`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WeaponOrderEntry {
+    pub index: usize,
+    pub weapon: Option<usize>,
+}
+
+/// Result of interpreting a `<weapons>` section: the per-`<shell_casings>`
+/// overrides plus the `<order>` (weapon cycling) entries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct WeaponOverrides {
+    pub shell_casings: Vec<ShellCasingOverride>,
+    pub order: Vec<WeaponOrderEntry>,
+}
+
+/// Interpret a merged `<weapons>` section into shell-casing overrides and the
+/// weapon cycling order.
+///
+/// `<shell_casings>` elements are matched by `index` and parsed into typed
+/// [`ShellCasingOverride`] structs; elements without a parseable `index` are
+/// skipped with a warning, malformed attribute values warn and leave that field
+/// `None`, and unrecognized attributes are ignored. `<order>` elements are
+/// matched by `index` (the cycling slot) and produce [`WeaponOrderEntry`] values
+/// carrying the `weapon` index; an `<order>` without a parseable `index` is
+/// skipped. Any other child element is ignored.
+pub fn interpret_weapons(section: &MmlSection) -> WeaponOverrides {
+    let mut out = WeaponOverrides::default();
+    for el in &section.elements {
+        match el.name.as_str() {
+            "shell_casings" => {
+                let index = match el.attributes.get("index") {
+                    Some(raw) => match parse_mml_u32(raw) {
+                        Some(i) => i as usize,
+                        None => continue, // parse_mml_u32 already warned
+                    },
+                    None => {
+                        eprintln!(
+                            "[mml] warning: <shell_casings> element without an index attribute, skipping"
+                        );
+                        continue;
+                    }
+                };
+                out.shell_casings.push(ShellCasingOverride {
+                    index,
+                    collection: el.attributes.get("coll").and_then(|s| parse_mml_i16(s)),
+                    sequence: el.attributes.get("seq").and_then(|s| parse_mml_i16(s)),
+                    x0: el.attributes.get("x0").and_then(|s| parse_mml_i16(s)),
+                    y0: el.attributes.get("y0").and_then(|s| parse_mml_i16(s)),
+                    vx0: el.attributes.get("vx0").and_then(|s| parse_mml_i16(s)),
+                    vy0: el.attributes.get("vy0").and_then(|s| parse_mml_i16(s)),
+                    dvx: el.attributes.get("dvx").and_then(|s| parse_mml_i16(s)),
+                    dvy: el.attributes.get("dvy").and_then(|s| parse_mml_i16(s)),
+                });
+            }
+            "order" => {
+                let index = match el.attributes.get("index") {
+                    Some(raw) => match parse_mml_u32(raw) {
+                        Some(i) => i as usize,
+                        None => continue, // parse_mml_u32 already warned
+                    },
+                    None => {
+                        eprintln!(
+                            "[mml] warning: <order> element without an index attribute, skipping"
+                        );
+                        continue;
+                    }
+                };
+                out.order.push(WeaponOrderEntry {
+                    index,
+                    weapon: el
+                        .attributes
+                        .get("weapon")
+                        .and_then(|s| parse_mml_u32(s))
+                        .map(|w| w as usize),
+                });
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1154,5 +1263,139 @@ mod tests {
         assert_eq!(e.delay, Some(20));
         assert_eq!(e.delay_sound, Some(7));
         // `bogus_attr` is unrecognized and silently ignored.
+    }
+
+    // ── box 1.4: weapons interpreter (shell_casings + order) ──
+
+    #[test]
+    fn shell_casing_override_scenario() {
+        // Spec scenario: <weapons><shell_casings index="0" coll="14" seq="2"/></weapons>
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><shell_casings index=\"0\" coll=\"14\" seq=\"2\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert_eq!(out.shell_casings.len(), 1);
+        assert_eq!(
+            out.shell_casings[0],
+            ShellCasingOverride {
+                index: 0,
+                collection: Some(14),
+                sequence: Some(2),
+                ..Default::default()
+            }
+        );
+        // position/velocity fields are None
+        let sc = &out.shell_casings[0];
+        assert_eq!(sc.x0, None);
+        assert_eq!(sc.y0, None);
+        assert_eq!(sc.vx0, None);
+        assert_eq!(sc.vy0, None);
+        assert_eq!(sc.dvx, None);
+        assert_eq!(sc.dvy, None);
+        assert!(out.order.is_empty());
+    }
+
+    #[test]
+    fn shell_casing_without_index_is_skipped() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><shell_casings coll=\"14\" seq=\"2\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert!(
+            out.shell_casings.is_empty(),
+            "index-less <shell_casings> is skipped"
+        );
+    }
+
+    #[test]
+    fn shell_casing_malformed_value_stays_none() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><shell_casings index=\"0\" coll=\"not_a_number\" seq=\"2\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert_eq!(out.shell_casings.len(), 1);
+        assert_eq!(out.shell_casings[0].index, 0);
+        assert_eq!(
+            out.shell_casings[0].collection, None,
+            "malformed value -> None, element still produced"
+        );
+        assert_eq!(out.shell_casings[0].sequence, Some(2));
+    }
+
+    #[test]
+    fn shell_casing_full_attributes_and_ignores_unknown() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><shell_casings index=\"1\" coll=\"14\" seq=\"2\" x0=\"10\" y0=\"20\" vx0=\"-5\" vy0=\"6\" dvx=\"1\" dvy=\"-1\" bogus_attr=\"99\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert_eq!(out.shell_casings.len(), 1);
+        assert_eq!(
+            out.shell_casings[0],
+            ShellCasingOverride {
+                index: 1,
+                collection: Some(14),
+                sequence: Some(2),
+                x0: Some(10),
+                y0: Some(20),
+                vx0: Some(-5),
+                vy0: Some(6),
+                dvx: Some(1),
+                dvy: Some(-1),
+            }
+        );
+        // `bogus_attr` is unrecognized and silently ignored.
+    }
+
+    #[test]
+    fn weapon_order_definition() {
+        // Spec scenario: <order index="0" weapon="3"/><order index="1" weapon="0"/>
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><order index=\"0\" weapon=\"3\"/><order index=\"1\" weapon=\"0\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert!(out.shell_casings.is_empty());
+        assert_eq!(
+            out.order,
+            vec![
+                WeaponOrderEntry {
+                    index: 0,
+                    weapon: Some(3)
+                },
+                WeaponOrderEntry {
+                    index: 1,
+                    weapon: Some(0)
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn weapon_order_without_index_is_skipped() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><order weapon=\"3\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert!(out.order.is_empty(), "index-less <order> is skipped");
+    }
+
+    #[test]
+    fn weapons_section_mixes_shell_casings_and_order() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><weapons><shell_casings index=\"0\" coll=\"14\"/><order index=\"0\" weapon=\"3\"/></weapons></marathon>",
+        )
+        .unwrap();
+        let out = interpret_weapons(&doc.weapons.unwrap());
+        assert_eq!(out.shell_casings.len(), 1);
+        assert_eq!(out.shell_casings[0].index, 0);
+        assert_eq!(out.shell_casings[0].collection, Some(14));
+        assert_eq!(out.order.len(), 1);
+        assert_eq!(out.order[0].index, 0);
+        assert_eq!(out.order[0].weapon, Some(3));
     }
 }
