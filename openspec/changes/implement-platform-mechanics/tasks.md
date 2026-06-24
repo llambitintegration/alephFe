@@ -45,10 +45,10 @@
 
 ## 8. Crush Damage Integration
 
-- [ ] 8.1 In `run_world_mechanics()`, after ticking platforms, for each moving platform query all entities (Player, Monster) with `PolygonIndex` matching the platform polygon. For each such entity, call `check_platform_crush()` with the entity's `Position.0.z` and `EntityHeight.0`.
-- [ ] 8.2 If `PlatformCrushResult::Crush`, emit `SimEvent::EntityDamaged` with the entity handle, damage amount, and a platform-crush damage type.
-- [ ] 8.3 If `PlatformCrushResult::Reverse`, toggle the platform state: Extending becomes Returning, Returning becomes Extending.
-- [ ] 8.4 Add unit tests for crush: crushing platform damages entity (event emitted), non-crushing platform reverses on obstruction.
+- [x] 8.1 In `run_world_mechanics()`, after ticking platforms, for each moving platform query all entities (Player, Monster) with `PolygonIndex` matching the platform polygon. For each such entity, call `check_platform_crush()` with the entity's `Position.0.z` and `EntityHeight.0`.
+- [x] 8.2 If `PlatformCrushResult::Crush`, emit `SimEvent::EntityDamaged` with the entity handle, damage amount, and a platform-crush damage type.
+- [x] 8.3 If `PlatformCrushResult::Reverse`, toggle the platform state: Extending becomes Returning, Returning becomes Extending.
+- [x] 8.4 Add unit tests for crush: crushing platform damages entity (event emitted), non-crushing platform reverses on obstruction.
 
 ## 9. Linked Platform and Light Event Dispatch
 

@@ -121,8 +121,10 @@ impl SimWorld {
         self.run_light_updates();
         // 2. Update media (depends on light intensities)
         self.update_media();
-        // 3. Update platforms (before player physics so collision uses new heights)
-        self.update_platforms();
+        // 3. Platforms are no longer a standalone pass: ticking, height-sync,
+        //    activation, and crush all live in `run_world_mechanics()` (step 10,
+        //    boxes 5.x–8.x). The former `update_platforms()` was fully
+        //    consolidated there and removed.
         // 3b. Action key processing (doors and control panels)
         self.process_action_key();
         // 4. Player physics
@@ -142,9 +144,10 @@ impl SimWorld {
         self.update_items();
 
         // 10. World mechanics: tick platforms, sync their heights into the
-        //     authoritative MapGeometry, and record dirty-polygon flags for the
-        //     renderer (boxes 5.1–5.4). Runs after player physics, before the
-        //     tick-counter increment.
+        //     authoritative MapGeometry, record dirty-polygon flags for the
+        //     renderer (boxes 5.1–5.4), run player/monster/projectile activation
+        //     (boxes 6.x–7.x), and resolve platform crush (boxes 8.1–8.3). Runs
+        //     after player physics, before the tick-counter increment.
         self.run_world_mechanics();
 
         // Advance tick counter
@@ -221,6 +224,128 @@ impl SimWorld {
         // (which gates on `AtRest`) returns false for it — entry triggers never
         // reverse a just-activated platform. See `run_platform_entity_triggers`.
         self.run_platform_entity_triggers();
+
+        // Boxes 8.1–8.3: platform-crush resolution. Runs last, after platforms
+        // have ticked and all activation passes have settled their states, so the
+        // crush check sees this tick's final platform geometry. This is the SINGLE
+        // owner of crush handling — the old copy in `update_platforms()` was
+        // removed when this pass landed, so crush runs exactly once per
+        // (platform, entity) per tick.
+        self.run_platform_crush();
+    }
+
+    /// Crush resolution for moving platforms (boxes 8.1–8.3).
+    ///
+    /// For each MOVING platform (`Extending`/`Returning` — a resting platform
+    /// cannot crush), gathers every `Player`/`Monster` entity standing on the
+    /// platform's polygon and calls
+    /// [`check_platform_crush`](crate::world_mechanics::platforms::check_platform_crush)
+    /// with the entity's `Position.0.z` and `EntityHeight.0`. Then:
+    ///   * box 8.2 — `PlatformCrushResult::Crush { damage }`: apply the damage to
+    ///     the entity and emit `SimEvent::EntityDamaged { entity, amount: damage,
+    ///     damage_type: PLATFORM_CRUSH_DAMAGE_TYPE }`.
+    ///   * box 8.3 — `PlatformCrushResult::Reverse`: toggle the obstructed
+    ///     platform's direction (`Extending` ↔ `Returning`).
+    ///
+    /// Borrow-checker discipline (mirrors the other platform passes): read-only
+    /// gather of entity (handle, z, height, polygon) data first, decide all
+    /// crush/reverse outcomes against each moving platform's geometry, then take
+    /// the mutable borrows to apply damage, push events, and toggle states.
+    fn run_platform_crush(&mut self) {
+        use crate::world_mechanics::platforms::{
+            check_platform_crush, PlatformCrushResult, PLATFORM_CRUSH_DAMAGE_TYPE,
+        };
+        use crate::PlatformState;
+
+        // Gather phase: every Player/Monster entity (handle, z, height, polygon).
+        let mut entities: Vec<(bevy_ecs::entity::Entity, f32, f32, usize)> = Vec::new();
+        {
+            let mut q = self.world.query_filtered::<(
+                bevy_ecs::entity::Entity,
+                &crate::Position,
+                &crate::EntityHeight,
+                &crate::PolygonIndex,
+            ), bevy_ecs::prelude::With<crate::Player>>();
+            for (e, pos, h, poly) in q.iter(&self.world) {
+                entities.push((e, pos.0.z, h.0, poly.0));
+            }
+        }
+        {
+            let mut q = self.world.query_filtered::<(
+                bevy_ecs::entity::Entity,
+                &crate::Position,
+                &crate::EntityHeight,
+                &crate::PolygonIndex,
+            ), bevy_ecs::prelude::With<crate::Monster>>();
+            for (e, pos, h, poly) in q.iter(&self.world) {
+                entities.push((e, pos.0.z, h.0, poly.0));
+            }
+        }
+        if entities.is_empty() {
+            return;
+        }
+
+        // Decide phase: for each MOVING platform (Extending/Returning — a resting
+        // platform cannot crush, box 8.1), resolve the crush against every entity
+        // on its polygon using that platform's current geometry. Collect damage to
+        // apply (entity, amount) and the set of polygons whose platform reverses.
+        let mut damage_to_apply: Vec<(bevy_ecs::entity::Entity, i16)> = Vec::new();
+        let mut reverse_polys: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        {
+            let mut q = self.world.query::<&crate::Platform>();
+            for platform in q.iter(&self.world) {
+                if !matches!(
+                    platform.state,
+                    PlatformState::Extending | PlatformState::Returning
+                ) {
+                    continue;
+                }
+                for &(entity, ez, eh, epoly) in &entities {
+                    if epoly != platform.polygon_index {
+                        continue;
+                    }
+                    match check_platform_crush(platform, ez, eh) {
+                        PlatformCrushResult::Crush { damage } => {
+                            damage_to_apply.push((entity, damage));
+                        }
+                        PlatformCrushResult::Reverse => {
+                            reverse_polys.insert(platform.polygon_index);
+                        }
+                        PlatformCrushResult::None => {}
+                    }
+                }
+            }
+        }
+
+        // Apply phase (box 8.2): damage each crushed entity and emit an event.
+        for (entity, damage) in damage_to_apply {
+            self.apply_damage_to_entity(entity, damage);
+            self.world.resource_mut::<crate::world::SimEvents>().push(
+                crate::world::SimEvent::EntityDamaged {
+                    entity,
+                    amount: damage,
+                    damage_type: PLATFORM_CRUSH_DAMAGE_TYPE,
+                },
+            );
+        }
+
+        // Apply phase (box 8.3): reverse obstructed non-crushing platforms.
+        if !reverse_polys.is_empty() {
+            let mut q = self.world.query::<&mut crate::Platform>();
+            for mut platform in q.iter_mut(&mut self.world) {
+                if reverse_polys.contains(&platform.polygon_index) {
+                    match platform.state {
+                        PlatformState::Extending => {
+                            platform.state = PlatformState::Returning;
+                        }
+                        PlatformState::Returning => {
+                            platform.state = PlatformState::Extending;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
     }
 
     /// Monster-entry (box 7.1) and projectile-impact (box 7.2) platform
@@ -687,80 +812,6 @@ impl SimWorld {
                         terminal_index: idx,
                     },
                 );
-            }
-        }
-    }
-
-    fn update_platforms(&mut self) {
-        // NOTE: platform *ticking* and MapGeometry height sync live in
-        // `run_world_mechanics()` (boxes 5.1–5.4); player-entry and action-key
-        // activation also moved there (boxes 6.1–6.2). Both used to live here and
-        // were removed when those passes landed — duplicating them would activate
-        // / advance a platform twice per tick. This pass now keeps ONLY the
-        // player-crush responsibility (box 8 will fold this into the unified
-        // platform pass alongside monster/projectile crush handling).
-
-        // Crush check
-        let player_data: Option<(f32, f32, usize)> = {
-            let mut q = self.world.query_filtered::<(
-                &crate::Position,
-                &crate::EntityHeight,
-                &crate::PolygonIndex,
-            ), bevy_ecs::prelude::With<crate::Player>>();
-            q.iter(&self.world)
-                .next()
-                .map(|(pos, h, poly)| (pos.0.z, h.0, poly.0))
-        };
-
-        if let Some((player_z, player_height, player_poly)) = player_data {
-            let mut crush_damage: Option<i16> = None;
-            let mut reverse_polys: Vec<usize> = Vec::new();
-
-            {
-                let mut query = self.world.query::<&crate::Platform>();
-                for platform in query.iter(&self.world) {
-                    if platform.polygon_index == player_poly {
-                        use crate::world_mechanics::platforms::{
-                            check_platform_crush, PlatformCrushResult,
-                        };
-                        match check_platform_crush(platform, player_z, player_height) {
-                            PlatformCrushResult::Crush { damage } => {
-                                crush_damage = Some(damage);
-                            }
-                            PlatformCrushResult::Reverse => {
-                                reverse_polys.push(platform.polygon_index);
-                            }
-                            PlatformCrushResult::None => {}
-                        }
-                    }
-                }
-            }
-
-            if let Some(damage) = crush_damage {
-                let mut q = self.world.query_filtered::<(
-                    &mut crate::Health,
-                    &mut crate::Shield,
-                ), bevy_ecs::prelude::With<crate::Player>>();
-                if let Some((mut health, mut shield)) = q.iter_mut(&mut self.world).next() {
-                    let (new_h, new_s, _) =
-                        crate::combat::damage::apply_damage(damage, health.0, shield.0);
-                    health.0 = new_h;
-                    shield.0 = new_s;
-                }
-            }
-
-            if !reverse_polys.is_empty() {
-                let mut query = self.world.query::<&mut crate::Platform>();
-                for mut platform in query.iter_mut(&mut self.world) {
-                    if reverse_polys.contains(&platform.polygon_index) {
-                        use crate::PlatformState;
-                        if platform.state == PlatformState::Extending {
-                            platform.state = PlatformState::Returning;
-                        } else if platform.state == PlatformState::Returning {
-                            platform.state = PlatformState::Extending;
-                        }
-                    }
-                }
             }
         }
     }
@@ -3118,6 +3169,168 @@ mod tests {
                 "a monster must NOT activate a PROJECTILE-only platform"
             );
         }
+    }
+
+    /// Box 8.x: a MOVING crushing platform whose floor has risen to pin an entity
+    /// (clearance < entity height) must damage that entity — `run_world_mechanics`
+    /// applies the crush damage AND emits a `SimEvent::EntityDamaged` carrying the
+    /// entity handle, the crush damage amount, and the platform-crush damage type.
+    #[test]
+    fn moving_crushing_platform_damages_entity_and_emits_event() {
+        use crate::components::{
+            EntityHeight, Health, Platform, PlatformState, PlatformType, Player, PolygonIndex,
+            Position, Shield,
+        };
+        use crate::world_mechanics::platforms::PLATFORM_CRUSH_DAMAGE_TYPE;
+
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+
+        // A platform mid-motion (Extending, so it is MOVING) whose rising floor
+        // has closed to within less than the player's height of the ceiling.
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 2.8,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 2.5,
+            current_ceiling: 3.0,
+            speed: 0.05,
+            state: PlatformState::Extending,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0,
+            crushes: true,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+        });
+
+        let player = world
+            .world
+            .spawn((
+                Player,
+                Position(glam::Vec3::new(0.0, 0.0, 2.6)),
+                EntityHeight(0.8),
+                PolygonIndex(poly),
+                Health(100),
+                Shield(0),
+            ))
+            .id();
+
+        world.world.insert_resource(TickInput::default());
+        world.run_world_mechanics();
+
+        // Health reduced by the crush damage.
+        let hp = world.world.get::<Health>(player).expect("player health").0;
+        assert!(
+            hp < 100,
+            "a crushing platform must reduce the entity's health (was 100, now {hp})"
+        );
+
+        // An EntityDamaged event was emitted for the player with the crush type.
+        let events = world
+            .world
+            .resource_mut::<crate::world::SimEvents>()
+            .drain();
+        let crush_event = events.iter().find_map(|e| match e {
+            crate::world::SimEvent::EntityDamaged {
+                entity,
+                amount,
+                damage_type,
+            } if *entity == player => Some((*amount, *damage_type)),
+            _ => None,
+        });
+        let (amount, damage_type) = crush_event
+            .expect("a crushing platform must emit SimEvent::EntityDamaged for the entity");
+        assert!(
+            amount > 0,
+            "crush damage amount must be positive, got {amount}"
+        );
+        assert_eq!(
+            damage_type, PLATFORM_CRUSH_DAMAGE_TYPE,
+            "crush event must carry the platform-crush damage type"
+        );
+    }
+
+    /// Box 8.3: a MOVING non-crushing platform that obstructs an entity must
+    /// REVERSE rather than damage — an `Extending` obstructed platform flips to
+    /// `Returning`, and no `EntityDamaged` event is emitted.
+    #[test]
+    fn moving_obstructing_platform_reverses_without_damage() {
+        use crate::components::{
+            EntityHeight, Health, Platform, PlatformState, PlatformType, Player, PolygonIndex,
+            Position, Shield,
+        };
+
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+
+        // Extending (MOVING) non-crushing platform already pinning the player.
+        // floor_extended is above current_floor so the platform stays Extending
+        // after this tick (clearance < player height → obstruction → reverse).
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 2.8,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 2.5,
+            current_ceiling: 3.0,
+            speed: 0.05,
+            state: PlatformState::Extending,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+        });
+
+        let player = world
+            .world
+            .spawn((
+                Player,
+                Position(glam::Vec3::new(0.0, 0.0, 2.6)),
+                EntityHeight(0.8),
+                PolygonIndex(poly),
+                Health(100),
+                Shield(0),
+            ))
+            .id();
+
+        world.world.insert_resource(TickInput::default());
+        world.run_world_mechanics();
+
+        // Platform reversed: Extending -> Returning.
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::Returning,
+                "an obstructed non-crushing Extending platform must reverse to Returning"
+            );
+        }
+
+        // No damage, no EntityDamaged event.
+        let hp = world.world.get::<Health>(player).expect("player health").0;
+        assert_eq!(
+            hp, 100,
+            "a non-crushing platform must not damage the entity"
+        );
+        let events = world
+            .world
+            .resource_mut::<crate::world::SimEvents>()
+            .drain();
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, crate::world::SimEvent::EntityDamaged { .. })),
+            "a reversing (non-crushing) platform must not emit EntityDamaged"
+        );
     }
 
     /// Build a minimal single-square SimWorld (no lights/media in the map) so we

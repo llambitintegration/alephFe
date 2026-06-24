@@ -583,7 +583,7 @@ impl SimWorld {
     ///
     /// Field sources:
     /// - `floor_height` / `ceiling_height`: live values from `MapGeometry`,
-    ///   which `update_platforms` rewrites each tick as platforms/doors move.
+    ///   which `run_world_mechanics` rewrites each tick as platforms/doors move.
     /// - `media_height`: the current surface height of the `Media` referenced by
     ///   the polygon's `media_index` (animated by `update_media`); `0.0` when the
     ///   polygon has no media.
@@ -1920,7 +1920,7 @@ mod poly_dynamic_data_tests {
 
         // Tick once so `MapGeometry` is synced from the platform's current
         // (closed) state — the platform writes its live heights into geometry
-        // during `update_platforms`, which is what `poly_dynamic_data` reads.
+        // during `run_world_mechanics`, which is what `poly_dynamic_data` reads.
         world.tick(crate::tick::TickInput::default());
 
         let before = world.poly_dynamic_data();
