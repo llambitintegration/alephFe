@@ -214,6 +214,75 @@ impl SimWorld {
         // player *faces from an adjacent polygon*; this pass activates a platform
         // the player is *standing on* — disjoint targets, no double-activation.
         self.run_platform_player_triggers();
+
+        // Boxes 7.1 + 7.2: platform activation triggered by monsters and
+        // projectiles. Runs AFTER the player pass so a platform already activated
+        // by player-entry this tick is no longer `AtRest`, and `should_activate`
+        // (which gates on `AtRest`) returns false for it — entry triggers never
+        // reverse a just-activated platform. See `run_platform_entity_triggers`.
+        self.run_platform_entity_triggers();
+    }
+
+    /// Monster-entry (box 7.1) and projectile-impact (box 7.2) platform
+    /// activation.
+    ///
+    /// Mirrors [`SimWorld::run_platform_player_triggers`]: gather the polygons
+    /// occupied by `Monster`/`Projectile` entities first (read-only queries),
+    /// then take a single mutable platform query and activate the platform under
+    /// any such entity when `should_activate` agrees.
+    ///
+    /// `should_activate(MonsterEntry|ProjectileImpact)` early-returns false unless
+    /// the platform is `AtRest`, so this is *entry* activation — it starts a
+    /// resting platform moving and never reverses one already in motion. That
+    /// `AtRest` gate is also what prevents double-activation: a platform the
+    /// player-entry pass just moved off `AtRest` this tick is skipped here, and a
+    /// platform activated by a monster is skipped by the projectile sub-pass
+    /// (it left `AtRest`). Each platform is therefore activated at most once per
+    /// tick across all three entry passes.
+    fn run_platform_entity_triggers(&mut self) {
+        use crate::world_mechanics::platforms::{
+            activate_platform, should_activate, PlatformTrigger,
+        };
+
+        // Gather phase: polygons occupied by monsters, then by projectiles.
+        // Collected into sets first so the platform mutation below holds no
+        // outstanding entity borrow (borrow-checker discipline, as the player
+        // pass does).
+        let monster_polys: std::collections::HashSet<usize> = {
+            let mut q = self
+                .world
+                .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Monster>>();
+            q.iter(&self.world).map(|p| p.0).collect()
+        };
+        let projectile_polys: std::collections::HashSet<usize> = {
+            let mut q = self
+                .world
+                .query_filtered::<&crate::PolygonIndex, bevy_ecs::prelude::With<crate::Projectile>>(
+                );
+            q.iter(&self.world).map(|p| p.0).collect()
+        };
+
+        // Apply phase: walk platforms once. For each platform, try the
+        // monster-entry trigger first, then the projectile-impact trigger. After
+        // a successful monster activation the platform is no longer `AtRest`, so
+        // the projectile `should_activate` returns false — no double-activation.
+        let mut query = self.world.query::<&mut crate::Platform>();
+        for mut platform in query.iter_mut(&mut self.world) {
+            // Box 7.1: monster-entry.
+            if monster_polys.contains(&platform.polygon_index)
+                && should_activate(&platform, PlatformTrigger::MonsterEntry)
+            {
+                activate_platform(&mut platform);
+                continue;
+            }
+
+            // Box 7.2: projectile-impact.
+            if projectile_polys.contains(&platform.polygon_index)
+                && should_activate(&platform, PlatformTrigger::ProjectileImpact)
+            {
+                activate_platform(&mut platform);
+            }
+        }
     }
 
     /// Player-entry (box 6.1) and action-key (box 6.2) platform activation.
@@ -2813,6 +2882,242 @@ mod tests {
             geo.has_changes,
             "has_changes must be true after a platform moved this tick"
         );
+    }
+
+    /// Box 7.1: a `Monster` standing on a platform's polygon, where the platform
+    /// carries `PLATFORM_ACTIVATE_ON_MONSTER_ENTRY` and is `AtRest`, must activate
+    /// the platform (leave `AtRest`); a monster on a platform WITHOUT the flag
+    /// must leave it at rest.
+    #[test]
+    fn monster_entry_activates_flagged_platform_only() {
+        use crate::components::{Monster, Platform, PlatformState, PlatformType, PolygonIndex};
+        use crate::world_mechanics::platforms::PLATFORM_ACTIVATE_ON_MONSTER_ENTRY;
+
+        // Helper: build a fresh world with one at-rest platform on `poly` whose
+        // activation_flags are `flags`, plus a monster occupying `poly`.
+        let build = |flags: u32| -> SimWorld {
+            let mut world = minimal_sim_world();
+            let poly = 0usize;
+            world.world.spawn(Platform {
+                polygon_index: poly,
+                floor_rest: 0.0,
+                floor_extended: 1.0,
+                ceiling_rest: 3.0,
+                ceiling_extended: 3.0,
+                current_floor: 0.0,
+                current_ceiling: 3.0,
+                speed: 0.5,
+                state: PlatformState::AtRest,
+                return_delay: 30,
+                delay_remaining: 0,
+                activation_flags: flags,
+                crushes: false,
+                platform_type: PlatformType::FromFloor,
+                linked_platforms: Vec::new(),
+                linked_lights: Vec::new(),
+            });
+            world.world.spawn((
+                Monster {
+                    definition_index: 0,
+                },
+                PolygonIndex(poly),
+            ));
+            // `run_world_mechanics` reads `TickInput` (player/action-key pass).
+            world.world.insert_resource(TickInput::default());
+            world
+        };
+
+        // Flagged platform: monster entry must activate it.
+        let mut flagged = build(PLATFORM_ACTIVATE_ON_MONSTER_ENTRY);
+        flagged.run_world_mechanics();
+        {
+            let mut q = flagged.world.query::<&Platform>();
+            let p = q.iter(&flagged.world).next().expect("platform present");
+            assert_ne!(
+                p.state,
+                PlatformState::AtRest,
+                "a monster on a MONSTER_ENTRY platform's polygon must activate it"
+            );
+        }
+
+        // Unflagged platform: monster entry must NOT activate it.
+        let mut unflagged = build(0);
+        unflagged.run_world_mechanics();
+        {
+            let mut q = unflagged.world.query::<&Platform>();
+            let p = q.iter(&unflagged.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::AtRest,
+                "a monster on a non-MONSTER_ENTRY platform must leave it at rest"
+            );
+        }
+    }
+
+    /// Box 7.2: a `Projectile` on a platform's polygon, where the platform carries
+    /// `PLATFORM_ACTIVATE_ON_PROJECTILE` and is `AtRest`, must activate the
+    /// platform; a projectile on a platform WITHOUT the flag must not.
+    #[test]
+    fn projectile_impact_activates_flagged_platform_only() {
+        use crate::components::{Platform, PlatformState, PlatformType, PolygonIndex, Projectile};
+        use crate::world_mechanics::platforms::PLATFORM_ACTIVATE_ON_PROJECTILE;
+
+        let build = |flags: u32| -> SimWorld {
+            let mut world = minimal_sim_world();
+            let poly = 0usize;
+            world.world.spawn(Platform {
+                polygon_index: poly,
+                floor_rest: 0.0,
+                floor_extended: 1.0,
+                ceiling_rest: 3.0,
+                ceiling_extended: 3.0,
+                current_floor: 0.0,
+                current_ceiling: 3.0,
+                speed: 0.5,
+                state: PlatformState::AtRest,
+                return_delay: 30,
+                delay_remaining: 0,
+                activation_flags: flags,
+                crushes: false,
+                platform_type: PlatformType::FromFloor,
+                linked_platforms: Vec::new(),
+                linked_lights: Vec::new(),
+            });
+            world.world.spawn((
+                Projectile {
+                    definition_index: 0,
+                    distance_traveled: 0.0,
+                    contrails_spawned: 0,
+                    ticks_alive: 0,
+                    current_polygon: poly,
+                },
+                PolygonIndex(poly),
+            ));
+            // `run_world_mechanics` reads `TickInput` (player/action-key pass).
+            world.world.insert_resource(TickInput::default());
+            world
+        };
+
+        // Flagged platform: projectile impact must activate it.
+        let mut flagged = build(PLATFORM_ACTIVATE_ON_PROJECTILE);
+        flagged.run_world_mechanics();
+        {
+            let mut q = flagged.world.query::<&Platform>();
+            let p = q.iter(&flagged.world).next().expect("platform present");
+            assert_ne!(
+                p.state,
+                PlatformState::AtRest,
+                "a projectile on a PROJECTILE platform's polygon must activate it"
+            );
+        }
+
+        // Unflagged platform: projectile impact must NOT activate it.
+        let mut unflagged = build(0);
+        unflagged.run_world_mechanics();
+        {
+            let mut q = unflagged.world.query::<&Platform>();
+            let p = q.iter(&unflagged.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::AtRest,
+                "a projectile on a non-PROJECTILE platform must leave it at rest"
+            );
+        }
+    }
+
+    /// Box 7.3 (cross-check): the monster-entry and projectile-impact passes are
+    /// independent — a monster-flagged platform is NOT activated by a projectile,
+    /// and a projectile-flagged platform is NOT activated by a monster. This
+    /// guards against a pass keying off the wrong trigger/flag.
+    #[test]
+    fn entity_triggers_do_not_cross_activate() {
+        use crate::components::{
+            Monster, Platform, PlatformState, PlatformType, PolygonIndex, Projectile,
+        };
+        use crate::world_mechanics::platforms::{
+            PLATFORM_ACTIVATE_ON_MONSTER_ENTRY, PLATFORM_ACTIVATE_ON_PROJECTILE,
+        };
+
+        // A platform that only accepts MONSTER_ENTRY, with a PROJECTILE on it.
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: PLATFORM_ACTIVATE_ON_MONSTER_ENTRY,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+        });
+        world.world.spawn((
+            Projectile {
+                definition_index: 0,
+                distance_traveled: 0.0,
+                contrails_spawned: 0,
+                ticks_alive: 0,
+                current_polygon: poly,
+            },
+            PolygonIndex(poly),
+        ));
+        world.world.insert_resource(TickInput::default());
+        world.run_world_mechanics();
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::AtRest,
+                "a projectile must NOT activate a MONSTER_ENTRY-only platform"
+            );
+        }
+
+        // A platform that only accepts PROJECTILE, with a MONSTER on it.
+        let mut world = minimal_sim_world();
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: PLATFORM_ACTIVATE_ON_PROJECTILE,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+        });
+        world.world.spawn((
+            Monster {
+                definition_index: 0,
+            },
+            PolygonIndex(poly),
+        ));
+        world.world.insert_resource(TickInput::default());
+        world.run_world_mechanics();
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::AtRest,
+                "a monster must NOT activate a PROJECTILE-only platform"
+            );
+        }
     }
 
     /// Build a minimal single-square SimWorld (no lights/media in the map) so we

@@ -39,9 +39,9 @@
 
 ## 7. Monster and Projectile Activation
 
-- [ ] 7.1 In `run_world_mechanics()`, query all `Monster` entities with `PolygonIndex`. For each monster, check if its polygon matches a platform with `ACTIVATE_ON_MONSTER_ENTRY` and activate if appropriate.
-- [ ] 7.2 Query all `Projectile` entities with `PolygonIndex`. For each projectile, check if its polygon matches a platform with `ACTIVATE_ON_PROJECTILE` and activate if appropriate.
-- [ ] 7.3 Add unit tests for monster-entry and projectile-impact activation.
+- [x] 7.1 In `run_world_mechanics()`, query all `Monster` entities with `PolygonIndex`. For each monster, check if its polygon matches a platform with `ACTIVATE_ON_MONSTER_ENTRY` and activate if appropriate.
+- [x] 7.2 Query all `Projectile` entities with `PolygonIndex`. For each projectile, check if its polygon matches a platform with `ACTIVATE_ON_PROJECTILE` and activate if appropriate.
+- [x] 7.3 Add unit tests for monster-entry and projectile-impact activation.
 
 ## 8. Crush Damage Integration
 
