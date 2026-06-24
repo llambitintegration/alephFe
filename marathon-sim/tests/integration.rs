@@ -595,6 +595,8 @@ fn platform_moves_over_ticks() {
         platform_type: marathon_sim::PlatformType::FromFloor,
         linked_platforms: Vec::new(),
         linked_lights: Vec::new(),
+        start_sound: 0,
+        stop_sound: 0,
     };
 
     activate_platform(&mut platform);
@@ -1314,6 +1316,8 @@ fn platform_activation_by_trigger_type() {
         platform_type: PlatformType::FromFloor,
         linked_platforms: Vec::new(),
         linked_lights: Vec::new(),
+        start_sound: 0,
+        stop_sound: 0,
     };
 
     assert!(!should_activate(&platform, PlatformTrigger::PlayerEntry));
@@ -1352,6 +1356,8 @@ fn platform_crush_vs_reverse() {
         platform_type: PlatformType::FromFloor,
         linked_platforms: Vec::new(),
         linked_lights: Vec::new(),
+        start_sound: 0,
+        stop_sound: 0,
     };
 
     // Entity height 0.8, clearance = 3.0 - 2.5 = 0.5 < 0.8
@@ -3636,6 +3642,8 @@ fn linked_platform_cascades_on_arrival() {
             platform_type: PlatformType::FromFloor,
             linked_platforms: vec![poly_b], // cascade target (by polygon index)
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         });
         // Target platform B: at rest, NO entry flag of its own. The only thing
         // that can start it moving is the cascade from A.
@@ -3656,6 +3664,8 @@ fn linked_platform_cascades_on_arrival() {
             platform_type: PlatformType::FromFloor,
             linked_platforms: Vec::new(),
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         });
     }
 
@@ -3751,6 +3761,8 @@ fn linked_light_toggles_on_platform_arrival() {
             platform_type: PlatformType::FromFloor,
             linked_platforms: Vec::new(),
             linked_lights: vec![light_idx], // toggle target (by light index)
+            start_sound: 0,
+            stop_sound: 0,
         });
         ecs.spawn(Light {
             light_index: light_idx,

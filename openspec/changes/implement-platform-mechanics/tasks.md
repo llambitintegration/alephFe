@@ -64,10 +64,10 @@
 
 ## 11. Sound Event Emission
 
-- [ ] 11.1 Track previous platform state before ticking. After ticking, compare to detect state transitions (AtRest->Extending, AtExtended->Returning, etc.).
-- [ ] 11.2 Emit `SimEvent::SoundTrigger` for start-movement transitions (AtRest->Extending, AtExtended->Returning) with the platform's start sound index.
-- [ ] 11.3 Emit `SimEvent::SoundTrigger` for stop-movement transitions (reaching AtExtended, reaching AtRest) with the platform's stop sound index.
-- [ ] 11.4 Add unit test verifying correct sound events are emitted on platform state transitions.
+- [x] 11.1 Track previous platform state before ticking. After ticking, compare to detect state transitions (AtRest->Extending, AtExtended->Returning, etc.).
+- [x] 11.2 Emit `SimEvent::SoundTrigger` for start-movement transitions (AtRest->Extending, AtExtended->Returning) with the platform's start sound index.
+- [x] 11.3 Emit `SimEvent::SoundTrigger` for stop-movement transitions (reaching AtExtended, reaching AtRest) with the platform's stop sound index.
+- [x] 11.4 Add unit test verifying correct sound events are emitted on platform state transitions.
 
 ## 12. Control Panel Wiring
 

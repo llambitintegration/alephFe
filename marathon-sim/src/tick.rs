@@ -188,6 +188,11 @@ impl SimWorld {
         let mut updates: Vec<(usize, f32, f32, bool)> = Vec::new();
         let mut arrival_triggers: Vec<crate::world_mechanics::platforms::PlatformTriggerEvent> =
             Vec::new();
+        // Boxes 11.1–11.3: sound triggers gathered from this tick's platform state
+        // transitions, as `sound_index` values. Collected in the SAME prev_state vs
+        // post_state comparison used for arrival detection (box 9.1) — no separate
+        // tracking pass — and pushed as `SimEvent::SoundTrigger` in the apply phase.
+        let mut sound_events: Vec<usize> = Vec::new();
         {
             use crate::PlatformState;
             let mut query = self.world.query::<&mut crate::Platform>();
@@ -229,6 +234,29 @@ impl SimWorld {
                         ),
                     );
                 }
+
+                // Boxes 11.1–11.3: reuse the SAME prev_state→post_state comparison
+                // to emit movement sounds on exactly the transition tick.
+                //   * box 11.2 (movement START → `start_sound`): a platform that
+                //     just began moving — `AtRest`→`Extending` (started extending)
+                //     or `AtExtended`→`Returning` (started returning).
+                //   * box 11.3 (movement STOP → `stop_sound`): a platform that just
+                //     reached an endpoint — `now_at_destination` was false before
+                //     and true now, i.e. it reached `AtExtended` or `AtRest`.
+                // Both fire only on the tick `state` actually changed (prev != post),
+                // exactly like the box 9.1 arrival detection, so a moving platform
+                // mid-throw and a parked platform emit nothing.
+                let started_moving = matches!(
+                    (prev_state, platform.state),
+                    (PlatformState::AtRest, PlatformState::Extending)
+                        | (PlatformState::AtExtended, PlatformState::Returning)
+                );
+                if started_moving {
+                    sound_events.push(platform.start_sound as usize);
+                }
+                if !was_at_destination && now_at_destination {
+                    sound_events.push(platform.stop_sound as usize);
+                }
             }
         }
 
@@ -246,6 +274,21 @@ impl SimWorld {
                     geometry.changed_polygons[poly_idx] = true;
                     geometry.has_changes = true;
                 }
+            }
+        }
+
+        // Boxes 11.2–11.3 (apply phase): emit a `SimEvent::SoundTrigger` for each
+        // movement-start / movement-stop transition gathered above. The platform
+        // component carries no polygon center, so the sound is emitted at the
+        // origin (`Vec3::ZERO`); the consumer maps `sound_index` to the playing
+        // platform by its polygon if positional audio is needed later.
+        if !sound_events.is_empty() {
+            let mut events = self.world.resource_mut::<crate::world::SimEvents>();
+            for sound_index in sound_events {
+                events.push(crate::world::SimEvent::SoundTrigger {
+                    sound_index,
+                    position: glam::Vec3::ZERO,
+                });
             }
         }
 
@@ -3086,6 +3129,8 @@ mod tests {
             platform_type: PlatformType::FromFloor,
             linked_platforms: Vec::new(),
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         });
 
         world.tick(TickInput::default());
@@ -3144,6 +3189,8 @@ mod tests {
                 platform_type: PlatformType::FromFloor,
                 linked_platforms: Vec::new(),
                 linked_lights: Vec::new(),
+                start_sound: 0,
+                stop_sound: 0,
             });
             world.world.spawn((
                 Monster {
@@ -3211,6 +3258,8 @@ mod tests {
                 platform_type: PlatformType::FromFloor,
                 linked_platforms: Vec::new(),
                 linked_lights: Vec::new(),
+                start_sound: 0,
+                stop_sound: 0,
             });
             world.world.spawn((
                 Projectile {
@@ -3305,6 +3354,8 @@ mod tests {
             platform_type: PlatformType::Teleporter,
             linked_platforms: Vec::new(),
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         });
 
         let player = world
@@ -3382,6 +3433,134 @@ mod tests {
         );
     }
 
+    /// Boxes 11.1–11.4: platform movement sounds. As a platform is driven through
+    /// its full cycle (`AtRest`→`Extending`→`AtExtended`→`Returning`→`AtRest`),
+    /// `run_world_mechanics` must emit a `SimEvent::SoundTrigger` on exactly the
+    /// state-CHANGE ticks, using the platform's `start_sound` for movement-START
+    /// transitions (`AtRest`→`Extending`, `AtExtended`→`Returning`) and its
+    /// `stop_sound` for movement-STOP transitions (reaching `AtExtended`, reaching
+    /// `AtRest`). No sound is emitted on the ticks the platform merely keeps moving
+    /// or sits parked.
+    #[test]
+    fn platform_state_transitions_emit_start_and_stop_sounds() {
+        use crate::components::{Platform, PlatformState, PlatformType};
+
+        const START_SOUND: u16 = 17;
+        const STOP_SOUND: u16 = 23;
+
+        let mut world = minimal_sim_world();
+        let poly = 0usize;
+
+        // A short-throw platform so each phase completes in a single tick: it
+        // extends 0.0→1.0 at speed 1.0 (one tick), no return delay, then returns
+        // 1.0→0.0 at speed 1.0 (one tick). Ceiling never moves.
+        world.world.spawn(Platform {
+            polygon_index: poly,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 1.0,
+            state: PlatformState::AtRest,
+            return_delay: 0,
+            delay_remaining: 0,
+            activation_flags: 0,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: START_SOUND,
+            stop_sound: STOP_SOUND,
+        });
+
+        world.world.insert_resource(TickInput::default());
+
+        // Helper: drain this tick's events and return the SoundTrigger sound_index
+        // values emitted (in order).
+        let sounds_this_tick = |world: &mut SimWorld| -> Vec<usize> {
+            world
+                .world
+                .resource_mut::<crate::world::SimEvents>()
+                .drain()
+                .iter()
+                .filter_map(|e| match e {
+                    crate::world::SimEvent::SoundTrigger { sound_index, .. } => Some(*sound_index),
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // Activate the resting platform so it begins extending. The activation
+        // itself does not tick; the AtRest→Extending START sound fires on the next
+        // run_world_mechanics, when prev_state(AtRest) != post_state(Extending).
+        {
+            let mut q = world.world.query::<&mut Platform>();
+            let mut p = q
+                .iter_mut(&mut world.world)
+                .next()
+                .expect("platform present");
+            crate::world_mechanics::platforms::activate_platform(&mut p);
+            assert_eq!(p.state, PlatformState::Extending);
+        }
+
+        // Tick 1: Extending → reaches AtExtended (floor 0.0→1.0 in one tick). This
+        // tick the prev_state was Extending and the post_state is AtExtended — a
+        // movement-STOP transition (reaching extended) → STOP sound.
+        world.run_world_mechanics();
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(
+                p.state,
+                PlatformState::AtExtended,
+                "tick 1 reaches AtExtended"
+            );
+        }
+        assert_eq!(
+            sounds_this_tick(&mut world),
+            vec![STOP_SOUND as usize],
+            "reaching AtExtended must emit exactly the STOP sound"
+        );
+
+        // Tick 2: AtExtended (delay 0) → Returning — a movement-START transition
+        // (AtExtended→Returning) → START sound.
+        world.run_world_mechanics();
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(p.state, PlatformState::Returning, "tick 2 begins Returning");
+        }
+        assert_eq!(
+            sounds_this_tick(&mut world),
+            vec![START_SOUND as usize],
+            "AtExtended→Returning must emit exactly the START sound"
+        );
+
+        // Tick 3: Returning → reaches AtRest (floor 1.0→0.0 in one tick) — a
+        // movement-STOP transition (reaching rest) → STOP sound.
+        world.run_world_mechanics();
+        {
+            let mut q = world.world.query::<&Platform>();
+            let p = q.iter(&world.world).next().expect("platform present");
+            assert_eq!(p.state, PlatformState::AtRest, "tick 3 reaches AtRest");
+        }
+        assert_eq!(
+            sounds_this_tick(&mut world),
+            vec![STOP_SOUND as usize],
+            "reaching AtRest must emit exactly the STOP sound"
+        );
+
+        // Tick 4: AtRest with no activation — platform sits parked, no transition,
+        // so NO sound is emitted.
+        world.run_world_mechanics();
+        assert!(
+            sounds_this_tick(&mut world).is_empty(),
+            "a parked AtRest platform must emit no sound"
+        );
+    }
+
     /// Box 7.3 (cross-check): the monster-entry and projectile-impact passes are
     /// independent — a monster-flagged platform is NOT activated by a projectile,
     /// and a projectile-flagged platform is NOT activated by a monster. This
@@ -3415,6 +3594,8 @@ mod tests {
             platform_type: PlatformType::FromFloor,
             linked_platforms: Vec::new(),
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         });
         world.world.spawn((
             Projectile {
@@ -3457,6 +3638,8 @@ mod tests {
             platform_type: PlatformType::FromFloor,
             linked_platforms: Vec::new(),
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         });
         world.world.spawn((
             Monster {
@@ -3511,6 +3694,8 @@ mod tests {
             platform_type: PlatformType::FromFloor,
             linked_platforms: Vec::new(),
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         });
 
         let player = world
@@ -3593,6 +3778,8 @@ mod tests {
             platform_type: PlatformType::FromFloor,
             linked_platforms: Vec::new(),
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         });
 
         let player = world

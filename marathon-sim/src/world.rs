@@ -1103,6 +1103,8 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
             // current map data, so linked_lights is left empty for now. It will
             // be populated when line/side trigger data is parsed (design §2).
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         });
     }
 
@@ -1151,6 +1153,8 @@ fn spawn_platforms(world: &mut World, map_data: &MapData) {
                 platform_type: PlatformType::FromFloor,
                 linked_platforms: Vec::new(),
                 linked_lights: Vec::new(),
+                start_sound: 0,
+                stop_sound: 0,
             });
         }
     }

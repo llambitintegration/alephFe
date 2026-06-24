@@ -258,6 +258,8 @@ mod tests {
             platform_type: PlatformType::FromFloor,
             linked_platforms: Vec::new(),
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         }
     }
 
