@@ -422,6 +422,66 @@ pub fn interpret_scenario(section: &MmlSection) -> ScenarioIdOverride {
     }
 }
 
+/// Overrides for the `<player>` section's physics-related attributes (box 1.7).
+///
+/// AlephOne stores these as the engine's player constants (energy/oxygen levels,
+/// visual arcs/ranges, oxygen depletion/replenishment rates, multi-charge energy
+/// thresholds, and the swim flag) — all C `short` integers except `can_swim`,
+/// which is a boolean flag. They are modeled here as `Option<i16>` / `Option<bool>`
+/// accordingly; `None` means "leave the engine default in place". The spec
+/// scenario value `oxygen="5400"` fits comfortably in `i16` (max 32767).
+///
+/// DEVIATION: these attributes have **no** apply target in this crate — the
+/// AlephOne player constants struct (`player_powerup_durations` / static player
+/// data) is not yet ported into `marathon-formats` (the existing
+/// [`PhysicsConstants`](crate::physics::PhysicsConstants) is the velocity/accel
+/// *movement* model, a different struct that carries none of these fields). So
+/// `PlayerOverride` is interpret-only for now; an `apply` path is a follow-up box
+/// once the player-constants struct exists.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PlayerOverride {
+    pub energy: Option<i16>,
+    pub oxygen: Option<i16>,
+    pub light: Option<i16>,
+    pub oxygen_deplete: Option<i16>,
+    pub oxygen_replenish: Option<i16>,
+    pub half_visual_arc: Option<i16>,
+    pub half_vertical_visual_arc: Option<i16>,
+    pub visual_range: Option<i16>,
+    pub dark_visual_range: Option<i16>,
+    pub single_energy: Option<i16>,
+    pub double_energy: Option<i16>,
+    pub triple_energy: Option<i16>,
+    pub can_swim: Option<bool>,
+}
+
+/// Interpret a `<player>` section's physics-related attributes into a
+/// [`PlayerOverride`]. Like `<scenario>`/`<texture_loading>`, `<player>` is a
+/// singleton section, so every attribute lives on the section element's own
+/// `attributes` map (not on child elements). Each recognized attribute is parsed
+/// with the matching `parse_mml_*` helper; unrecognized attributes are silently
+/// ignored, and a malformed value warns and leaves that field `None`.
+pub fn interpret_player(section: &MmlSection) -> PlayerOverride {
+    let a = &section.attributes;
+    PlayerOverride {
+        energy: a.get("energy").and_then(|s| parse_mml_i16(s)),
+        oxygen: a.get("oxygen").and_then(|s| parse_mml_i16(s)),
+        light: a.get("light").and_then(|s| parse_mml_i16(s)),
+        oxygen_deplete: a.get("oxygen_deplete").and_then(|s| parse_mml_i16(s)),
+        oxygen_replenish: a.get("oxygen_replenish").and_then(|s| parse_mml_i16(s)),
+        half_visual_arc: a.get("half_visual_arc").and_then(|s| parse_mml_i16(s)),
+        half_vertical_visual_arc: a
+            .get("half_vertical_visual_arc")
+            .and_then(|s| parse_mml_i16(s)),
+        visual_range: a.get("visual_range").and_then(|s| parse_mml_i16(s)),
+        dark_visual_range: a.get("dark_visual_range").and_then(|s| parse_mml_i16(s)),
+        single_energy: a.get("single_energy").and_then(|s| parse_mml_i16(s)),
+        double_energy: a.get("double_energy").and_then(|s| parse_mml_i16(s)),
+        triple_energy: a.get("triple_energy").and_then(|s| parse_mml_i16(s)),
+        can_swim: a.get("can_swim").and_then(|s| parse_mml_bool(s)),
+    }
+}
+
 /// Overrides for one `<projectile index="N">` element. Each field's inner type
 /// matches the corresponding
 /// [`ProjectileDefinition`](crate::physics::ProjectileDefinition) field so an
@@ -811,10 +871,10 @@ stub_interpreter!(interpret_logging, "logging");
 /// [`stub_sections`](Self::stub_sections): the list of section names that were
 /// present on the document but only have stub interpreters.
 ///
-/// `player` is intentionally **omitted**: box 1.7 (`PlayerOverride` /
-/// `interpret_player`) is not yet implemented (no spec Requirement), so there is
-/// no typed override to aggregate. When box 1.7 lands, add a `player:
-/// PlayerOverride` field and wire it in [`from_document`](Self::from_document).
+/// `player` (`<player>` → [`interpret_player`], box 1.7) is aggregated here: its
+/// physics-related attributes produce a [`PlayerOverride`]. The override is
+/// interpret-only — there is no apply target yet (see `PlayerOverride`'s
+/// DEVIATION note) — but the typed result is carried so consumers can read it.
 ///
 /// DEVIATION: `interpret_projectiles` and `interpret_effects` exist, but
 /// `MmlDocument` has **no** `projectiles`/`effects` section field (projectile
@@ -846,6 +906,8 @@ pub struct MmlOverrideSet {
     pub stringset: StringSetOverride,
     /// Scenario-identity override (`<scenario>` → [`interpret_scenario`]).
     pub scenario: ScenarioIdOverride,
+    /// Player physics-attribute override (`<player>` → [`interpret_player`]).
+    pub player: PlayerOverride,
     /// Names of sections that were present on the document but only have stub
     /// interpreters (box 1.14). Each is logged once via its stub interpreter
     /// during [`from_document`](Self::from_document).
@@ -864,8 +926,7 @@ impl MmlOverrideSet {
     /// the returned [`StubOverride`] carries no data and is discarded.
     ///
     /// `projectiles`/`effects` are left default because `MmlDocument` has no
-    /// matching section field (see the type-level DEVIATION note). `player` is
-    /// omitted entirely pending box 1.7.
+    /// matching section field (see the type-level DEVIATION note).
     pub fn from_document(doc: &MmlDocument) -> Self {
         let mut out = MmlOverrideSet::default();
 
@@ -892,6 +953,9 @@ impl MmlOverrideSet {
         }
         if let Some(section) = &doc.scenario {
             out.scenario = interpret_scenario(section);
+        }
+        if let Some(section) = &doc.player {
+            out.player = interpret_player(section);
         }
 
         // Stub sections (box 1.14): call the stub to emit the notice, record the
@@ -1430,6 +1494,110 @@ mod tests {
             Some("B"),
             "base-only attribute preserved"
         );
+    }
+
+    // ── box 1.7: player interpreter (reads section attributes) ──
+
+    #[test]
+    fn player_energy_and_oxygen_override() {
+        // Spec scenario: <player energy="200" oxygen="5400"/>
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><player energy=\"200\" oxygen=\"5400\"/></marathon>",
+        )
+        .unwrap();
+        let out = interpret_player(&doc.player.unwrap());
+        assert_eq!(
+            out,
+            PlayerOverride {
+                energy: Some(200),
+                oxygen: Some(5400),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn player_all_attributes_parsed_individually() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><player energy=\"100\" oxygen=\"6000\" light=\"0x10\" oxygen_deplete=\"3\" oxygen_replenish=\"7\" half_visual_arc=\"60\" half_vertical_visual_arc=\"30\" visual_range=\"512\" dark_visual_range=\"256\" single_energy=\"100\" double_energy=\"200\" triple_energy=\"300\" can_swim=\"true\"/></marathon>",
+        )
+        .unwrap();
+        let out = interpret_player(&doc.player.unwrap());
+        assert_eq!(
+            out,
+            PlayerOverride {
+                energy: Some(100),
+                oxygen: Some(6000),
+                light: Some(16), // hex 0x10
+                oxygen_deplete: Some(3),
+                oxygen_replenish: Some(7),
+                half_visual_arc: Some(60),
+                half_vertical_visual_arc: Some(30),
+                visual_range: Some(512),
+                dark_visual_range: Some(256),
+                single_energy: Some(100),
+                double_energy: Some(200),
+                triple_energy: Some(300),
+                can_swim: Some(true),
+            }
+        );
+    }
+
+    #[test]
+    fn player_missing_attribute_is_none() {
+        let doc =
+            MmlDocument::from_bytes(b"<marathon><player energy=\"150\"/></marathon>").unwrap();
+        let out = interpret_player(&doc.player.unwrap());
+        assert_eq!(out.energy, Some(150));
+        assert_eq!(out.oxygen, None);
+        assert_eq!(out.can_swim, None);
+    }
+
+    #[test]
+    fn player_malformed_value_is_none() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><player energy=\"abc\" oxygen=\"5400\" can_swim=\"maybe\"/></marathon>",
+        )
+        .unwrap();
+        let out = interpret_player(&doc.player.unwrap());
+        assert_eq!(out.energy, None, "malformed integer yields None");
+        assert_eq!(out.oxygen, Some(5400), "valid sibling still parses");
+        assert_eq!(out.can_swim, None, "malformed bool yields None");
+    }
+
+    #[test]
+    fn player_unknown_attribute_ignored() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><player energy=\"200\" bogus_attr=\"99\"/></marathon>",
+        )
+        .unwrap();
+        let out = interpret_player(&doc.player.unwrap());
+        assert_eq!(out.energy, Some(200));
+        // `bogus_attr` is unrecognized and silently ignored.
+    }
+
+    #[test]
+    fn override_set_populates_player_when_present() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><player energy=\"200\" oxygen=\"5400\"/></marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(
+            set.player,
+            PlayerOverride {
+                energy: Some(200),
+                oxygen: Some(5400),
+                ..Default::default()
+            }
+        );
+    }
+
+    #[test]
+    fn override_set_player_default_when_absent() {
+        let doc = MmlDocument::from_bytes(b"<marathon><monsters/></marathon>").unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set.player, PlayerOverride::default());
     }
 
     // ── box 1.12: stringset interpreter (resource id from section attr) ──
