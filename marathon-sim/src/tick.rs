@@ -119,8 +119,9 @@ impl SimWorld {
         // Systems execute in alephone's update_world() order:
         // 1. Update lights
         self.run_light_updates();
-        // 2. Update media (depends on light intensities)
-        self.update_media();
+        // 2. Update media (box 4.4): runs directly after run_light_updates so
+        //    each Media's current_height tracks this tick's light intensities.
+        self.run_media_updates();
         // 3. Platforms are no longer a standalone pass: ticking, height-sync,
         //    activation, and crush all live in `run_world_mechanics()` (step 10,
         //    boxes 5.x–8.x). The former `update_platforms()` was fully
@@ -909,10 +910,6 @@ impl SimWorld {
                 }
             },
         );
-    }
-
-    fn update_media(&mut self) {
-        self.run_media_updates();
     }
 
     /// Query all `Media` entities, look up each one's associated `Light` by
@@ -4444,6 +4441,68 @@ mod tests {
         assert!(
             (media.current_height - 1.0).abs() < 1e-6,
             "media height should track linked light (expected 1.0, got {})",
+            media.current_height
+        );
+    }
+
+    /// Box 4.4: `run_media_updates()` must run inside `SimWorld::tick()` (after
+    /// `run_light_updates()`), not only when invoked directly. Driving a full
+    /// `tick()` must overwrite a stale `Media::current_height` from the linked
+    /// light's intensity — proving the media pass is wired into the tick loop.
+    #[test]
+    fn tick_runs_media_updates_after_lights() {
+        use crate::components::{
+            Light, LightFunction, LightFunctionSpec, LightState, LightType, Media,
+        };
+
+        let mut world = minimal_sim_world();
+
+        let spec = LightFunctionSpec {
+            function: LightFunction::Constant,
+            period: 1,
+            delta_period: 0,
+            intensity: 0.5,
+            delta_intensity: 0.0,
+        };
+        {
+            let ecs = world.ecs_world_mut();
+            ecs.spawn(Light {
+                light_index: 3,
+                light_type: LightType::Normal,
+                state: LightState::PrimaryActive,
+                flags: 0,
+                phase: 0,
+                period: 1,
+                current_intensity: 0.5,
+                initial_intensity: 0.5,
+                final_intensity: 0.5,
+                functions: [spec; 6],
+                tag: 0,
+            });
+            ecs.spawn(Media {
+                index: 0,
+                polygon_index: 0,
+                media_type: 0,
+                height_low: 0.0,
+                height_high: 2.0,
+                light_index: 3,
+                current_height: 99.0, // stale sentinel; tick() must overwrite it
+                current_direction: 0.0,
+                current_magnitude: 0.0,
+            });
+        }
+
+        // A full tick — NOT a direct run_media_updates() call — must drive the
+        // media pass via the tick loop's wiring.
+        world.tick(TickInput::default());
+
+        // height_low + (height_high - height_low) * intensity = 0 + 2 * 0.5 = 1.0
+        let ecs = world.ecs_world_mut();
+        let mut q = ecs.query::<&Media>();
+        let media = q.iter(ecs).next().expect("media entity present");
+        assert!(
+            (media.current_height - 1.0).abs() < 1e-6,
+            "tick() must run media updates after lights (expected 1.0, got {})",
             media.current_height
         );
     }
