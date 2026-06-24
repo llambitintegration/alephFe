@@ -1376,6 +1376,9 @@ pub struct SimSnapshot {
     pub platforms: Vec<crate::components::Platform>,
     pub lights: Vec<crate::components::Light>,
     pub media: Vec<crate::components::Media>,
+    /// Box 7.3: pending item respawns (the `ItemRespawnQueue` resource).
+    #[serde(default)]
+    pub respawn_queue: Vec<ItemRespawnEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1389,6 +1392,15 @@ pub struct PlayerSnapshot {
     pub oxygen: i16,
     pub polygon_index: usize,
     pub grounded: bool,
+    /// Box 7.1: active powerup countdown timers.
+    #[serde(default)]
+    pub powerup_timers: crate::components::PowerupTimers,
+    /// Box 7.1: non-weapon inventory item counts.
+    #[serde(default)]
+    pub inventory_items: crate::components::InventoryItems,
+    /// Box 7.2: the player's authoritative weapon inventory (the resource).
+    #[serde(default)]
+    pub weapon_inventory: crate::player::inventory::WeaponInventory,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -1426,7 +1438,17 @@ use serde::{Deserialize, Serialize};
 impl SimWorld {
     /// Create a serializable snapshot of the current simulation state.
     pub fn snapshot(&mut self) -> SimSnapshot {
-        // Player
+        // Box 7.4: the authoritative weapon inventory is the resource (the one
+        // the firing path mutates and where picked-up weapons land), mirroring
+        // `player_weapons()`. Clone it for the snapshot.
+        let weapon_inventory = self
+            .world
+            .get_resource::<crate::player::inventory::WeaponInventory>()
+            .cloned()
+            .unwrap_or_default();
+
+        // Player. PowerupTimers and InventoryItems live on the player entity
+        // (boxes 7.1); the weapon inventory above is sourced from the resource.
         let player = {
             let mut q = self.world.query_filtered::<(
                 &Position,
@@ -1438,23 +1460,33 @@ impl SimWorld {
                 &Oxygen,
                 &PolygonIndex,
                 &Grounded,
+                &crate::components::PowerupTimers,
+                &crate::components::InventoryItems,
             ), bevy_ecs::prelude::With<Player>>();
-            q.iter(&self.world)
-                .next()
-                .map(
-                    |(pos, vel, fac, vlook, hp, sh, ox, poly, gr)| PlayerSnapshot {
-                        position: pos.0,
-                        velocity: vel.0,
-                        facing: fac.0,
-                        vertical_look: vlook.0,
-                        health: hp.0,
-                        shield: sh.0,
-                        oxygen: ox.0,
-                        polygon_index: poly.0,
-                        grounded: gr.0,
-                    },
-                )
+            q.iter(&self.world).next().map(
+                |(pos, vel, fac, vlook, hp, sh, ox, poly, gr, powerups, inv)| PlayerSnapshot {
+                    position: pos.0,
+                    velocity: vel.0,
+                    facing: fac.0,
+                    vertical_look: vlook.0,
+                    health: hp.0,
+                    shield: sh.0,
+                    oxygen: ox.0,
+                    polygon_index: poly.0,
+                    grounded: gr.0,
+                    powerup_timers: *powerups,
+                    inventory_items: inv.clone(),
+                    weapon_inventory: weapon_inventory.clone(),
+                },
+            )
         };
+
+        // Box 7.4: pending item respawns (the ItemRespawnQueue resource).
+        let respawn_queue = self
+            .world
+            .get_resource::<ItemRespawnQueue>()
+            .map(|q| q.0.clone())
+            .unwrap_or_default();
 
         // Monsters
         let monsters = {
@@ -1543,6 +1575,7 @@ impl SimWorld {
             platforms,
             lights,
             media: media_vec,
+            respawn_queue,
         }
     }
 
@@ -1580,7 +1613,10 @@ impl SimWorld {
         let control_panels = build_control_panels(map_data);
         world.insert_resource(control_panels);
 
-        // Restore player
+        // Restore player. Box 7.5: PowerupTimers and InventoryItems are restored
+        // as components on the player entity; the weapon inventory is restored as
+        // the authoritative resource (the firing path reads it) and as the
+        // per-entity component, mirroring the spawn-time shape.
         if let Some(p) = snapshot.player {
             world.spawn((
                 Player,
@@ -1595,7 +1631,12 @@ impl SimWorld {
                 Grounded(p.grounded),
                 CollisionRadius(0.25),
                 EntityHeight(0.8),
+                p.powerup_timers,
+                p.inventory_items,
+                p.weapon_inventory.clone(),
             ));
+            // Box 7.5: the authoritative weapon inventory resource.
+            world.insert_resource(p.weapon_inventory);
         }
 
         // Restore monsters
@@ -1649,6 +1690,9 @@ impl SimWorld {
                 AnimationFrame::default(),
             ));
         }
+
+        // Box 7.5: restore the pending item-respawn queue resource.
+        world.insert_resource(ItemRespawnQueue(snapshot.respawn_queue));
 
         // Restore platforms, lights, media
         for platform in snapshot.platforms {
@@ -2450,5 +2494,197 @@ mod poly_dynamic_data_tests {
             pos.0.z = 5.0;
         }
         assert_eq!(world.player_submersion_state(), Some((false, MEDIA_WATER)));
+    }
+
+    // ─── boxes 6.1-6.4: SimWorld state accessors ─────────────────────────────
+
+    /// box 6.1: `player_weapons()` returns the live (authoritative) weapon
+    /// inventory resource, which carries the fists loadout granted at spawn.
+    #[test]
+    fn player_weapons_accessor_returns_resource_inventory() {
+        let map = player_map();
+        let world =
+            SimWorld::new(&map, &physics_with_player(), &SimConfig::default()).expect("world");
+        let weapons = world
+            .player_weapons()
+            .expect("player_weapons() must return the weapon inventory resource");
+        let fists = weapons
+            .weapons
+            .first()
+            .and_then(|s| s.as_ref())
+            .expect("slot 0 must hold the fists weapon");
+        assert_eq!(fists.definition_index, 0, "fists in slot 0");
+    }
+
+    /// box 6.2: `player_powerups()` returns the player entity's PowerupTimers,
+    /// defaulting to all-zero at spawn.
+    #[test]
+    fn player_powerups_accessor_returns_timers() {
+        let map = player_map();
+        let mut world =
+            SimWorld::new(&map, &physics_with_player(), &SimConfig::default()).expect("world");
+        let timers = world
+            .player_powerups()
+            .expect("player_powerups() must return the player's PowerupTimers");
+        assert_eq!(timers.invincibility, 0);
+        assert_eq!(timers.invisibility, 0);
+        assert_eq!(timers.infravision, 0);
+        assert_eq!(timers.extravision, 0);
+
+        // After setting a timer on the player entity, the accessor reflects it.
+        {
+            let w = &mut world.world;
+            let mut q = w.query_filtered::<&mut PowerupTimers, With<Player>>();
+            for mut t in q.iter_mut(w) {
+                t.invincibility = 450;
+            }
+        }
+        let timers = world.player_powerups().expect("timers present");
+        assert_eq!(timers.invincibility, 450);
+    }
+
+    /// box 6.3: `player_inventory()` returns the player's non-weapon inventory
+    /// item counts.
+    #[test]
+    fn player_inventory_accessor_returns_counts() {
+        let map = player_map();
+        let mut world =
+            SimWorld::new(&map, &physics_with_player(), &SimConfig::default()).expect("world");
+        // Empty at spawn.
+        let counts = world
+            .player_inventory()
+            .expect("player_inventory() must return the player's InventoryItems counts");
+        assert!(counts.is_empty(), "no items held at spawn");
+
+        // After adding an item, the accessor reflects it.
+        {
+            let w = &mut world.world;
+            let mut q = w.query_filtered::<&mut InventoryItems, With<Player>>();
+            for mut inv in q.iter_mut(w) {
+                inv.counts.insert(42, 3);
+            }
+        }
+        let counts = world.player_inventory().expect("counts present");
+        assert_eq!(counts.get(&42).copied(), Some(3));
+    }
+
+    // ─── boxes 7.6-7.7: snapshot / deserialize round-trips ───────────────────
+
+    /// box 7.6: powerup timers, inventory items, and the weapon inventory
+    /// survive a serialize/deserialize round-trip.
+    #[test]
+    fn snapshot_roundtrip_preserves_powerups_inventory_and_weapons() {
+        use crate::player::inventory::{WeaponInventory, WeaponSlot, WeaponState};
+
+        let map = player_map();
+        let physics = physics_with_player();
+        let mut world = SimWorld::new(&map, &physics, &SimConfig::default()).expect("world");
+
+        // Set powerup timers + inventory items on the player entity.
+        {
+            let w = &mut world.world;
+            let mut q =
+                w.query_filtered::<(&mut PowerupTimers, &mut InventoryItems), With<Player>>();
+            for (mut timers, mut inv) in q.iter_mut(w) {
+                timers.invincibility = 450;
+                timers.invisibility = 300;
+                timers.infravision = 120;
+                timers.extravision = 60;
+                inv.counts.insert(7, 2);
+                inv.counts.insert(9, 1);
+            }
+        }
+        // Grow the authoritative weapon inventory resource (the one the
+        // tick/firing path reads).
+        {
+            let mut weapons = world
+                .ecs_world_mut()
+                .remove_resource::<WeaponInventory>()
+                .unwrap_or_default();
+            weapons.weapons.push(Some(WeaponSlot {
+                definition_index: 3,
+                primary_magazine: 8,
+                primary_reserve: 24,
+                secondary_magazine: 0,
+                secondary_reserve: 0,
+                state: WeaponState::Idle,
+                cooldown_ticks: 0,
+            }));
+            world.ecs_world_mut().insert_resource(weapons);
+        }
+
+        let before_powerups = world.player_powerups().expect("powerups");
+        let before_inventory = world.player_inventory().expect("inventory");
+        let before_weapon_len = world.player_weapons().expect("weapons").weapons.len();
+
+        let bytes = world.serialize().expect("serialize");
+        let mut restored = SimWorld::deserialize(&bytes, &map, &physics).expect("deserialize");
+
+        let after_powerups = restored.player_powerups().expect("powerups restored");
+        assert_eq!(after_powerups.invincibility, before_powerups.invincibility);
+        assert_eq!(after_powerups.invisibility, before_powerups.invisibility);
+        assert_eq!(after_powerups.infravision, before_powerups.infravision);
+        assert_eq!(after_powerups.extravision, before_powerups.extravision);
+        assert_eq!(after_powerups.invincibility, 450);
+
+        let after_inventory = restored.player_inventory().expect("inventory restored");
+        assert_eq!(after_inventory, before_inventory);
+        assert_eq!(after_inventory.get(&7).copied(), Some(2));
+        assert_eq!(after_inventory.get(&9).copied(), Some(1));
+
+        let after_weapons = restored.player_weapons().expect("weapons restored");
+        assert_eq!(after_weapons.weapons.len(), before_weapon_len);
+        let slot3 = after_weapons
+            .weapons
+            .iter()
+            .filter_map(|s| s.as_ref())
+            .find(|s| s.definition_index == 3)
+            .expect("granted weapon (def 3) restored");
+        assert_eq!(slot3.primary_magazine, 8);
+        assert_eq!(slot3.primary_reserve, 24);
+    }
+
+    /// box 7.7: pending item-respawn queue entries survive a round-trip.
+    #[test]
+    fn snapshot_roundtrip_preserves_respawn_queue() {
+        let map = player_map();
+        let physics = physics_with_player();
+        let mut world = SimWorld::new(&map, &physics, &SimConfig::default()).expect("world");
+
+        // Seed the respawn queue resource with two pending entries.
+        {
+            let mut queue = world
+                .ecs_world_mut()
+                .remove_resource::<ItemRespawnQueue>()
+                .unwrap_or_default();
+            queue.0.push(ItemRespawnEntry {
+                item_type: 20,
+                position: Vec3::new(1.0, 2.0, 3.0),
+                polygon_index: 0,
+                remaining_ticks: 90,
+            });
+            queue.0.push(ItemRespawnEntry {
+                item_type: 21,
+                position: Vec3::new(4.0, 5.0, 6.0),
+                polygon_index: 1,
+                remaining_ticks: 30,
+            });
+            world.ecs_world_mut().insert_resource(queue);
+        }
+
+        let bytes = world.serialize().expect("serialize");
+        let mut restored = SimWorld::deserialize(&bytes, &map, &physics).expect("deserialize");
+
+        let queue = restored
+            .ecs_world_mut()
+            .get_resource::<ItemRespawnQueue>()
+            .expect("ItemRespawnQueue resource restored");
+        assert_eq!(queue.0.len(), 2, "both pending respawns preserved");
+        assert_eq!(queue.0[0].item_type, 20);
+        assert_eq!(queue.0[0].position, Vec3::new(1.0, 2.0, 3.0));
+        assert_eq!(queue.0[0].polygon_index, 0);
+        assert_eq!(queue.0[0].remaining_ticks, 90);
+        assert_eq!(queue.0[1].item_type, 21);
+        assert_eq!(queue.0[1].remaining_ticks, 30);
     }
 }
