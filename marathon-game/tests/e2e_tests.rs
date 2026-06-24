@@ -617,7 +617,7 @@ mod marathon_game_level {
         match lights {
             LightData::Static(static_lights) => {
                 if let Some(light) = static_lights.get(idx) {
-                    let intensity = light.primary_active.intensity as f32 / 65536.0;
+                    let intensity = light.primary_active.intensity / 65536.0;
                     intensity.clamp(0.0, 1.0)
                 } else {
                     1.0

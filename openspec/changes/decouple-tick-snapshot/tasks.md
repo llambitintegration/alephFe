@@ -51,5 +51,5 @@
 
 ## 8. Workspace verification
 
-- [ ] 8.1 `cargo test` workspace-green in Docker (`rust:slim`); `cargo fmt --check` and `cargo clippy -D warnings` clean
+- [x] 8.1 `cargo test` workspace-green in Docker (`rust:slim`); `cargo fmt --check` and `cargo clippy -D warnings` clean
 - [ ] 8.2 Redeploy web and capture a moving-door screenshot via the live endpoint confirming walls stretch (closes the residual static-mesh bug end-to-end)
