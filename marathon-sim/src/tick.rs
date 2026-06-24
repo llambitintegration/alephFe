@@ -140,8 +140,12 @@ impl SimWorld {
         self.update_projectiles();
         // 8. Update effects (cleanup)
         self.update_effects();
-        // 9. Update items (pickup check)
-        self.update_items();
+        // 9. Item pickups: collect-then-apply pass over item entities (box 5.1/5.2).
+        self.run_item_pickups();
+        // 10. Powerup countdown: decrement active powerup timers (box 5.3).
+        self.run_powerup_countdown();
+        // 11. Item respawns: count down queued respawns and re-spawn items (box 5.4).
+        self.run_item_respawns();
 
         // 10. World mechanics: tick platforms, sync their heights into the
         //     authoritative MapGeometry, record dirty-polygon flags for the
@@ -844,6 +848,49 @@ impl SimWorld {
             if let Some(mut shield) = self.world.get_mut::<crate::Shield>(entity) {
                 shield.0 = new_s;
             }
+        }
+    }
+
+    /// Box 8.1: apply combat damage to the player, honoring the invincibility
+    /// powerup.
+    ///
+    /// `apply_damage()` is a pure scalar function with no notion of the player
+    /// entity, so the invincibility powerup can only be gated at this call-site
+    /// layer. If the player's `PowerupTimers.invincibility > 0`, the hit is
+    /// fully absorbed (no Health/Shield change) and `false` is returned;
+    /// otherwise the damage is applied to Health/Shield and `true` is returned.
+    ///
+    /// Scope: this gates **combat** damage (monster attacks / projectile hits).
+    /// Environmental damage (platform crush, media/drowning) is intentionally
+    /// NOT routed through here — invincibility protects against weapon damage,
+    /// not the world geometry crushing or drowning the player, matching the
+    /// original Marathon behavior. When `invincibility == 0` the result is
+    /// byte-for-byte identical to calling `apply_damage()` directly, so existing
+    /// damage tests are unaffected.
+    fn apply_combat_damage_to_player(&mut self, damage: i16) -> bool {
+        let invincible = {
+            let mut q = self
+                .world
+                .query_filtered::<&crate::PowerupTimers, bevy_ecs::prelude::With<crate::Player>>();
+            q.iter(&self.world)
+                .next()
+                .map(|t| t.invincibility > 0)
+                .unwrap_or(false)
+        };
+        if invincible {
+            return false;
+        }
+
+        let mut q = self
+            .world
+            .query_filtered::<(&mut crate::Health, &mut crate::Shield), bevy_ecs::prelude::With<crate::Player>>();
+        if let Some((mut health, mut shield)) = q.iter_mut(&mut self.world).next() {
+            let (new_h, new_s, _) = crate::combat::damage::apply_damage(damage, health.0, shield.0);
+            health.0 = new_h;
+            shield.0 = new_s;
+            true
+        } else {
+            false
         }
     }
 
@@ -1559,18 +1606,11 @@ impl SimWorld {
             }
         }
 
-        // Apply damage to player from melee attacks
+        // Apply damage to player from melee attacks. Box 8.1: route through the
+        // invincibility-aware helper so an active invincibility powerup fully
+        // absorbs the combat hit.
         if damage_to_player > 0 {
-            let mut q = self.world.query_filtered::<(
-                &mut crate::Health,
-                &mut crate::Shield,
-            ), bevy_ecs::prelude::With<crate::Player>>();
-            if let Some((mut health, mut shield)) = q.iter_mut(&mut self.world).next() {
-                let (new_h, new_s, _) =
-                    crate::combat::damage::apply_damage(damage_to_player, health.0, shield.0);
-                health.0 = new_h;
-                shield.0 = new_s;
-            }
+            self.apply_combat_damage_to_player(damage_to_player);
         }
 
         // Spawn monster projectiles
@@ -2603,157 +2643,204 @@ impl SimWorld {
         }
     }
 
-    fn update_items(&mut self) {
-        // Get player data
-        let player_data: Option<(bevy_ecs::entity::Entity, glam::Vec2, f32)> = {
+    /// Box 5.1/5.2: item pickups. Run once per tick after player physics.
+    ///
+    /// Collect-then-apply: first gather the pickup decisions for every item
+    /// entity (so the player query and the item iteration don't fight the borrow
+    /// checker against the later despawns/mutations), then apply the effects,
+    /// despawn the consumed items, and emit `SimEvent::ItemPickedUp`.
+    ///
+    /// Eligibility is `can_pickup()` (2D range + polygon connectivity) and the
+    /// effect — including its wasted-pickup verdict (e.g. health already capped)
+    /// — comes from `apply_item_effect()`. The mapping from an item's type to its
+    /// `ItemEffect` is the existing `world_mechanics::items::item_effect()`. The
+    /// `WeaponInventory` mutated here is the live **resource** the weapon-firing
+    /// path reads (`run_player_weapons`), so a picked-up weapon is immediately
+    /// usable; the per-entity `WeaponInventory` component remains the spawn-time
+    /// fists loadout. See the box-5 report for this resource-vs-component note.
+    fn run_item_pickups(&mut self) {
+        use crate::world_mechanics::items::{item_effect, ItemEffect};
+        use crate::world_mechanics::pickup::{apply_item_effect, can_pickup};
+
+        // Player entity, 2D position and polygon for the connectivity test.
+        let player_data: Option<(bevy_ecs::entity::Entity, glam::Vec2, usize)> = {
             let mut q = self.world.query_filtered::<(
                 bevy_ecs::entity::Entity,
                 &crate::Position,
-                &crate::CollisionRadius,
+                &crate::PolygonIndex,
             ), bevy_ecs::prelude::With<crate::Player>>();
             q.iter(&self.world)
                 .next()
-                .map(|(e, pos, r)| (e, glam::Vec2::new(pos.0.x, pos.0.y), r.0))
+                .map(|(e, pos, poly)| (e, glam::Vec2::new(pos.0.x, pos.0.y), poly.0))
         };
-
-        let Some((player_entity, player_pos, player_radius)) = player_data else {
+        let Some((player_entity, player_pos, player_poly)) = player_data else {
             return;
         };
 
-        // Get player vitals for pickup checks
-        let player_health = self
-            .world
-            .get::<crate::Health>(player_entity)
-            .map(|h| h.0)
-            .unwrap_or(0);
-        let player_shield = self
-            .world
-            .get::<crate::Shield>(player_entity)
-            .map(|s| s.0)
-            .unwrap_or(0);
-        let player_oxygen = self
-            .world
-            .get::<crate::Oxygen>(player_entity)
-            .map(|o| o.0)
-            .unwrap_or(0);
+        // Geometry is needed by can_pickup(); clone to release the world borrow.
+        let geometry = self.world.resource::<MapGeometry>().clone();
 
-        // Check each item for overlap
-        struct ItemPickup {
+        // Collect candidate (entity, effect, item_type) for in-range, connected items.
+        struct Candidate {
             entity: bevy_ecs::entity::Entity,
-            effect: crate::world_mechanics::items::ItemEffect,
+            effect: ItemEffect,
+            item_type: i16,
         }
-
-        let mut pickups: Vec<ItemPickup> = Vec::new();
-
+        let mut candidates: Vec<Candidate> = Vec::new();
         {
             let mut query = self.world.query::<(
                 bevy_ecs::entity::Entity,
                 &crate::Item,
                 &crate::Position,
-                &crate::CollisionRadius,
+                &crate::PolygonIndex,
             )>();
-            for (entity, item, pos, radius) in query.iter(&self.world) {
+            for (entity, item, pos, poly) in query.iter(&self.world) {
                 let item_pos = glam::Vec2::new(pos.0.x, pos.0.y);
-                let dist = player_pos.distance(item_pos);
-
-                if dist <= player_radius + radius.0 {
-                    if let Some(effect) = crate::world_mechanics::items::item_effect(item.item_type)
-                    {
-                        // Check if pickup can be applied
-                        let can_pickup = match &effect {
-                            crate::world_mechanics::items::ItemEffect::RestoreHealth { .. } => {
-                                player_health < 150
-                            }
-                            crate::world_mechanics::items::ItemEffect::RestoreShield { .. } => {
-                                player_shield < 150
-                            }
-                            crate::world_mechanics::items::ItemEffect::RestoreOxygen { .. } => {
-                                player_oxygen < 600
-                            }
-                            _ => true, // weapons, ammo, inventory always pickupable
-                        };
-
-                        if can_pickup {
-                            pickups.push(ItemPickup { entity, effect });
-                        }
-                    }
+                if !can_pickup(player_pos, player_poly, item_pos, poly.0, &geometry) {
+                    continue;
+                }
+                if let Some(effect) = item_effect(item.item_type) {
+                    candidates.push(Candidate {
+                        entity,
+                        effect,
+                        item_type: item.item_type,
+                    });
                 }
             }
         }
+        if candidates.is_empty() {
+            return;
+        }
 
-        // Apply pickups
-        for pickup in &pickups {
-            use crate::world_mechanics::items::ItemEffect;
-            match &pickup.effect {
-                ItemEffect::RestoreHealth { amount } => {
-                    if let Some(mut health) = self.world.get_mut::<crate::Health>(player_entity) {
-                        health.0 = (health.0 + amount).min(150);
+        // Apply each candidate against the live player state. The weapon
+        // inventory is the resource; everything else lives on the player entity.
+        // Take the weapon inventory resource out so we can hold a &mut to it
+        // while also taking &mut component refs off the player entity.
+        let mut weapons = self
+            .world
+            .remove_resource::<crate::player::inventory::WeaponInventory>()
+            .unwrap_or_default();
+
+        let mut consumed: Vec<(bevy_ecs::entity::Entity, i16)> = Vec::new();
+        for cand in &candidates {
+            // Pull the player's mutable stat/timer/inventory components. We use
+            // entity_mut + get_mut one at a time and copy out, because we cannot
+            // hold several &mut component refs simultaneously through entity_mut.
+            let applied = {
+                let mut player_ref = self.world.entity_mut(player_entity);
+                let mut health = player_ref
+                    .get::<crate::Health>()
+                    .copied()
+                    .unwrap_or(crate::Health(0));
+                let mut shield = player_ref
+                    .get::<crate::Shield>()
+                    .copied()
+                    .unwrap_or(crate::Shield(0));
+                let mut oxygen = player_ref
+                    .get::<crate::Oxygen>()
+                    .copied()
+                    .unwrap_or(crate::Oxygen(0));
+                let mut powerups = player_ref
+                    .get::<crate::PowerupTimers>()
+                    .copied()
+                    .unwrap_or_default();
+                let mut inventory = player_ref
+                    .get::<crate::InventoryItems>()
+                    .cloned()
+                    .unwrap_or_default();
+
+                let did = apply_item_effect(
+                    &mut health,
+                    &mut shield,
+                    &mut oxygen,
+                    &mut weapons,
+                    &mut powerups,
+                    &mut inventory,
+                    &cand.effect,
+                );
+
+                if did {
+                    if let Some(mut h) = player_ref.get_mut::<crate::Health>() {
+                        *h = health;
+                    }
+                    if let Some(mut s) = player_ref.get_mut::<crate::Shield>() {
+                        *s = shield;
+                    }
+                    if let Some(mut o) = player_ref.get_mut::<crate::Oxygen>() {
+                        *o = oxygen;
+                    }
+                    if let Some(mut p) = player_ref.get_mut::<crate::PowerupTimers>() {
+                        *p = powerups;
+                    }
+                    if let Some(mut inv) = player_ref.get_mut::<crate::InventoryItems>() {
+                        *inv = inventory;
                     }
                 }
-                ItemEffect::RestoreShield { amount } => {
-                    if let Some(mut shield) = self.world.get_mut::<crate::Shield>(player_entity) {
-                        shield.0 = (shield.0 + amount).min(150);
-                    }
-                }
-                ItemEffect::RestoreOxygen { amount } => {
-                    if let Some(mut oxygen) = self.world.get_mut::<crate::Oxygen>(player_entity) {
-                        oxygen.0 = (oxygen.0 + amount).min(600);
-                    }
-                }
-                ItemEffect::AddWeapon {
-                    weapon_definition_index,
-                } => {
-                    if let Some(mut inv) = self
-                        .world
-                        .get_resource_mut::<crate::player::inventory::WeaponInventory>()
-                    {
-                        let idx = *weapon_definition_index;
-                        if idx < inv.weapons.len() && inv.weapons[idx].is_none() {
-                            inv.weapons[idx] = Some(crate::player::inventory::WeaponSlot {
-                                definition_index: idx,
-                                primary_magazine: 8,
-                                primary_reserve: 0,
-                                secondary_magazine: 0,
-                                secondary_reserve: 0,
-                                state: crate::player::inventory::WeaponState::Idle,
-                                cooldown_ticks: 0,
-                            });
-                        }
-                    }
-                }
-                ItemEffect::AddAmmo {
-                    weapon_definition_index,
-                    is_primary,
-                    amount,
-                } => {
-                    if let Some(mut inv) = self
-                        .world
-                        .get_resource_mut::<crate::player::inventory::WeaponInventory>()
-                    {
-                        let idx = *weapon_definition_index;
-                        if idx < inv.weapons.len() {
-                            if let Some(ref mut weapon) = inv.weapons[idx] {
-                                if *is_primary {
-                                    weapon.primary_reserve += amount;
-                                } else {
-                                    weapon.secondary_reserve += amount;
-                                }
-                            }
-                        }
-                    }
-                }
-                ItemEffect::AddInventoryItem { .. } => {
-                    // Inventory items tracked separately (keys, balls) - stub for now
-                }
-                ItemEffect::ActivatePowerup { .. } => {
-                    // Powerup timer activation wired in a later task (PowerupTimers) - stub for now
-                }
+                did
+            };
+
+            if applied {
+                consumed.push((cand.entity, cand.item_type));
             }
         }
 
-        // Despawn picked-up items
-        for pickup in &pickups {
-            self.world.despawn(pickup.entity);
+        // Restore the (possibly grown) weapon inventory resource.
+        self.world.insert_resource(weapons);
+
+        // Despawn consumed items and emit pickup events.
+        for (entity, item_type) in consumed {
+            self.world.despawn(entity);
+            self.world
+                .resource_mut::<crate::world::SimEvents>()
+                .push(crate::world::SimEvent::ItemPickedUp { item_type });
+        }
+    }
+
+    /// Box 5.3: decrement every non-zero powerup timer on the player by one tick.
+    fn run_powerup_countdown(&mut self) {
+        let mut q = self
+            .world
+            .query_filtered::<&mut crate::PowerupTimers, bevy_ecs::prelude::With<crate::Player>>();
+        for mut timers in q.iter_mut(&mut self.world) {
+            timers.invincibility = timers.invincibility.saturating_sub(1);
+            timers.invisibility = timers.invisibility.saturating_sub(1);
+            timers.infravision = timers.infravision.saturating_sub(1);
+            timers.extravision = timers.extravision.saturating_sub(1);
+        }
+    }
+
+    /// Box 5.4: count down queued item respawns. Entries that reach zero spawn a
+    /// fresh `Item` entity at the stored location and are removed from the queue.
+    fn run_item_respawns(&mut self) {
+        // Decrement and partition into "ready to spawn" vs "still waiting".
+        let ready: Vec<crate::world::ItemRespawnEntry> = {
+            let mut queue = self.world.resource_mut::<crate::world::ItemRespawnQueue>();
+            let mut ready = Vec::new();
+            let mut remaining = Vec::with_capacity(queue.0.len());
+            for mut entry in std::mem::take(&mut queue.0) {
+                entry.remaining_ticks = entry.remaining_ticks.saturating_sub(1);
+                if entry.remaining_ticks == 0 {
+                    ready.push(entry);
+                } else {
+                    remaining.push(entry);
+                }
+            }
+            queue.0 = remaining;
+            ready
+        };
+
+        // Spawn the items whose timers elapsed.
+        for entry in ready {
+            self.world.spawn((
+                crate::Item {
+                    item_type: entry.item_type,
+                },
+                crate::Position(entry.position),
+                crate::CollisionRadius(0.25),
+                crate::PolygonIndex(entry.polygon_index),
+                crate::SpriteShape(0),
+                crate::AnimationFrame::default(),
+            ));
         }
     }
 
@@ -2879,6 +2966,34 @@ impl SimWorld {
             slot.primary_magazine,
             slot.secondary_magazine,
         ))
+    }
+
+    /// Box 6.1: borrow the player's authoritative weapon inventory.
+    ///
+    /// The live `WeaponInventory` is the **resource** mutated by the tick/firing
+    /// path (`run_player_weapons`) and where picked-up weapons land — this is the
+    /// same source `snapshot()` captures. The per-entity `WeaponInventory`
+    /// component is only the spawn-time fists loadout. Returns `None` before a
+    /// player (and therefore the inventory resource) exists.
+    pub fn player_weapons(&self) -> Option<&crate::player::inventory::WeaponInventory> {
+        self.world
+            .get_resource::<crate::player::inventory::WeaponInventory>()
+    }
+
+    /// Box 6.2: the player's active powerup countdown timers, if a player exists.
+    pub fn player_powerups(&mut self) -> Option<crate::PowerupTimers> {
+        let mut query = self
+            .world
+            .query_filtered::<&crate::PowerupTimers, bevy_ecs::prelude::With<crate::Player>>();
+        query.iter(&self.world).next().copied()
+    }
+
+    /// Box 6.3: the player's non-weapon inventory item counts (item type → count).
+    pub fn player_inventory(&mut self) -> Option<std::collections::HashMap<i16, u16>> {
+        let mut query = self
+            .world
+            .query_filtered::<&crate::InventoryItems, bevy_ecs::prelude::With<crate::Player>>();
+        query.iter(&self.world).next().map(|inv| inv.counts.clone())
     }
 
     /// Query nearby entities for the motion sensor HUD.
@@ -3088,6 +3203,68 @@ mod tests {
             daemon_bridge.actions.try_recv().is_err(),
             "direct update_agents() call on empty desired-set must emit nothing"
         );
+    }
+
+    /// Box 8.2: an invincible player takes NO combat damage from a hit, while an
+    /// otherwise-identical non-invincible player DOES. Exercising both cases
+    /// proves the invincibility gate actually fires (not a silent no-op) and that
+    /// the un-powered path still applies damage exactly as before.
+    #[test]
+    fn invincibility_skips_combat_damage_to_player() {
+        use crate::{Health, Player, PowerupTimers, Shield};
+
+        // Case A: invincible player — a 50-damage combat hit must be fully
+        // absorbed (Health and Shield unchanged).
+        {
+            let mut world = minimal_sim_world();
+            {
+                let ecs = world.ecs_world_mut();
+                ecs.spawn((
+                    Player,
+                    Health(100),
+                    Shield(80),
+                    PowerupTimers {
+                        invincibility: 300,
+                        ..Default::default()
+                    },
+                ));
+            }
+            let applied = world.apply_combat_damage_to_player(50);
+            assert!(
+                !applied,
+                "invincible player must absorb the hit (apply returns false)"
+            );
+            let ecs = world.ecs_world_mut();
+            let mut q = ecs.query_filtered::<(&Health, &Shield), bevy_ecs::prelude::With<Player>>();
+            let (h, s) = q.iter(ecs).next().expect("player exists");
+            assert_eq!(h.0, 100, "invincible player Health must be unchanged");
+            assert_eq!(s.0, 80, "invincible player Shield must be unchanged");
+        }
+
+        // Case B: identical player WITHOUT invincibility — the same 50-damage hit
+        // must be applied (shield absorbs first, then health).
+        {
+            let mut world = minimal_sim_world();
+            {
+                let ecs = world.ecs_world_mut();
+                ecs.spawn((
+                    Player,
+                    Health(100),
+                    Shield(80),
+                    PowerupTimers::default(), // invincibility == 0
+                ));
+            }
+            let applied = world.apply_combat_damage_to_player(50);
+            assert!(
+                applied,
+                "non-invincible player must take the hit (apply returns true)"
+            );
+            let ecs = world.ecs_world_mut();
+            let mut q = ecs.query_filtered::<(&Health, &Shield), bevy_ecs::prelude::With<Player>>();
+            let (h, s) = q.iter(ecs).next().expect("player exists");
+            assert_eq!(h.0, 100, "Health untouched: shield absorbs the 50 fully");
+            assert_eq!(s.0, 30, "Shield must drop 80 -> 30 from the 50 hit");
+        }
     }
 
     #[test]
