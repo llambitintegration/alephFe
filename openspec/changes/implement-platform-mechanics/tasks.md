@@ -71,8 +71,8 @@
 
 ## 12. Control Panel Wiring
 
-- [ ] 12.1 In `run_world_mechanics()` or a dedicated panel-check phase, when ACTION is pressed, check `can_activate_panel()` for each control panel. If a panel with `PanelAction::ActivatePlatform` is activated, call `activate_platform()` on the target platform.
-- [ ] 12.2 Add integration test: player facing panel, pressing ACTION, activates the linked platform.
+- [x] 12.1 In `run_world_mechanics()` or a dedicated panel-check phase, when ACTION is pressed, check `can_activate_panel()` for each control panel. If a panel with `PanelAction::ActivatePlatform` is activated, call `activate_platform()` on the target platform.
+- [x] 12.2 Add integration test: player facing panel, pressing ACTION, activates the linked platform.
 
 ## 13. Renderer Mesh Rebuild Integration
 

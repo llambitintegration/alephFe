@@ -3817,3 +3817,102 @@ fn linked_light_toggles_on_platform_arrival() {
         light_intensity(&mut world)
     );
 }
+
+// ──────────── Boxes 12.1–12.2: control-panel ACTION activates the linked platform ────────────
+
+/// Box 12.2: a player facing a `PanelAction::ActivatePlatform` control panel
+/// who presses ACTION must drive the *full tick path*
+/// (`process_action_key` rising-edge → `find_action_key_target` →
+/// `ActionTarget::Panel` → `execute_panel_action` → `activate_platform`) and
+/// leave the linked target platform extending, even though the platform carries
+/// NO activation flags of its own (it is purely panel-driven).
+///
+/// Geometry (from `make_test_map`): the player starts in poly 0 at world
+/// (512,512) = (0.5, 0.5) WU, facing 0 (east, +X). The shared wall between poly
+/// 0 and poly 1 is line 0, running from (1.0, 0.0) to (1.0, 1.0) WU. A ray east
+/// from the player crosses line 0 at distance 0.5 WU — within the 1.5 WU
+/// control-panel activation range — so a panel on line 0 is the ACTION target.
+/// The panel targets the platform whose `polygon_index == 1`.
+#[test]
+fn box122_control_panel_action_activates_linked_platform() {
+    use marathon_sim::world_mechanics::panels::{ControlPanel, ControlPanels, PanelAction};
+    use marathon_sim::{Platform, PlatformState, PlatformType};
+
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    {
+        let ecs = world.ecs_world_mut();
+
+        // The panel-driven target platform sits on poly 1, currently at rest.
+        // It carries NO static activation flags, so nothing but the panel can
+        // move it — that isolates the control-panel path under test.
+        ecs.spawn(Platform {
+            polygon_index: 1,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.125,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0, // no self-activation: only the panel can move it
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
+        });
+
+        // A control panel on line 0 (the shared east wall the player faces)
+        // whose action activates the platform on polygon 1.
+        ecs.insert_resource(ControlPanels(vec![ControlPanel {
+            line_index: 0,
+            side: 0,
+            action: PanelAction::ActivatePlatform { platform_index: 1 },
+            max_distance: 1.5,
+        }]));
+    }
+
+    // Before any ACTION press the panel-driven platform is at rest.
+    let target_state = |w: &mut SimWorld| -> PlatformState {
+        let ecs = w.ecs_world_mut();
+        let mut q = ecs.query::<&Platform>();
+        q.iter(ecs)
+            .find(|p| p.polygon_index == 1)
+            .map(|p| p.state)
+            .expect("panel-target platform present")
+    };
+
+    assert_eq!(
+        target_state(&mut world),
+        PlatformState::AtRest,
+        "panel-driven platform must start at rest (no ACTION pressed yet)"
+    );
+
+    // A tick with NO input must leave it at rest — the platform has no
+    // self-activation flags, so only the panel can move it.
+    world.tick(ActionFlags::default().into());
+    assert_eq!(
+        target_state(&mut world),
+        PlatformState::AtRest,
+        "without an ACTION press the panel must not fire and the platform stays at rest"
+    );
+
+    // Press ACTION while facing the panel: rising edge -> raycast hits the
+    // panel on line 0 -> execute_panel_action -> activate_platform on poly 1.
+    let action = ActionFlags::new(ActionFlags::ACTION);
+    world.tick(action.into());
+    assert_eq!(
+        target_state(&mut world),
+        PlatformState::Extending,
+        "pressing ACTION while facing the ActivatePlatform panel must activate \
+         (start extending) the linked platform on polygon 1"
+    );
+}
