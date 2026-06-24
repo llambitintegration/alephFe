@@ -337,11 +337,8 @@ fn drain_events_does_not_panic() {
     let events = world.drain_events();
     // No level teleporters in our test map, so no teleport events expected
     for event in &events {
-        match event {
-            marathon_sim::world::SimEvent::LevelTeleport { .. } => {
-                panic!("Unexpected level teleport in simple test map")
-            }
-            _ => {}
+        if let marathon_sim::world::SimEvent::LevelTeleport { .. } = event {
+            panic!("Unexpected level teleport in simple test map")
         }
     }
 }
