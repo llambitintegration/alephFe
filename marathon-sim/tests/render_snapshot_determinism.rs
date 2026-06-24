@@ -5,7 +5,7 @@
 //!   - 7.1 snapshots can be produced headlessly after every tick;
 //!   - 7.2 two same-seed runs yield byte-identical per-tick snapshot streams;
 //!   - 7.3 calling `render_snapshot` between ticks does not perturb the
-//!         deterministic tick sequence vs. a reference run that omits it.
+//!     deterministic tick sequence vs. a reference run that omits it.
 
 use marathon_formats::map::*;
 use marathon_formats::*;

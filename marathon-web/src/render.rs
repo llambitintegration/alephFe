@@ -1542,7 +1542,9 @@ fn setup_input_handlers(canvas: &web_sys::HtmlCanvasElement, state: Rc<RefCell<G
     lock_change.forget();
 }
 
-/// Shared, self-referential handle for the requestAnimationFrame closure.
+/// Self-referential handle for the `requestAnimationFrame` render loop: the
+/// closure is stored behind an `Rc<RefCell<Option<…>>>` so it can re-schedule
+/// itself by reading its own slot on each frame.
 type RenderLoopHandle = Rc<RefCell<Option<Closure<dyn FnMut()>>>>;
 
 fn start_render_loop(state: Rc<RefCell<GameState>>) {

@@ -142,7 +142,7 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(42);
         let def = make_damage(20, 10, 1.0, 0);
         let dmg = calculate_damage(&def, 0, 0, &mut rng);
-        assert!(dmg >= 20 && dmg <= 30);
+        assert!((20..=30).contains(&dmg));
     }
 
     #[test]

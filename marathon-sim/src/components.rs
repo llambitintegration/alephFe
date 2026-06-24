@@ -214,6 +214,17 @@ pub struct Platform {
     pub linked_platforms: Vec<usize>,
     /// Indices of lights toggled when this platform reaches its endpoints.
     pub linked_lights: Vec<usize>,
+    /// Sound effect index played when the platform STARTS moving (begins
+    /// extending or returning). Marathon platform definitions carry a starting
+    /// sound; map `StaticPlatformData` does not expose it, so the spawn path
+    /// defaults this to 0.
+    #[serde(default)]
+    pub start_sound: u16,
+    /// Sound effect index played when the platform STOPS moving (reaches its
+    /// extended or resting endpoint). Defaults to 0 from the spawn path for the
+    /// same reason as `start_sound`.
+    #[serde(default)]
+    pub stop_sound: u16,
 }
 
 /// Platform behavior type (Marathon platform definition type field).
@@ -527,7 +538,7 @@ mod tests {
         // Copy + Clone + Debug smoke check.
         let a = LightState::SecondaryInactive;
         let b = a; // Copy
-        let c = a.clone(); // Clone
+        let c = a; // Clone (Copy type)
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_eq!(
@@ -549,7 +560,7 @@ mod tests {
         // Copy + Clone + PartialEq behavior.
         let a = PlatformType::Teleporter;
         let b = a; // Copy
-        let c = a.clone(); // Clone
+        let c = a; // Clone (Copy type)
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(PlatformType::FromFloor, PlatformType::FromCeiling);

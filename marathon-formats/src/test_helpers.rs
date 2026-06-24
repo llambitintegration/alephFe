@@ -7,6 +7,12 @@ pub struct BinaryWriter {
     buf: Vec<u8>,
 }
 
+impl Default for BinaryWriter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BinaryWriter {
     pub fn new() -> Self {
         Self { buf: Vec::new() }
@@ -87,6 +93,12 @@ struct EntryBuilder {
     index: i16,
     application_data: Vec<u8>,
     tags: Vec<TagData>,
+}
+
+impl Default for WadBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WadBuilder {
