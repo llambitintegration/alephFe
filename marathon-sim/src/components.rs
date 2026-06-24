@@ -538,7 +538,7 @@ mod tests {
         // Copy + Clone + Debug smoke check.
         let a = LightState::SecondaryInactive;
         let b = a; // Copy
-        let c = a.clone(); // Clone
+        let c = a; // Clone (Copy type)
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_eq!(
@@ -560,7 +560,7 @@ mod tests {
         // Copy + Clone + PartialEq behavior.
         let a = PlatformType::Teleporter;
         let b = a; // Copy
-        let c = a.clone(); // Clone
+        let c = a; // Clone (Copy type)
         assert_eq!(a, b);
         assert_eq!(a, c);
         assert_ne!(PlatformType::FromFloor, PlatformType::FromCeiling);

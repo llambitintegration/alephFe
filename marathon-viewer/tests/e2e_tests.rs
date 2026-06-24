@@ -134,7 +134,7 @@ fn test_mesh_vertex_count_sanity() {
         for polygon in &map.polygons {
             let vc = polygon.vertex_count as usize;
             assert!(
-                vc >= 3 && vc <= 8,
+                (3..=8).contains(&vc),
                 "polygon vertex count {vc} out of range [3,8]"
             );
 
@@ -397,7 +397,7 @@ fn test_light_data_present() {
             for (i, light) in lights.iter().enumerate() {
                 let intensity = light.primary_active.intensity;
                 assert!(
-                    intensity >= 0.0 && intensity <= 2.0,
+                    (0.0..=2.0).contains(&intensity),
                     "light {i} intensity {intensity} out of expected range"
                 );
             }

@@ -649,6 +649,7 @@ mod tests {
         build_header(-1, 0, -1, 0)
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn build_collection_def(
         version: i16,
         ctype: i16,
@@ -987,7 +988,7 @@ mod tests {
         data.extend_from_slice(&build_bitmap_header(4, 3, 4, 0));
 
         // Row address pointers: (3 + 1) * 4 = 16 bytes
-        data.extend_from_slice(&vec![0u8; 16]);
+        data.extend_from_slice(&[0u8; 16]);
 
         let pixel_data = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
         data.extend_from_slice(&pixel_data);
@@ -1016,7 +1017,7 @@ mod tests {
         data.extend_from_slice(&build_bitmap_header(4, 3, -1, 0));
 
         // Row address pointers: (3 + 1) * 4 = 16 bytes
-        data.extend_from_slice(&vec![0u8; 16]);
+        data.extend_from_slice(&[0u8; 16]);
 
         // Row 0: first=1, last=3 → pixels [0, 0xAA, 0xBB, 0]
         data.extend_from_slice(&1_i16.to_be_bytes());
@@ -1055,7 +1056,7 @@ mod tests {
 
         // Column-order: row_count = width = 2
         // Row address pointers: (2 + 1) * 4 = 12 bytes
-        data.extend_from_slice(&vec![0u8; 12]);
+        data.extend_from_slice(&[0u8; 12]);
 
         // Column 0: fully transparent
         data.extend_from_slice(&0_i16.to_be_bytes());
@@ -1086,7 +1087,7 @@ mod tests {
         data.extend_from_slice(&build_bitmap_header(5, 1, -1, 0));
 
         // Row address pointers: (1 + 1) * 4 = 8 bytes
-        data.extend_from_slice(&vec![0u8; 8]);
+        data.extend_from_slice(&[0u8; 8]);
 
         // Single row: first=2, last=3 → one pixel
         data.extend_from_slice(&2_i16.to_be_bytes());
@@ -1111,7 +1112,7 @@ mod tests {
         data.extend_from_slice(&build_bitmap_header(3, 1, -1, 0));
 
         // Row address pointers: (1 + 1) * 4 = 8 bytes
-        data.extend_from_slice(&vec![0u8; 8]);
+        data.extend_from_slice(&[0u8; 8]);
 
         // Fully opaque: first=0, last=3
         data.extend_from_slice(&0_i16.to_be_bytes());
@@ -1214,7 +1215,7 @@ mod tests {
         // Bitmap offset table + data
         data.extend_from_slice(&bm_data_pos.to_be_bytes());
         data.extend_from_slice(&build_bitmap_header(4, 1, 4, 0));
-        data.extend_from_slice(&vec![0u8; 8]); // row ptrs: (1+1)*4
+        data.extend_from_slice(&[0u8; 8]); // row ptrs: (1+1)*4
         data.extend_from_slice(&[10, 20, 30, 40]);
 
         let collection = parse_collection(&data).unwrap();
