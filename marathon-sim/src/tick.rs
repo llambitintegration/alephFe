@@ -176,17 +176,49 @@ impl SimWorld {
         self.world.resource_mut::<MapGeometry>().clear_changes();
 
         // Box 5.2 (collect phase): tick each platform, noting whether it moved.
+        //
+        // Box 9.1 (arrival detection): we also capture each platform's state
+        // BEFORE ticking and compare it to the post-tick state. A platform that
+        // was NOT at a destination before this tick but IS now (`AtExtended` or
+        // `AtRest`) JUST arrived this tick — that transition (not the steady
+        // state) is what fires the linked-platform / linked-light triggers, so
+        // they fire exactly once on arrival and never on the ticks the platform
+        // merely sits parked at its destination. Arrival platforms' linked
+        // indices are collected here and dispatched after the other passes.
         let mut updates: Vec<(usize, f32, f32, bool)> = Vec::new();
+        let mut arrival_triggers: Vec<crate::world_mechanics::platforms::PlatformTriggerEvent> =
+            Vec::new();
         {
+            use crate::PlatformState;
             let mut query = self.world.query::<&mut crate::Platform>();
             for mut platform in query.iter_mut(&mut self.world) {
                 let prev_floor = platform.current_floor;
                 let prev_ceiling = platform.current_ceiling;
+                let prev_state = platform.state;
                 let (floor, ceiling) =
                     crate::world_mechanics::platforms::tick_platform(&mut platform);
                 let moved = (floor - prev_floor).abs() > f32::EPSILON
                     || (ceiling - prev_ceiling).abs() > f32::EPSILON;
                 updates.push((platform.polygon_index, floor, ceiling, moved));
+
+                // Box 9.1: detect the arrival TRANSITION (not the steady state).
+                let was_at_destination = matches!(
+                    prev_state,
+                    PlatformState::AtExtended | PlatformState::AtRest
+                );
+                let now_at_destination = matches!(
+                    platform.state,
+                    PlatformState::AtExtended | PlatformState::AtRest
+                );
+                if !was_at_destination && now_at_destination {
+                    arrival_triggers.extend(
+                        crate::world_mechanics::platforms::check_platform_triggers(
+                            &platform,
+                            &platform.linked_platforms,
+                            &platform.linked_lights,
+                        ),
+                    );
+                }
             }
         }
 
@@ -232,6 +264,97 @@ impl SimWorld {
         // removed when this pass landed, so crush runs exactly once per
         // (platform, entity) per tick.
         self.run_platform_crush();
+
+        // Boxes 9.1 + 9.2: dispatch the linked-platform / linked-light triggers
+        // gathered above for platforms that JUST arrived this tick. Runs last so
+        // the trigger set was frozen from this tick's arrivals before any target
+        // platform was mutated — a cascade-activated platform is not itself
+        // re-evaluated for arrival this tick, so a chain cannot fire more than
+        // one hop per tick and cannot self-trigger into a loop.
+        self.run_platform_linked_triggers(arrival_triggers);
+    }
+
+    /// Linked-platform cascade and linked-light toggle dispatch (boxes 9.1–9.2).
+    ///
+    /// Consumes the [`PlatformTriggerEvent`]s collected from platforms that
+    /// reached `AtExtended`/`AtRest` this tick (the arrival transition, gathered
+    /// in `run_world_mechanics`). For each event:
+    ///   * `ActivatePlatform` — activate the target platform. The event's
+    ///     `target_index` is a POLYGON index (the same index space the control-
+    ///     panel `ActivatePlatform { platform_index }` path resolves against in
+    ///     `execute_panel_action`): the target platform is the one whose
+    ///     `polygon_index` matches. `activate_platform` reverses a target that is
+    ///     already in motion and starts a resting one moving.
+    ///   * `ToggleLight` — toggle the target light directly (mirrors
+    ///     `execute_panel_action`'s `ToggleLight` arm). There is no light-toggle
+    ///     `SimEvent` variant, and the `Light` component is the live light state
+    ///     the renderer reads, so the toggle is applied straight to it: a lit
+    ///     light begins deactivating (snapped dark), a dark light begins
+    ///     activating (snapped lit).
+    ///
+    /// Borrow-checker discipline (collect-then-apply, as the other passes do):
+    /// the trigger list was fully gathered before this method runs, and the
+    /// platform and light mutations each take their own scoped query, so no
+    /// query borrow is held across a mutation. Targets are deduplicated so a
+    /// platform/light referenced by two arrivals in the same tick is activated
+    /// or toggled at most once, preventing an even/odd double-toggle.
+    fn run_platform_linked_triggers(
+        &mut self,
+        triggers: Vec<crate::world_mechanics::platforms::PlatformTriggerEvent>,
+    ) {
+        use crate::world_mechanics::platforms::PlatformTriggerEventType;
+
+        if triggers.is_empty() {
+            return;
+        }
+
+        // Box 9.2: partition into the set of platform polygons to activate and
+        // the set of light indices to toggle, deduplicating each so a target hit
+        // by multiple arrivals this tick is acted on exactly once.
+        let mut activate_polys: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        let mut toggle_lights: std::collections::HashSet<usize> = std::collections::HashSet::new();
+        for ev in &triggers {
+            match ev.trigger_type {
+                PlatformTriggerEventType::ActivatePlatform => {
+                    activate_polys.insert(ev.target_index);
+                }
+                PlatformTriggerEventType::ToggleLight => {
+                    toggle_lights.insert(ev.target_index);
+                }
+            }
+        }
+
+        // Box 9.2: activate each linked target platform (resolved by polygon
+        // index). `activate_platform` handles re-activation/reversal internally.
+        if !activate_polys.is_empty() {
+            let mut q = self.world.query::<&mut crate::Platform>();
+            for mut platform in q.iter_mut(&mut self.world) {
+                if activate_polys.contains(&platform.polygon_index) {
+                    crate::world_mechanics::platforms::activate_platform(&mut platform);
+                }
+            }
+        }
+
+        // Box 9.2: toggle each linked light. Same snap-to-extreme behavior as the
+        // control-panel `ToggleLight` action so the toggle reads immediately and
+        // the light's own state machine carries on from the new state next tick.
+        if !toggle_lights.is_empty() {
+            let mut q = self.world.query::<&mut crate::Light>();
+            for mut light in q.iter_mut(&mut self.world) {
+                if toggle_lights.contains(&light.light_index) {
+                    let lit = light.current_intensity > 0.5;
+                    light.state = if lit {
+                        crate::components::LightState::BecomingInactive
+                    } else {
+                        crate::components::LightState::BecomingActive
+                    };
+                    light.initial_intensity = light.current_intensity;
+                    light.final_intensity = if lit { 0.0 } else { 1.0 };
+                    light.current_intensity = light.final_intensity;
+                    light.phase = 0;
+                }
+            }
+        }
     }
 
     /// Crush resolution for moving platforms (boxes 8.1–8.3).

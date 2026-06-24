@@ -3597,3 +3597,211 @@ fn box63_action_on_moving_platform_reverses_exactly_once() {
         snap.platforms[0].current_floor
     );
 }
+
+/// Box 9.x: when a platform reaches the end of its travel (`AtExtended`), its
+/// `linked_platforms` are activated — a cascade. Platform A (player-entry
+/// activated, on the player's polygon) extends; B (on another polygon, at rest,
+/// no entry flag of its own) is listed in A's `linked_platforms` by B's polygon
+/// index. B must stay `AtRest` while A is in flight and only start moving on the
+/// tick A arrives at `AtExtended`.
+#[test]
+fn linked_platform_cascades_on_arrival() {
+    use marathon_sim::{Platform, PlatformState, PlatformType};
+
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    // Platform A on the player's polygon (0), player-entry activated, linked to
+    // a target platform sitting on polygon 1. Short travel so it arrives fast.
+    let poly_a = 0usize;
+    let poly_b = 1usize;
+    {
+        let ecs = world.ecs_world_mut();
+        ecs.spawn(Platform {
+            polygon_index: poly_a,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5, // reaches 1.0 in two ticks
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0x0001, // PLATFORM_ACTIVATE_ON_PLAYER_ENTRY
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: vec![poly_b], // cascade target (by polygon index)
+            linked_lights: Vec::new(),
+        });
+        // Target platform B: at rest, NO entry flag of its own. The only thing
+        // that can start it moving is the cascade from A.
+        ecs.spawn(Platform {
+            polygon_index: poly_b,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0,
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: Vec::new(),
+        });
+    }
+
+    let state_of = |w: &mut SimWorld, poly: usize| -> PlatformState {
+        let snap = w.snapshot();
+        snap.platforms
+            .iter()
+            .find(|p| p.polygon_index == poly)
+            .expect("platform present")
+            .state
+    };
+
+    // Tick 1: player-entry activates A -> Extending; A still mid-travel; B at rest.
+    world.tick(ActionFlags::default().into());
+    assert_eq!(state_of(&mut world, poly_a), PlatformState::Extending);
+    assert_eq!(
+        state_of(&mut world, poly_b),
+        PlatformState::AtRest,
+        "B must not move while A is still extending"
+    );
+
+    // Drive A to its extended position. While A is in flight, B stays AtRest.
+    // On the tick A first reaches AtExtended, its arrival fires the
+    // linked-platform trigger, which activates B (B leaves AtRest).
+    let mut a_arrived = false;
+    for _ in 0..6 {
+        world.tick(ActionFlags::default().into());
+        if state_of(&mut world, poly_a) == PlatformState::AtExtended {
+            a_arrived = true;
+            break;
+        }
+        // Until A arrives, the cascade must not have fired.
+        assert_eq!(
+            state_of(&mut world, poly_b),
+            PlatformState::AtRest,
+            "B must not move before A arrives"
+        );
+    }
+    assert!(a_arrived, "A should reach its extended position");
+    assert_ne!(
+        state_of(&mut world, poly_b),
+        PlatformState::AtRest,
+        "B must be activated by A's arrival cascade (linked_platforms)"
+    );
+}
+
+/// Box 9.x: a platform reaching the end of its travel toggles its
+/// `linked_lights`. Platform A (player-entry activated) is linked to a light;
+/// the light starts fully lit (steady Constant function so the auto-cycle holds
+/// it). When A arrives at `AtExtended`, the light-toggle effect snaps the light
+/// to the opposite extreme (dark).
+#[test]
+fn linked_light_toggles_on_platform_arrival() {
+    use marathon_sim::{
+        Light, LightFunction, LightFunctionSpec, LightState, LightType, Platform, PlatformState,
+        PlatformType,
+    };
+
+    let map = make_test_map();
+    let physics = make_test_physics();
+    let config = SimConfig::default();
+    let mut world = SimWorld::new(&map, &physics, &config).unwrap();
+
+    let poly_a = 0usize;
+    let light_idx = 5usize;
+
+    // A Constant lighting spec at full intensity: update_lights holds the light
+    // steady (no auto-ramp), so the only thing that can change its intensity is
+    // the platform-arrival light-toggle. Mirrors the light-switch test pattern.
+    let spec = LightFunctionSpec {
+        function: LightFunction::Constant,
+        period: 1,
+        delta_period: 0,
+        intensity: 1.0,
+        delta_intensity: 0.0,
+    };
+    {
+        let ecs = world.ecs_world_mut();
+        ecs.spawn(Platform {
+            polygon_index: poly_a,
+            floor_rest: 0.0,
+            floor_extended: 1.0,
+            ceiling_rest: 3.0,
+            ceiling_extended: 3.0,
+            current_floor: 0.0,
+            current_ceiling: 3.0,
+            speed: 0.5,
+            state: PlatformState::AtRest,
+            return_delay: 30,
+            delay_remaining: 0,
+            activation_flags: 0x0001, // PLATFORM_ACTIVATE_ON_PLAYER_ENTRY
+            crushes: false,
+            platform_type: PlatformType::FromFloor,
+            linked_platforms: Vec::new(),
+            linked_lights: vec![light_idx], // toggle target (by light index)
+        });
+        ecs.spawn(Light {
+            light_index: light_idx,
+            light_type: LightType::Normal,
+            state: LightState::PrimaryActive,
+            flags: 0,
+            phase: 0,
+            period: 1,
+            current_intensity: 1.0,
+            initial_intensity: 1.0,
+            final_intensity: 1.0,
+            functions: [spec; 6],
+            tag: 0,
+        });
+    }
+
+    let light_intensity = |w: &mut SimWorld| -> f32 {
+        w.light_intensities()
+            .get(light_idx)
+            .copied()
+            .expect("light present")
+    };
+
+    // Lit before any arrival.
+    assert!(light_intensity(&mut world) > 0.5, "light starts lit");
+
+    // Tick 1: player-entry activates A -> Extending. Not arrived yet, no toggle.
+    world.tick(ActionFlags::default().into());
+    assert!(
+        light_intensity(&mut world) > 0.5,
+        "light must stay lit while platform is still extending"
+    );
+
+    // Drive A to AtExtended. While in flight the light stays lit; on the arrival
+    // tick the linked-light toggle snaps the lit light to dark.
+    let mut arrived = false;
+    for _ in 0..6 {
+        world.tick(ActionFlags::default().into());
+        if world.snapshot().platforms[0].state == PlatformState::AtExtended {
+            arrived = true;
+            break;
+        }
+        assert!(
+            light_intensity(&mut world) > 0.5,
+            "light must stay lit before the platform arrives"
+        );
+    }
+    assert!(arrived, "platform should have arrived at AtExtended");
+    assert!(
+        light_intensity(&mut world) < 0.5,
+        "platform arrival must toggle the linked light off (was lit, expected dark), got {}",
+        light_intensity(&mut world)
+    );
+}

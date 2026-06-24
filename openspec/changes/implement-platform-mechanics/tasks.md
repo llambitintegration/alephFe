@@ -52,9 +52,9 @@
 
 ## 9. Linked Platform and Light Event Dispatch
 
-- [ ] 9.1 In `run_world_mechanics()`, after ticking platforms, for each platform that just reached `AtExtended` or `AtRest`, call `check_platform_triggers()` with the platform's `linked_platforms` and `linked_lights`.
-- [ ] 9.2 Process the returned `PlatformTriggerEvent` list: for `ActivatePlatform` events, activate the target platform. For `ToggleLight` events, emit a light toggle event (or directly toggle the light component if the light system is wired).
-- [ ] 9.3 Add integration tests for linked platform cascading and light toggling.
+- [x] 9.1 In `run_world_mechanics()`, after ticking platforms, for each platform that just reached `AtExtended` or `AtRest`, call `check_platform_triggers()` with the platform's `linked_platforms` and `linked_lights`.
+- [x] 9.2 Process the returned `PlatformTriggerEvent` list: for `ActivatePlatform` events, activate the target platform. For `ToggleLight` events, emit a light toggle event (or directly toggle the light component if the light system is wired).
+- [x] 9.3 Add integration tests for linked platform cascading and light toggling.
 
 ## 10. Teleporter Platform Handling
 
