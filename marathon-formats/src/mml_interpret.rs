@@ -762,7 +762,11 @@ pub struct StubOverride;
 
 /// One stub-section dispatch entry: the optional document section, its name for
 /// the not-yet-implemented notice, and the interpreter stub to invoke.
-type StubEntry<'a> = (&'a Option<MmlSection>, &'a str, fn(&MmlSection) -> StubOverride);
+type StubEntry<'a> = (
+    &'a Option<MmlSection>,
+    &'a str,
+    fn(&MmlSection) -> StubOverride,
+);
 
 /// Emit the one-time "not yet implemented" notice for a stubbed section.
 fn warn_stub(section_name: &str) {
