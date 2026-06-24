@@ -20,3 +20,5 @@ tokio = { version = "1", features = ["sync"] }
 
 [dev-dependencies]
 pretty_assertions = "1"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"

@@ -1,0 +1,48 @@
+# Scenario manifest for golden-data TDD framework.
+#
+# This is a REPRESENTATIVE manifest exercising the parser in
+# tests/scenario_manifest.rs. The full golden-data population
+# (boxes 1.1-1.6) is tracked separately; this file is intentionally
+# minimal -- enough to make the parser real and tested.
+
+# ── Sources: upstream data repos pinned to a commit ────────────────
+[sources.marathon-2]
+repo = "data-marathon-2"
+commit = "eaf21a7"
+
+[sources.marathon-1]
+repo = "data-marathon"
+commit = "0000000"
+
+# ── Levels ─────────────────────────────────────────────────────────
+[[levels]]
+id = "m2-waterloo"
+source = "marathon-2"
+wad_path = "Map"
+level_index = 0
+name = "Waterloo Waterpark"
+tier = "tier1"
+features = ["media", "platforms"]
+
+[[levels]]
+id = "m1-arrival"
+source = "marathon-1"
+wad_path = "Map"
+level_index = 0
+name = "Arrival"
+tier = "tier1"
+features = ["platforms"]
+
+# ── Tier 1 golden geometry counts, keyed by level id ───────────────
+# Values confirmed in tests/real_data_tests.rs for Waterloo Waterpark.
+#
+# A dedicated top-level `[tier1.<id>]` table (rather than
+# `[levels.tier1.<id>]`) keeps the golden counts unambiguous: in TOML,
+# `[[levels]]` makes `levels` an array of tables, so a sibling
+# `[levels.tier1]` would attach to the LAST array element instead of
+# forming a stable top-level lookup. A separate `[tier1]` table avoids
+# that ambiguity.
+[tier1.m2-waterloo]
+endpoints = 716
+lines = 1106
+polygons = 369
