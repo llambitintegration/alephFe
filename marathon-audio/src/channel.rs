@@ -183,7 +183,6 @@ impl ChannelPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use marathon_formats::sounds::SoundBehavior;
 
     // We can't easily construct StaticSoundHandle in tests without a running
     // audio manager, so channel pool tests that require handles are deferred

@@ -154,6 +154,11 @@ pub enum PlatformTrigger {
     ProjectileImpact,
 }
 
+/// Damage type emitted when a platform crushes an entity. Mirrors Marathon's
+/// `_damage_crushing` (index 7 in `map.h`'s damage-type enumeration), carried in
+/// `SimEvent::EntityDamaged.damage_type`.
+pub const PLATFORM_CRUSH_DAMAGE_TYPE: i16 = 7;
+
 /// Check if a platform is crushing an entity.
 ///
 /// Returns damage if crushing, or whether the platform should reverse.
@@ -253,6 +258,8 @@ mod tests {
             platform_type: PlatformType::FromFloor,
             linked_platforms: Vec::new(),
             linked_lights: Vec::new(),
+            start_sound: 0,
+            stop_sound: 0,
         }
     }
 

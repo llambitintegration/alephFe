@@ -26,53 +26,53 @@
 
 ## 5. World Mechanics Orchestration in tick.rs
 
-- [ ] 5.1 Add a `run_world_mechanics(&mut self)` method to `SimWorld` in `marathon-sim/src/tick.rs`.
-- [ ] 5.2 In `run_world_mechanics()`, query all `Platform` components and call `tick_platform()` on each. After ticking, write `current_floor` and `current_ceiling` into `MapGeometry.floor_heights[polygon_index]` and `MapGeometry.ceiling_heights[polygon_index]`. Set `changed_polygons[polygon_index] = true` and `has_changes = true` for any platform that moved.
-- [ ] 5.3 Call `self.run_world_mechanics()` from `SimWorld::tick()` after `self.run_player_physics()` and before the tick counter increment.
-- [ ] 5.4 At the start of `run_world_mechanics()`, clear the previous tick's dirty flags by calling `MapGeometry::clear_changes()`.
+- [x] 5.1 Add a `run_world_mechanics(&mut self)` method to `SimWorld` in `marathon-sim/src/tick.rs`.
+- [x] 5.2 In `run_world_mechanics()`, query all `Platform` components and call `tick_platform()` on each. After ticking, write `current_floor` and `current_ceiling` into `MapGeometry.floor_heights[polygon_index]` and `MapGeometry.ceiling_heights[polygon_index]`. Set `changed_polygons[polygon_index] = true` and `has_changes = true` for any platform that moved.
+- [x] 5.3 Call `self.run_world_mechanics()` from `SimWorld::tick()` after `self.run_player_physics()` and before the tick counter increment.
+- [x] 5.4 At the start of `run_world_mechanics()`, clear the previous tick's dirty flags by calling `MapGeometry::clear_changes()`.
 
 ## 6. Player-Entry and Action-Key Activation
 
-- [ ] 6.1 In `run_world_mechanics()`, after ticking platforms, query the player's `PolygonIndex`. Build a lookup from polygon index to platform entity. If the player's polygon matches a platform, check `should_activate()` with `PlatformTrigger::PlayerEntry` and activate if appropriate.
-- [ ] 6.2 Read the `TickInput` action flags. If ACTION is pressed and the player's polygon matches a platform with `ACTIVATE_ON_ACTION_KEY`, call the extended `activate_platform()` (which handles re-activation).
-- [ ] 6.3 Add integration tests: player on platform polygon with entry flag triggers activation; player pressing ACTION on action-key platform triggers activation; action on moving platform reverses it.
+- [x] 6.1 In `run_world_mechanics()`, after ticking platforms, query the player's `PolygonIndex`. Build a lookup from polygon index to platform entity. If the player's polygon matches a platform, check `should_activate()` with `PlatformTrigger::PlayerEntry` and activate if appropriate.
+- [x] 6.2 Read the `TickInput` action flags. If ACTION is pressed and the player's polygon matches a platform with `ACTIVATE_ON_ACTION_KEY`, call the extended `activate_platform()` (which handles re-activation).
+- [x] 6.3 Add integration tests: player on platform polygon with entry flag triggers activation; player pressing ACTION on action-key platform triggers activation; action on moving platform reverses it.
 
 ## 7. Monster and Projectile Activation
 
-- [ ] 7.1 In `run_world_mechanics()`, query all `Monster` entities with `PolygonIndex`. For each monster, check if its polygon matches a platform with `ACTIVATE_ON_MONSTER_ENTRY` and activate if appropriate.
-- [ ] 7.2 Query all `Projectile` entities with `PolygonIndex`. For each projectile, check if its polygon matches a platform with `ACTIVATE_ON_PROJECTILE` and activate if appropriate.
-- [ ] 7.3 Add unit tests for monster-entry and projectile-impact activation.
+- [x] 7.1 In `run_world_mechanics()`, query all `Monster` entities with `PolygonIndex`. For each monster, check if its polygon matches a platform with `ACTIVATE_ON_MONSTER_ENTRY` and activate if appropriate.
+- [x] 7.2 Query all `Projectile` entities with `PolygonIndex`. For each projectile, check if its polygon matches a platform with `ACTIVATE_ON_PROJECTILE` and activate if appropriate.
+- [x] 7.3 Add unit tests for monster-entry and projectile-impact activation.
 
 ## 8. Crush Damage Integration
 
-- [ ] 8.1 In `run_world_mechanics()`, after ticking platforms, for each moving platform query all entities (Player, Monster) with `PolygonIndex` matching the platform polygon. For each such entity, call `check_platform_crush()` with the entity's `Position.0.z` and `EntityHeight.0`.
-- [ ] 8.2 If `PlatformCrushResult::Crush`, emit `SimEvent::EntityDamaged` with the entity handle, damage amount, and a platform-crush damage type.
-- [ ] 8.3 If `PlatformCrushResult::Reverse`, toggle the platform state: Extending becomes Returning, Returning becomes Extending.
-- [ ] 8.4 Add unit tests for crush: crushing platform damages entity (event emitted), non-crushing platform reverses on obstruction.
+- [x] 8.1 In `run_world_mechanics()`, after ticking platforms, for each moving platform query all entities (Player, Monster) with `PolygonIndex` matching the platform polygon. For each such entity, call `check_platform_crush()` with the entity's `Position.0.z` and `EntityHeight.0`.
+- [x] 8.2 If `PlatformCrushResult::Crush`, emit `SimEvent::EntityDamaged` with the entity handle, damage amount, and a platform-crush damage type.
+- [x] 8.3 If `PlatformCrushResult::Reverse`, toggle the platform state: Extending becomes Returning, Returning becomes Extending.
+- [x] 8.4 Add unit tests for crush: crushing platform damages entity (event emitted), non-crushing platform reverses on obstruction.
 
 ## 9. Linked Platform and Light Event Dispatch
 
-- [ ] 9.1 In `run_world_mechanics()`, after ticking platforms, for each platform that just reached `AtExtended` or `AtRest`, call `check_platform_triggers()` with the platform's `linked_platforms` and `linked_lights`.
-- [ ] 9.2 Process the returned `PlatformTriggerEvent` list: for `ActivatePlatform` events, activate the target platform. For `ToggleLight` events, emit a light toggle event (or directly toggle the light component if the light system is wired).
-- [ ] 9.3 Add integration tests for linked platform cascading and light toggling.
+- [x] 9.1 In `run_world_mechanics()`, after ticking platforms, for each platform that just reached `AtExtended` or `AtRest`, call `check_platform_triggers()` with the platform's `linked_platforms` and `linked_lights`.
+- [x] 9.2 Process the returned `PlatformTriggerEvent` list: for `ActivatePlatform` events, activate the target platform. For `ToggleLight` events, emit a light toggle event (or directly toggle the light component if the light system is wired).
+- [x] 9.3 Add integration tests for linked platform cascading and light toggling.
 
 ## 10. Teleporter Platform Handling
 
-- [ ] 10.1 In `run_world_mechanics()`, when a Teleporter platform (type 5) is activated while the player is on it, emit `SimEvent::LevelTeleport` instead of performing height movement.
-- [ ] 10.2 Skip height sync for Teleporter platforms (they do not change MapGeometry).
-- [ ] 10.3 Add a unit test verifying teleporter activation emits LevelTeleport and does not modify heights.
+- [x] 10.1 In `run_world_mechanics()`, when a Teleporter platform (type 5) is activated while the player is on it, emit `SimEvent::LevelTeleport` instead of performing height movement.
+- [x] 10.2 Skip height sync for Teleporter platforms (they do not change MapGeometry).
+- [x] 10.3 Add a unit test verifying teleporter activation emits LevelTeleport and does not modify heights.
 
 ## 11. Sound Event Emission
 
-- [ ] 11.1 Track previous platform state before ticking. After ticking, compare to detect state transitions (AtRest->Extending, AtExtended->Returning, etc.).
-- [ ] 11.2 Emit `SimEvent::SoundTrigger` for start-movement transitions (AtRest->Extending, AtExtended->Returning) with the platform's start sound index.
-- [ ] 11.3 Emit `SimEvent::SoundTrigger` for stop-movement transitions (reaching AtExtended, reaching AtRest) with the platform's stop sound index.
-- [ ] 11.4 Add unit test verifying correct sound events are emitted on platform state transitions.
+- [x] 11.1 Track previous platform state before ticking. After ticking, compare to detect state transitions (AtRest->Extending, AtExtended->Returning, etc.).
+- [x] 11.2 Emit `SimEvent::SoundTrigger` for start-movement transitions (AtRest->Extending, AtExtended->Returning) with the platform's start sound index.
+- [x] 11.3 Emit `SimEvent::SoundTrigger` for stop-movement transitions (reaching AtExtended, reaching AtRest) with the platform's stop sound index.
+- [x] 11.4 Add unit test verifying correct sound events are emitted on platform state transitions.
 
 ## 12. Control Panel Wiring
 
-- [ ] 12.1 In `run_world_mechanics()` or a dedicated panel-check phase, when ACTION is pressed, check `can_activate_panel()` for each control panel. If a panel with `PanelAction::ActivatePlatform` is activated, call `activate_platform()` on the target platform.
-- [ ] 12.2 Add integration test: player facing panel, pressing ACTION, activates the linked platform.
+- [x] 12.1 In `run_world_mechanics()` or a dedicated panel-check phase, when ACTION is pressed, check `can_activate_panel()` for each control panel. If a panel with `PanelAction::ActivatePlatform` is activated, call `activate_platform()` on the target platform.
+- [x] 12.2 Add integration test: player facing panel, pressing ACTION, activates the linked platform.
 
 ## 13. Renderer Mesh Rebuild Integration
 
@@ -82,5 +82,5 @@
 
 ## 14. Snapshot/Serialization Update
 
-- [ ] 14.1 Update `SimSnapshot` and the `snapshot()`/`deserialize()` methods in `world.rs` to include the new `Platform` fields (`platform_type`, `linked_platforms`, `linked_lights`). Since Platform already derives Serialize/Deserialize, adding the fields should work automatically.
-- [ ] 14.2 Add a round-trip serialization test with platforms that have non-default types and linked indices.
+- [x] 14.1 Update `SimSnapshot` and the `snapshot()`/`deserialize()` methods in `world.rs` to include the new `Platform` fields (`platform_type`, `linked_platforms`, `linked_lights`). Since Platform already derives Serialize/Deserialize, adding the fields should work automatically.
+- [x] 14.2 Add a round-trip serialization test with platforms that have non-default types and linked indices.
