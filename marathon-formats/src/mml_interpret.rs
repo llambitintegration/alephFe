@@ -11,7 +11,7 @@
 //! rather than failing the whole document — matching decades of community MML
 //! written against AlephOne's forgiving parser.
 
-use crate::mml::MmlSection;
+use crate::mml::{MmlDocument, MmlSection};
 
 /// Emit a non-fatal warning for a malformed attribute value.
 ///
@@ -746,6 +746,183 @@ pub fn interpret_weapons(section: &MmlSection) -> WeaponOverrides {
     out
 }
 
+/// Placeholder value returned by the stub interpreters (box 1.14) for sections
+/// that are parsed structurally but not yet interpreted into typed overrides
+/// (`interface`, `motion_sensor`, `overhead_map`, `infravision`,
+/// `animated_textures`, `control_panels`, `platforms`, `liquids`, `sounds`,
+/// `faders`, `view`, `scenery`, `opengl`, `software`, `console`, `logging`).
+///
+/// Each stub interpreter logs a single "not yet implemented" warning and returns
+/// a [`StubOverride`]. When real interpreters land they replace the stub and its
+/// return type; until then [`StubOverride`] keeps the cascade-assembly code
+/// (box 3.x) uniform without pretending these sections carry data.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StubOverride;
+
+/// Emit the one-time "not yet implemented" notice for a stubbed section.
+fn warn_stub(section_name: &str) {
+    eprintln!("[mml] section <{section_name}> not yet implemented; ignoring overrides");
+}
+
+macro_rules! stub_interpreter {
+    ($fn_name:ident, $section_name:literal) => {
+        #[doc = concat!("Stub interpreter for the `<", $section_name, ">` section (box 1.14). ")]
+        #[doc = "Logs a \"not yet implemented\" warning and returns an empty [`StubOverride`]."]
+        pub fn $fn_name(_section: &MmlSection) -> StubOverride {
+            warn_stub($section_name);
+            StubOverride
+        }
+    };
+}
+
+stub_interpreter!(interpret_interface, "interface");
+stub_interpreter!(interpret_motion_sensor, "motion_sensor");
+stub_interpreter!(interpret_overhead_map, "overhead_map");
+stub_interpreter!(interpret_infravision, "infravision");
+stub_interpreter!(interpret_animated_textures, "animated_textures");
+stub_interpreter!(interpret_control_panels, "control_panels");
+stub_interpreter!(interpret_platforms, "platforms");
+stub_interpreter!(interpret_liquids, "liquids");
+stub_interpreter!(interpret_sounds, "sounds");
+stub_interpreter!(interpret_faders, "faders");
+stub_interpreter!(interpret_view, "view");
+stub_interpreter!(interpret_scenery, "scenery");
+stub_interpreter!(interpret_opengl, "opengl");
+stub_interpreter!(interpret_software, "software");
+stub_interpreter!(interpret_console, "console");
+stub_interpreter!(interpret_logging, "logging");
+
+/// The complete set of typed overrides interpreted from a single (already
+/// layered) [`MmlDocument`] (boxes 3.1/3.2). Each field holds the result of the
+/// matching `interpret_*` function for a populated section, or that override
+/// type's default/empty value for an absent section.
+///
+/// Only sections with **implemented** interpreters get typed fields. The
+/// remaining structurally-parsed sections (box 1.14 stubs) are tracked by
+/// [`stub_sections`](Self::stub_sections): the list of section names that were
+/// present on the document but only have stub interpreters.
+///
+/// `player` is intentionally **omitted**: box 1.7 (`PlayerOverride` /
+/// `interpret_player`) is not yet implemented (no spec Requirement), so there is
+/// no typed override to aggregate. When box 1.7 lands, add a `player:
+/// PlayerOverride` field and wire it in [`from_document`](Self::from_document).
+///
+/// DEVIATION: `interpret_projectiles` and `interpret_effects` exist, but
+/// `MmlDocument` has **no** `projectiles`/`effects` section field (projectile
+/// and effect overrides are carried under other sections in the source MML), so
+/// those fields can never be populated from a document today and stay at their
+/// default empty `Vec`. They are kept here so the aggregate type is complete and
+/// ready once a corresponding document section is added.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MmlOverrideSet {
+    /// Per-monster overrides (`<monsters>` → [`interpret_monsters`]).
+    pub monsters: Vec<MonsterOverride>,
+    /// Shell-casing and weapon-order overrides (`<weapons>` → [`interpret_weapons`]).
+    pub weapons: WeaponOverrides,
+    /// Per-projectile overrides. No `MmlDocument` section field exists yet, so
+    /// always empty (see type-level DEVIATION note).
+    pub projectiles: Vec<ProjectileOverride>,
+    /// Per-effect overrides. No `MmlDocument` section field exists yet, so always
+    /// empty (see type-level DEVIATION note).
+    pub effects: Vec<EffectOverride>,
+    /// Dynamic-limit overrides (`<dynamic_limits>` → [`interpret_dynamic_limits`]).
+    pub dynamic_limits: DynamicLimitsOverride,
+    /// Per-item overrides (`<items>` → [`interpret_items`]).
+    pub items: Vec<ItemOverride>,
+    /// Landscape overrides and clears (`<landscapes>` → [`interpret_landscapes`]).
+    pub landscapes: LandscapesOverride,
+    /// Texture-loading overrides (`<texture_loading>` → [`interpret_texture_loading`]).
+    pub texture_loading: TextureLoadingOverride,
+    /// String-set overrides (`<stringset>` → [`interpret_stringset`]).
+    pub stringset: StringSetOverride,
+    /// Scenario-identity override (`<scenario>` → [`interpret_scenario`]).
+    pub scenario: ScenarioIdOverride,
+    /// Names of sections that were present on the document but only have stub
+    /// interpreters (box 1.14). Each is logged once via its stub interpreter
+    /// during [`from_document`](Self::from_document).
+    pub stub_sections: Vec<String>,
+}
+
+impl MmlOverrideSet {
+    /// Aggregate every implemented section override from `doc` into one
+    /// [`MmlOverrideSet`] (box 3.2). Each populated `doc.<section>` calls the
+    /// matching `interpret_*` function; absent sections leave that field at its
+    /// default/empty value.
+    ///
+    /// Sections that only have stub interpreters (box 1.14) are handled by
+    /// calling their stub (so the one-time "not yet implemented" warning fires)
+    /// and recording the section name in [`stub_sections`](Self::stub_sections);
+    /// the returned [`StubOverride`] carries no data and is discarded.
+    ///
+    /// `projectiles`/`effects` are left default because `MmlDocument` has no
+    /// matching section field (see the type-level DEVIATION note). `player` is
+    /// omitted entirely pending box 1.7.
+    pub fn from_document(doc: &MmlDocument) -> Self {
+        let mut out = MmlOverrideSet::default();
+
+        if let Some(section) = &doc.monsters {
+            out.monsters = interpret_monsters(section);
+        }
+        if let Some(section) = &doc.weapons {
+            out.weapons = interpret_weapons(section);
+        }
+        if let Some(section) = &doc.dynamic_limits {
+            out.dynamic_limits = interpret_dynamic_limits(section);
+        }
+        if let Some(section) = &doc.items {
+            out.items = interpret_items(section);
+        }
+        if let Some(section) = &doc.landscapes {
+            out.landscapes = interpret_landscapes(section);
+        }
+        if let Some(section) = &doc.texture_loading {
+            out.texture_loading = interpret_texture_loading(section);
+        }
+        if let Some(section) = &doc.stringset {
+            out.stringset = interpret_stringset(section);
+        }
+        if let Some(section) = &doc.scenario {
+            out.scenario = interpret_scenario(section);
+        }
+
+        // Stub sections (box 1.14): call the stub to emit the notice, record the
+        // name. `view` has no dedicated MmlDocument field, so it is not checked.
+        let stubs: [(&Option<MmlSection>, &str, fn(&MmlSection) -> StubOverride); 15] = [
+            (&doc.interface, "interface", interpret_interface),
+            (&doc.motion_sensor, "motion_sensor", interpret_motion_sensor),
+            (&doc.overhead_map, "overhead_map", interpret_overhead_map),
+            (&doc.infravision, "infravision", interpret_infravision),
+            (
+                &doc.animated_textures,
+                "animated_textures",
+                interpret_animated_textures,
+            ),
+            (
+                &doc.control_panels,
+                "control_panels",
+                interpret_control_panels,
+            ),
+            (&doc.platforms, "platforms", interpret_platforms),
+            (&doc.liquids, "liquids", interpret_liquids),
+            (&doc.sounds, "sounds", interpret_sounds),
+            (&doc.faders, "faders", interpret_faders),
+            (&doc.scenery, "scenery", interpret_scenery),
+            (&doc.opengl, "opengl", interpret_opengl),
+            (&doc.software, "software", interpret_software),
+            (&doc.console, "console", interpret_console),
+            (&doc.logging, "logging", interpret_logging),
+        ];
+        for (slot, name, interp) in stubs {
+            if let Some(section) = slot {
+                let _ = interp(section);
+                out.stub_sections.push(name.to_string());
+            }
+        }
+
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1397,5 +1574,80 @@ mod tests {
         assert_eq!(out.order.len(), 1);
         assert_eq!(out.order[0].index, 0);
         assert_eq!(out.order[0].weapon, Some(3));
+    }
+
+    // ── boxes 3.1/3.2: MmlOverrideSet aggregation ──
+
+    #[test]
+    fn override_set_from_empty_document_is_all_defaults() {
+        let doc = MmlDocument::from_bytes(b"<marathon></marathon>").unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set, MmlOverrideSet::default());
+        assert!(set.monsters.is_empty());
+        assert!(set.items.is_empty());
+        assert!(set.projectiles.is_empty());
+        assert!(set.effects.is_empty());
+        assert!(set.stub_sections.is_empty());
+        assert_eq!(set.dynamic_limits, DynamicLimitsOverride::default());
+        assert_eq!(set.scenario, ScenarioIdOverride::default());
+    }
+
+    #[test]
+    fn override_set_wires_populated_sections() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><monsters><monster index=\"5\" vitality=\"300\"/></monsters><items><item index=\"7\" maximum=\"5\"/></items></marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+
+        // monsters interpreted into the monsters field
+        assert_eq!(set.monsters.len(), 1);
+        assert_eq!(
+            set.monsters[0],
+            MonsterOverride {
+                index: 5,
+                vitality: Some(300),
+                ..Default::default()
+            }
+        );
+        // items interpreted into the items field
+        assert_eq!(set.items.len(), 1);
+        assert_eq!(
+            set.items[0],
+            ItemOverride {
+                index: 7,
+                maximum: Some(5),
+                ..Default::default()
+            }
+        );
+        // untouched sections stay at default/empty
+        assert_eq!(set.dynamic_limits, DynamicLimitsOverride::default());
+        assert!(set.landscapes.landscapes.is_empty());
+        assert!(set.stub_sections.is_empty());
+    }
+
+    #[test]
+    fn override_set_wires_scenario_and_dynamic_limits() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><scenario name=\"Marathon 2\" version=\"1\" id=\"M2\"/><dynamic_limits><monsters>1024</monsters></dynamic_limits></marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert_eq!(set.scenario.name.as_deref(), Some("Marathon 2"));
+        assert_eq!(set.scenario.version, Some(1));
+        assert_eq!(set.dynamic_limits.monsters, Some(1024));
+    }
+
+    #[test]
+    fn override_set_records_stub_sections() {
+        let doc = MmlDocument::from_bytes(
+            b"<marathon><platforms><platform index=\"0\"/></platforms><liquids/></marathon>",
+        )
+        .unwrap();
+        let set = MmlOverrideSet::from_document(&doc);
+        assert!(set.stub_sections.iter().any(|s| s == "platforms"));
+        assert!(set.stub_sections.iter().any(|s| s == "liquids"));
+        // stub sections carry no typed data
+        assert!(set.monsters.is_empty());
     }
 }

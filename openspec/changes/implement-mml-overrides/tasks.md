@@ -13,7 +13,7 @@
 - [x] 1.11 Define `TextureLoadingOverride` struct and implement `interpret_texture_loading(section: &MmlSection)` for the landscapes flag and texture_env entries
 - [x] 1.12 Define `StringSetOverride` as a collection of `(resource_id, string_index) -> String` entries and implement `interpret_stringset(section: &MmlSection)` parsing resource ID from stringset `index` and string entries from child `<string>` elements
 - [x] 1.13 Define `ScenarioIdOverride` struct and implement `interpret_scenario(section: &MmlSection)` for scenario name, version, id attributes
-- [ ] 1.14 Add stub interpreters for remaining sections (interface, motion_sensor, overhead_map, infravision, animated_textures, control_panels, platforms, liquids, sounds, faders, view, scenery, opengl, software, console, logging) that log "not yet implemented" and return empty/default overrides
+- [x] 1.14 Add stub interpreters for remaining sections (interface, motion_sensor, overhead_map, infravision, animated_textures, control_panels, platforms, liquids, sounds, faders, view, scenery, opengl, software, console, logging) that log "not yet implemented" and return empty/default overrides
 - [x] 1.15 Register `mml_interpret` module in `marathon-formats/src/lib.rs`
 
 ## 2. Element-Level Merge Logic
@@ -28,8 +28,8 @@
 
 ## 3. Override Cascade Assembly
 
-- [ ] 3.1 Define `MmlOverrideSet` struct in `marathon-formats/src/mml_interpret.rs` with typed fields for all section overrides (monster, weapon, projectile, effect, player, dynamic_limits, item, landscape, texture_loading, stringset, scenario, plus stubs for remaining sections)
-- [ ] 3.2 Implement `MmlOverrideSet::from_document(doc: &MmlDocument) -> Self` that calls the appropriate `interpret_*` function for each populated section
+- [x] 3.1 Define `MmlOverrideSet` struct in `marathon-formats/src/mml_interpret.rs` with typed fields for all section overrides (monster, weapon, projectile, effect, player, dynamic_limits, item, landscape, texture_loading, stringset, scenario, plus stubs for remaining sections)
+- [x] 3.2 Implement `MmlOverrideSet::from_document(doc: &MmlDocument) -> Self` that calls the appropriate `interpret_*` function for each populated section
 - [ ] 3.3 Implement `assemble_mml_cascade()` function (in marathon-formats or a new integration module) that takes global MML paths, local MML paths, scenario WAD entry, plugin metadata list, and current level WAD entry, layers all documents in cascade order, and returns the final merged `MmlDocument`
 - [ ] 3.4 Add `MmlCascadeCache` struct that stores the scenario+plugin MML base and provides `with_level_mml(level_entry: &WadEntry) -> MmlDocument` to layer level-embedded MML on top of the cached base
 - [ ] 3.5 Add tests for cascade ordering: global < local < scenario < plugin < level, plugin alphabetical order, level MML override reset on transition
