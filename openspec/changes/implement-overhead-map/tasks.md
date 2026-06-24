@@ -18,17 +18,17 @@
 - [x] 3.1 Define `LineCategory` enum: `SolidWall`, `ElevationChange`, `Transparent`, `Landscape`, `Platform`, `ControlPanel`. Define `ExploredLine` struct: `endpoints: (Vec2, Vec2)`, `category: LineCategory`, `explored: bool`. Define `ExploredPolygon` struct: `vertices: Vec<Vec2>`, `fill_color: [u8; 4]` (RGBA), `explored: bool`. Define `OverheadEntity` struct: `position: Vec2`, `facing: f32`, `kind: OverheadEntityKind` (Player, Monster, Item). Add these to `marathon-sim/src/tick.rs` or a new `marathon-sim/src/overhead.rs` module.
 - [x] 3.2 Implement `classify_line(line_index, metadata) -> LineCategory` function that evaluates priority: control panel > platform > landscape > elevation > transparent > solid.
 - [x] 3.3 Implement `polygon_fill_color(poly_index, metadata) -> [u8; 4]` function that checks media first, then polygon type, returning RGBA color bytes.
-- [ ] 3.4 Implement `explored_lines(&self) -> Vec<ExploredLine>` on `SimWorld` that iterates all lines, classifies each, reads explored status, and returns the list.
-- [ ] 3.5 Implement `explored_polygons(&self) -> Vec<ExploredPolygon>` on `SimWorld` that iterates all polygons, computes fill color, reads explored status, and returns the list.
-- [ ] 3.6 Implement `overhead_entities(&self) -> Vec<OverheadEntity>` on `SimWorld` that returns player position/facing and all monster/item positions with their kind.
-- [ ] 3.7 Implement `toggle_overhead_map(&mut self)` and `zoom_overhead_map(&mut self, delta: f32)` methods on `SimWorld` that modify `OverheadMapState`.
-- [ ] 3.8 Implement `overhead_map_visible(&self) -> bool` and `overhead_map_zoom(&self) -> f32` query methods on `SimWorld`.
+- [x] 3.4 Implement `explored_lines(&self) -> Vec<ExploredLine>` on `SimWorld` that iterates all lines, classifies each, reads explored status, and returns the list.
+- [x] 3.5 Implement `explored_polygons(&self) -> Vec<ExploredPolygon>` on `SimWorld` that iterates all polygons, computes fill color, reads explored status, and returns the list.
+- [x] 3.6 Implement `overhead_entities(&self) -> Vec<OverheadEntity>` on `SimWorld` that returns player position/facing and all monster/item positions with their kind.
+- [x] 3.7 Implement `toggle_overhead_map(&mut self)` and `zoom_overhead_map(&mut self, delta: f32)` methods on `SimWorld` that modify `OverheadMapState`.
+- [x] 3.8 Implement `overhead_map_visible(&self) -> bool` and `overhead_map_zoom(&self) -> f32` query methods on `SimWorld`.
 - [x] 3.9 Add unit test: classify a line with IS_CONTROL_PANEL side as ControlPanel regardless of SOLID flag.
 - [x] 3.10 Add unit test: classify a solid line adjacent to a Platform polygon as Platform.
 - [x] 3.11 Add unit test: classify a line with ELEVATION flag (no higher priority) as ElevationChange.
 - [x] 3.12 Add unit test: polygon_fill_color for a polygon with water media returns dark blue RGBA.
 - [x] 3.13 Add unit test: polygon_fill_color for a Platform polygon with no media returns dark red RGBA.
-- [ ] 3.14 Add unit test: toggle_overhead_map toggles visible between false and true.
+- [x] 3.14 Add unit test: toggle_overhead_map toggles visible between false and true.
 
 ## 4. Web Automap Renderer Upgrade
 

@@ -820,6 +820,148 @@ impl SimWorld {
             }
         }
     }
+
+    /// Build the overhead-map line list (box 3.4).
+    ///
+    /// Iterates every line, classifying it via [`crate::overhead::classify_line`]
+    /// against the static [`MapMetadata`], taking its world-space endpoints from
+    /// [`MapGeometry::line_endpoints`], and its explored flag from
+    /// [`ExploredMap::explored_lines`]. Lines without geometry/explored entries
+    /// fall back to zero endpoints / `false` respectively (defensive — the
+    /// vectors are normally all the same length as `map_data.lines`).
+    ///
+    /// Takes `&mut self` to match the query-method precedent in this impl
+    /// (`bevy_ecs::World::query*` needs `&mut World`); this method only reads
+    /// resources, but is kept `&mut self` for a uniform call signature with its
+    /// siblings ([`Self::explored_polygons`], [`Self::overhead_entities`]).
+    pub fn explored_lines(&mut self) -> Vec<crate::overhead::ExploredLine> {
+        let metadata = self.world.resource::<MapMetadata>().clone();
+        let line_endpoints = self.world.resource::<MapGeometry>().line_endpoints.clone();
+        let explored = self.world.resource::<ExploredMap>().explored_lines.clone();
+
+        (0..line_endpoints.len())
+            .map(|i| crate::overhead::ExploredLine {
+                endpoints: line_endpoints[i],
+                category: crate::overhead::classify_line(i, &metadata),
+                explored: explored.get(i).copied().unwrap_or(false),
+            })
+            .collect()
+    }
+
+    /// Build the overhead-map polygon list (box 3.5).
+    ///
+    /// Iterates every polygon, taking its outline from
+    /// [`MapGeometry::polygon_vertices`], its fill colour from
+    /// [`crate::overhead::polygon_fill_color`], and its explored flag from
+    /// [`ExploredMap::explored_polygons`]. Takes `&mut self` for the same
+    /// query-method-precedent reason as [`Self::explored_lines`].
+    pub fn explored_polygons(&mut self) -> Vec<crate::overhead::ExploredPolygon> {
+        let metadata = self.world.resource::<MapMetadata>().clone();
+        let polygon_vertices = self
+            .world
+            .resource::<MapGeometry>()
+            .polygon_vertices
+            .clone();
+        let explored = self
+            .world
+            .resource::<ExploredMap>()
+            .explored_polygons
+            .clone();
+
+        (0..polygon_vertices.len())
+            .map(|i| crate::overhead::ExploredPolygon {
+                vertices: polygon_vertices[i].clone(),
+                fill_color: crate::overhead::polygon_fill_color(i, &metadata),
+                explored: explored.get(i).copied().unwrap_or(false),
+            })
+            .collect()
+    }
+
+    /// Build the overhead-map entity-marker list (box 3.6).
+    ///
+    /// Returns the player marker first (its [`Facing`] drives the direction
+    /// arrow), then every monster marker, then every item marker. Monsters and
+    /// items carry no [`Facing`], so their `facing` is `0.0`. World positions are
+    /// projected to 2D by dropping the Z (vertical) component.
+    ///
+    /// Takes `&mut self` because `bevy_ecs::World::query*` requires `&mut World`
+    /// (matching [`Self::snapshot`] / [`Self::update_explored_map`]).
+    pub fn overhead_entities(&mut self) -> Vec<crate::overhead::OverheadEntity> {
+        use crate::overhead::{OverheadEntity, OverheadEntityKind};
+
+        let mut entities = Vec::new();
+
+        // Player (carries Facing → arrow direction).
+        {
+            let mut q = self
+                .world
+                .query_filtered::<(&Position, &Facing), bevy_ecs::prelude::With<Player>>();
+            if let Some((pos, facing)) = q.iter(&self.world).next() {
+                entities.push(OverheadEntity {
+                    position: Vec2::new(pos.0.x, pos.0.y),
+                    facing: facing.0,
+                    kind: OverheadEntityKind::Player,
+                });
+            }
+        }
+
+        // Monsters (no Facing on the marker → 0.0).
+        {
+            let mut q = self
+                .world
+                .query_filtered::<&Position, bevy_ecs::prelude::With<Monster>>();
+            for pos in q.iter(&self.world) {
+                entities.push(OverheadEntity {
+                    position: Vec2::new(pos.0.x, pos.0.y),
+                    facing: 0.0,
+                    kind: OverheadEntityKind::Monster,
+                });
+            }
+        }
+
+        // Items (no Facing on the marker → 0.0).
+        {
+            let mut q = self
+                .world
+                .query_filtered::<&Position, bevy_ecs::prelude::With<Item>>();
+            for pos in q.iter(&self.world) {
+                entities.push(OverheadEntity {
+                    position: Vec2::new(pos.0.x, pos.0.y),
+                    facing: 0.0,
+                    kind: OverheadEntityKind::Item,
+                });
+            }
+        }
+
+        entities
+    }
+
+    /// Toggle the overhead map's visibility (box 3.7).
+    pub fn toggle_overhead_map(&mut self) {
+        let mut state = self.world.resource_mut::<OverheadMapState>();
+        state.visible = !state.visible;
+    }
+
+    /// Adjust the overhead-map zoom by `delta` (box 3.7).
+    ///
+    /// The new zoom is clamped to `>= 1.0` (the documented sane minimum): a zoom
+    /// below 1.0 would invert/collapse the projection, so we floor it at `1.0`.
+    /// There is no hard upper bound — the renderer is free to scroll arbitrarily
+    /// far in.
+    pub fn zoom_overhead_map(&mut self, delta: f32) {
+        let mut state = self.world.resource_mut::<OverheadMapState>();
+        state.zoom = (state.zoom + delta).max(1.0);
+    }
+
+    /// Whether the overhead map is currently visible (box 3.8).
+    pub fn overhead_map_visible(&self) -> bool {
+        self.world.resource::<OverheadMapState>().visible
+    }
+
+    /// The overhead map's current zoom level (box 3.8).
+    pub fn overhead_map_zoom(&self) -> f32 {
+        self.world.resource::<OverheadMapState>().zoom
+    }
 }
 
 /// Current per-polygon dynamic geometry/lighting state, indexed by polygon.
@@ -2110,6 +2252,23 @@ mod poly_dynamic_data_tests {
             (state.zoom - 12.0).abs() < f32::EPSILON,
             "default zoom is 12.0"
         );
+    }
+
+    #[test]
+    fn toggle_overhead_map_flips_visibility() {
+        // box 3.14: toggle_overhead_map flips `visible` false -> true -> false.
+        let map = platform_map();
+        let mut world =
+            SimWorld::new(&map, &empty_physics(), &SimConfig::default()).expect("world");
+
+        // Starts hidden (box 1.5 default).
+        assert!(!world.overhead_map_visible(), "starts hidden");
+
+        world.toggle_overhead_map();
+        assert!(world.overhead_map_visible(), "toggled on");
+
+        world.toggle_overhead_map();
+        assert!(!world.overhead_map_visible(), "toggled back off");
     }
 
     /// A line whose SOLID flag is set explicitly. `mk_line` always sets SOLID;
