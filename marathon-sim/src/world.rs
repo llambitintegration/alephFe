@@ -126,6 +126,14 @@ pub enum SimEvent {
     ItemPickedUp {
         item_type: i16,
     },
+    /// A projectile crossed a liquid media surface, producing a splash. The
+    /// render layer spawns a splash sprite at `position` (box 9.x). `media_type`
+    /// selects the splash look (water/lava/goo/…); `effect_size` scales it.
+    MediaDetonation {
+        position: Vec3,
+        media_type: i16,
+        effect_size: u8,
+    },
 }
 
 /// serde adapter that represents a bevy `Entity` as its raw `u64` bits, since
@@ -357,6 +365,56 @@ impl SimWorld {
             out[i] = v;
         }
         out
+    }
+
+    /// Query the player's current submersion state (box 8.3).
+    ///
+    /// Resolves the polygon the player is standing in (its `PolygonIndex`),
+    /// maps that polygon to a media via [`MapGeometry::polygon_media_index`],
+    /// finds the spawned [`Media`] with that index, and reports whether the
+    /// player's eye (`Position.z`) is below the media's current surface height.
+    ///
+    /// Returns `Some((submerged, media_type))` when the player's polygon has an
+    /// associated media, or `None` when there is no player, no media in that
+    /// polygon, or no spawned `Media` matching the index.
+    ///
+    /// Height note: this uses the media's already-animated `current_height`
+    /// (updated each tick by `update_media` via `compute_media_height`), so it
+    /// reflects the dynamic light-driven surface, not a static base height.
+    pub fn player_submersion_state(&mut self) -> Option<(bool, i16)> {
+        // Player polygon + eye Z.
+        let (player_poly, eye_z) = {
+            let mut q = self
+                .world
+                .query_filtered::<(&Position, &PolygonIndex), bevy_ecs::prelude::With<crate::Player>>(
+                );
+            let (pos, poly) = q.iter(&self.world).next()?;
+            (poly.0, pos.0.z)
+        };
+
+        // Polygon -> media index.
+        let media_idx = {
+            let geometry = self.world.resource::<MapGeometry>();
+            let mi = geometry
+                .polygon_media_index
+                .get(player_poly)
+                .copied()
+                .unwrap_or(-1);
+            if mi < 0 {
+                return None;
+            }
+            mi as usize
+        };
+
+        // Find the spawned Media carrying that index.
+        let (media_height, media_type) = {
+            let mut q = self.world.query::<&crate::components::Media>();
+            let m = q.iter(&self.world).find(|m| m.index == media_idx)?;
+            (m.current_height, m.media_type)
+        };
+
+        let submerged = crate::world_mechanics::media::is_submerged(eye_z, media_height);
+        Some((submerged, media_type))
     }
 
     /// Drain pending simulation events.
@@ -1655,6 +1713,11 @@ mod sim_event_tests {
         });
         assert_round_trips(SimEvent::EntityKilled { entity });
         assert_round_trips(SimEvent::ItemPickedUp { item_type: 7 });
+        assert_round_trips(SimEvent::MediaDetonation {
+            position: Vec3::new(4.0, 5.0, 6.0),
+            media_type: 1,
+            effect_size: 3,
+        });
     }
 
     #[test]
@@ -2329,5 +2392,63 @@ mod poly_dynamic_data_tests {
                 "fists must be weapon definition index 0 in slot 0"
             );
         }
+    }
+
+    /// box 8.3: `player_submersion_state` resolves player polygon -> media and
+    /// reports (submerged, media_type). Below the surface -> submerged=true;
+    /// above -> false; no media in the polygon -> None.
+    #[test]
+    fn player_submersion_state_reflects_eye_vs_media_height() {
+        use crate::components::Media;
+        use crate::world_mechanics::media::MEDIA_WATER;
+
+        let map = player_map();
+        let mut world =
+            SimWorld::new(&map, &physics_with_player(), &SimConfig::default()).expect("world");
+
+        // No media anywhere yet -> None.
+        assert_eq!(world.player_submersion_state(), None);
+
+        // Wire poly 0 to media index 0 in the geometry, and spawn a Media with
+        // surface height 1.0.
+        {
+            let w = world.ecs_world_mut();
+            {
+                let mut geom = w.resource_mut::<MapGeometry>();
+                if geom.polygon_media_index.is_empty() {
+                    geom.polygon_media_index.push(0);
+                } else {
+                    geom.polygon_media_index[0] = 0;
+                }
+            }
+            w.spawn((
+                Media {
+                    index: 0,
+                    polygon_index: 0,
+                    media_type: MEDIA_WATER,
+                    height_low: 0.0,
+                    height_high: 2.0,
+                    light_index: 0,
+                    current_height: 1.0,
+                    current_direction: 0.0,
+                    current_magnitude: 0.0,
+                },
+                PolygonIndex(0),
+            ));
+        }
+
+        // Player spawns grounded (z below surface 1.0) -> submerged.
+        let state = world.player_submersion_state();
+        assert_eq!(state.map(|(_, t)| t), Some(MEDIA_WATER));
+        assert_eq!(state.map(|(s, _)| s), Some(true));
+
+        // Raise the player above the surface -> not submerged.
+        {
+            let w = world.ecs_world_mut();
+            let mut q = w.query_filtered::<&mut Position, With<crate::Player>>();
+            let mut pos = q.iter_mut(w).next().expect("player position");
+            pos.0.z = 5.0;
+        }
+        assert_eq!(world.player_submersion_state(), Some((false, MEDIA_WATER)));
     }
 }

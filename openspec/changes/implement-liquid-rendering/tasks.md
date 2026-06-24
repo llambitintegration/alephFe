@@ -51,12 +51,12 @@
 
 ## 8. Sim: Submersion Query and Media Detonation Events
 
-- [ ] 8.1 Add `is_submerged(eye_height: f32, polygon_media_height: f32) -> bool` helper to marathon-sim/src/world_mechanics/media.rs
-- [ ] 8.2 Add `media_tint_color(media_type: i16) -> [f32; 4]` function to marathon-sim/src/world_mechanics/media.rs returning the per-type underwater tint RGBA
-- [ ] 8.3 Expose a `player_submersion_state()` query on SimWorld (or SimSnapshot) returning Option<(bool, i16)> -- (submerged, media_type)
-- [ ] 8.4 Add `SimEvent::MediaDetonation { position: Vec3, media_type: i16, effect_size: u8 }` variant
-- [ ] 8.5 In the projectile movement system, detect when projectile Z crosses a polygon's media_height and emit MediaDetonation events
-- [ ] 8.6 Add unit tests: is_submerged returns true when eye below media height, false when above; media_tint_color returns correct RGBA per type
+- [x] 8.1 Add `is_submerged(eye_height: f32, polygon_media_height: f32) -> bool` helper to marathon-sim/src/world_mechanics/media.rs
+- [x] 8.2 Add `media_tint_color(media_type: i16) -> [f32; 4]` function to marathon-sim/src/world_mechanics/media.rs returning the per-type underwater tint RGBA
+- [x] 8.3 Expose a `player_submersion_state()` query on SimWorld (or SimSnapshot) returning Option<(bool, i16)> -- (submerged, media_type)
+- [x] 8.4 Add `SimEvent::MediaDetonation { position: Vec3, media_type: i16, effect_size: u8 }` variant
+- [x] 8.5 In the projectile movement system, detect when projectile Z crosses a polygon's media_height and emit MediaDetonation events
+- [x] 8.6 Add unit tests: is_submerged returns true when eye below media height, false when above; media_tint_color returns correct RGBA per type
 
 ## 9. Splash Sprite Rendering
 

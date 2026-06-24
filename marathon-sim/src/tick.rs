@@ -1373,6 +1373,9 @@ impl SimWorld {
         }
 
         let mut actions: Vec<ProjAction> = Vec::new();
+        // box 8.5: media splash events, collected here and flushed as SimEvents
+        // after the borrow on `self.world` is released (collect-then-apply).
+        let mut media_detonations: Vec<(glam::Vec3, i16, u8)> = Vec::new();
 
         for (idx, pd) in proj_data.iter().enumerate() {
             let def = physics_tables
@@ -1784,7 +1787,7 @@ impl SimWorld {
                 .copied()
                 .unwrap_or(-1);
             if media_idx >= 0 {
-                if let Some(&(media_height, _media_type)) = media_data.get(&(media_idx as usize)) {
+                if let Some(&(media_height, media_type)) = media_data.get(&(media_idx as usize)) {
                     // Check if projectile crossed the media surface
                     let was_above = pd.pos.z >= media_height;
                     let now_below = new_pos.z < media_height;
@@ -1792,6 +1795,13 @@ impl SimWorld {
                     let now_above = new_pos.z >= media_height;
 
                     if (was_above && now_below) || (was_below && now_above) {
+                        // box 8.5: a crossing always produces a splash at the
+                        // surface puncture point. effect_size scales with the
+                        // projectile's area-of-effect (clamped to u8).
+                        let splash_point = glam::Vec3::new(new_pos.x, new_pos.y, media_height);
+                        let effect_size = (def.area_of_effect as i32).clamp(0, 255) as u8;
+                        media_detonations.push((splash_point, media_type, effect_size));
+
                         if def.media_projectile_promotion >= 0 {
                             actions.push(ProjAction::Promote {
                                 entity: pd.entity,
@@ -2111,6 +2121,18 @@ impl SimWorld {
                 crate::world::SimEvent::SoundTrigger {
                     sound_index: sound_idx as usize,
                     position: pos,
+                },
+            );
+        }
+
+        // box 8.5: emit media splash events for projectiles that crossed a
+        // media surface this tick.
+        for (position, media_type, effect_size) in media_detonations {
+            self.world.resource_mut::<crate::world::SimEvents>().push(
+                crate::world::SimEvent::MediaDetonation {
+                    position,
+                    media_type,
+                    effect_size,
                 },
             );
         }
