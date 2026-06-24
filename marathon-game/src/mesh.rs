@@ -10,6 +10,13 @@ use marathon_formats::MapData;
 pub const WALL_HEIGHT_FROM_FLOOR: u32 = 0;
 pub const WALL_HEIGHT_FROM_CEILING: u32 = 1;
 
+/// High bit of `Vertex::texture_descriptor` flagging a media-surface vertex.
+/// Media vertices set this bit so the renderer/shader can distinguish them from
+/// opaque geometry (apply media height override + alpha-blended visuals). The
+/// real texture id lives in the low 31 bits; the shader masks this off before
+/// sampling.
+pub const MEDIA_VERTEX_FLAG: u32 = 0x8000_0000;
+
 /// Bit position of the floor/ceiling selector inside `Vertex::height_source`.
 const HEIGHT_SOURCE_SELECTOR_SHIFT: u32 = 31;
 /// Mask covering the source-polygon-index bits of `Vertex::height_source`.
@@ -74,6 +81,15 @@ impl Vertex {
 pub struct LevelMesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
+    /// Number of indices belonging to opaque geometry (floors, ceilings, walls),
+    /// which are emitted FIRST. Indices in `0..opaque_index_count` are opaque;
+    /// indices in `opaque_index_count..indices.len()` are alpha-blended media
+    /// surfaces. Lets the renderer draw opaque-then-media in two sub-passes.
+    // Produced here (boxes 1.1-1.5) and asserted by tests; the native
+    // marathon-game renderer that reads it lands in a later box, so the
+    // non-test build sees it as write-only until then.
+    #[allow(dead_code)]
+    pub opaque_index_count: u32,
 }
 
 /// Convert Marathon world distance (i16, 1024 = 1 world unit) to f32.
@@ -86,6 +102,7 @@ pub fn build_level_mesh(map: &MapData) -> LevelMesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
+    // --- Opaque pass: floors + ceilings for every polygon, then all walls. ---
     for (poly_idx, polygon) in map.polygons.iter().enumerate() {
         let vert_count = polygon.vertex_count as usize;
         if vert_count < 3 {
@@ -108,6 +125,22 @@ pub fn build_level_mesh(map: &MapData) -> LevelMesh {
             poly_idx,
             vert_count,
         );
+    }
+
+    for line in &map.lines {
+        build_walls_for_line(&mut vertices, &mut indices, map, line);
+    }
+
+    // Boundary between opaque and media geometry: every index emitted so far is
+    // opaque; media surfaces are appended after this point.
+    let opaque_index_count = indices.len() as u32;
+
+    // --- Media pass: alpha-blended media surfaces for every polygon. ---
+    for (poly_idx, polygon) in map.polygons.iter().enumerate() {
+        let vert_count = polygon.vertex_count as usize;
+        if vert_count < 3 {
+            continue;
+        }
 
         if polygon.media_index >= 0 {
             if let Some(media) = map.media.get(polygon.media_index as usize) {
@@ -124,11 +157,11 @@ pub fn build_level_mesh(map: &MapData) -> LevelMesh {
         }
     }
 
-    for line in &map.lines {
-        build_walls_for_line(&mut vertices, &mut indices, map, line);
+    LevelMesh {
+        vertices,
+        indices,
+        opaque_index_count,
     }
-
-    LevelMesh { vertices, indices }
 }
 
 fn build_floor(
@@ -228,7 +261,10 @@ fn build_media_surface(
 ) {
     let base = vertices.len() as u32;
     let media_y = world_to_f32(media.height);
-    let tex_desc = media.texture.0 as u32;
+    // Flag this as a media-surface vertex by setting bit 31 of the texture
+    // descriptor (low bits stay the real texture id). The shader masks bit 31
+    // off before sampling and uses it to apply media height/visual overrides.
+    let tex_desc = (media.texture.0 as u32) | MEDIA_VERTEX_FLAG;
 
     let mut actual_verts = 0u32;
     for i in 0..vert_count {
@@ -819,6 +855,120 @@ mod tests {
             assert_eq!(
                 v.height_source,
                 pack_height_source(WALL_HEIGHT_FROM_CEILING, 0)
+            );
+        }
+    }
+
+    fn make_media(texture: u16, height: i16) -> marathon_formats::MediaData {
+        marathon_formats::MediaData {
+            media_type: 0,
+            flags: 0,
+            light_index: 0,
+            current_direction: 0,
+            current_magnitude: 0,
+            low: 0,
+            high: 0,
+            origin: WorldPoint2d { x: 0, y: 0 },
+            height,
+            minimum_light_intensity: 0.0,
+            texture: ShapeDescriptor(texture),
+            transfer_mode: 0,
+        }
+    }
+
+    /// A square polygon (endpoints 0..4) referencing the given media index.
+    fn make_square_polygon(media_index: i16) -> Polygon {
+        let mut p = make_polygon(4, [0, 1, 2, 3, -1, -1, -1, -1]);
+        p.media_index = media_index;
+        p
+    }
+
+    fn square_endpoints() -> Vec<Endpoint> {
+        vec![
+            make_endpoint(0, 0),
+            make_endpoint(1024, 0),
+            make_endpoint(1024, 1024),
+            make_endpoint(0, 1024),
+        ]
+    }
+
+    /// Box 1.4: a level with 2 opaque polygons and 1 media polygon must emit all
+    /// opaque indices first, with `opaque_index_count` marking the boundary; the
+    /// media triangles follow AFTER that boundary and bring the total higher.
+    #[test]
+    fn opaque_index_count_marks_media_boundary() {
+        // Three square polygons. Polygon 2 also has a media surface (media 0).
+        let p0 = make_square_polygon(-1);
+        let p1 = make_square_polygon(-1);
+        let p2 = make_square_polygon(0);
+        let mut map = make_map_data(square_endpoints(), vec![p0, p1, p2], vec![], vec![]);
+        map.media = vec![make_media(0x0005, 512)];
+
+        let mesh = build_level_mesh(&map);
+
+        // Each square emits floor (2 tris = 6 idx) + ceiling (6 idx) = 12 opaque
+        // indices per polygon. 3 polygons => 36 opaque indices, no walls.
+        let expected_opaque = 36u32;
+        assert_eq!(
+            mesh.opaque_index_count, expected_opaque,
+            "opaque_index_count must equal the opaque floor+ceiling index total"
+        );
+
+        // The media surface (1 square = 2 tris = 6 indices) is appended after the
+        // boundary, so the total exceeds the opaque count by exactly the media
+        // triangle indices.
+        assert_eq!(
+            mesh.indices.len() as u32,
+            expected_opaque + 6,
+            "media indices must follow the opaque boundary"
+        );
+        assert!(
+            mesh.opaque_index_count < mesh.indices.len() as u32,
+            "media triangles must come AFTER opaque_index_count"
+        );
+    }
+
+    /// Box 1.5: media vertices carry bit 31 set on `texture_descriptor`; opaque
+    /// (floor/ceiling/wall) vertices do NOT.
+    #[test]
+    fn media_vertices_flagged_with_bit31() {
+        let p0 = make_square_polygon(-1);
+        let p1 = make_square_polygon(0);
+        let mut map = make_map_data(square_endpoints(), vec![p0, p1], vec![], vec![]);
+        map.media = vec![make_media(0x0007, 256)];
+
+        let mesh = build_level_mesh(&map);
+
+        let media_verts: Vec<&Vertex> = mesh
+            .vertices
+            .iter()
+            .filter(|v| v.texture_descriptor & MEDIA_VERTEX_FLAG != 0)
+            .collect();
+        let opaque_verts: Vec<&Vertex> = mesh
+            .vertices
+            .iter()
+            .filter(|v| v.texture_descriptor & MEDIA_VERTEX_FLAG == 0)
+            .collect();
+
+        // One media square => 4 flagged vertices; both polygons' floors+ceilings
+        // are opaque (unflagged).
+        assert_eq!(media_verts.len(), 4, "exactly the media square is flagged");
+        assert!(!opaque_verts.is_empty(), "opaque vertices must remain");
+
+        for v in &media_verts {
+            assert_ne!(
+                v.texture_descriptor & MEDIA_VERTEX_FLAG,
+                0,
+                "media vertex must set bit 31"
+            );
+            // Low 31 bits preserve the real texture id.
+            assert_eq!(v.texture_descriptor & 0x7FFF_FFFF, 0x0007);
+        }
+        for v in &opaque_verts {
+            assert_eq!(
+                v.texture_descriptor & MEDIA_VERTEX_FLAG,
+                0,
+                "opaque vertex must NOT set bit 31"
             );
         }
     }

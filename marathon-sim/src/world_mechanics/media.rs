@@ -31,6 +31,34 @@ pub fn media_drag_factor(media_type: i16) -> f32 {
     }
 }
 
+/// Whether an eye/viewpoint at `eye_height` is submerged beneath a media surface
+/// whose current height is `polygon_media_height`.
+///
+/// Submersion is strictly "below the surface": an eye exactly at the surface
+/// height is treated as *not* submerged (matching the projectile-crossing
+/// convention `z < media_height` used elsewhere in the sim).
+pub fn is_submerged(eye_height: f32, polygon_media_height: f32) -> bool {
+    eye_height < polygon_media_height
+}
+
+/// Per-type underwater tint colour applied as a fullscreen overlay when the
+/// camera is submerged (render box 7.x consumes this). Returns straight RGBA in
+/// 0.0..=1.0. The alpha is the overlay strength, not a physical opacity.
+///
+/// Tints are Marathon-flavoured: water is a cool blue, lava a hot orange/red,
+/// goo a sickly green, sewage a murky brown-green, and JjaroGoo a teal/cyan.
+/// Unknown media types fall back to a neutral, fully transparent tint.
+pub fn media_tint_color(media_type: i16) -> [f32; 4] {
+    match media_type {
+        MEDIA_WATER => [0.10, 0.30, 0.70, 0.45],
+        MEDIA_LAVA => [0.85, 0.25, 0.05, 0.70],
+        MEDIA_GOO => [0.15, 0.65, 0.20, 0.55],
+        MEDIA_SEWAGE => [0.35, 0.40, 0.20, 0.50],
+        MEDIA_JJARO => [0.10, 0.60, 0.60, 0.50],
+        _ => [0.0, 0.0, 0.0, 0.0],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,5 +105,48 @@ mod tests {
     #[test]
     fn drag_factors() {
         assert!(media_drag_factor(MEDIA_WATER) > media_drag_factor(MEDIA_GOO));
+    }
+
+    #[test]
+    fn submerged_when_eye_below_surface() {
+        // Eye at 0.5, surface at 1.0 -> submerged.
+        assert!(is_submerged(0.5, 1.0));
+    }
+
+    #[test]
+    fn not_submerged_when_eye_above_surface() {
+        // Eye at 1.5, surface at 1.0 -> not submerged.
+        assert!(!is_submerged(1.5, 1.0));
+    }
+
+    #[test]
+    fn not_submerged_when_eye_exactly_at_surface() {
+        // Strictly-below convention: eye exactly at surface is not submerged.
+        assert!(!is_submerged(1.0, 1.0));
+    }
+
+    #[test]
+    fn tint_colors_per_media_type() {
+        assert_eq!(media_tint_color(MEDIA_WATER), [0.10, 0.30, 0.70, 0.45]);
+        assert_eq!(media_tint_color(MEDIA_LAVA), [0.85, 0.25, 0.05, 0.70]);
+        assert_eq!(media_tint_color(MEDIA_GOO), [0.15, 0.65, 0.20, 0.55]);
+        assert_eq!(media_tint_color(MEDIA_SEWAGE), [0.35, 0.40, 0.20, 0.50]);
+        assert_eq!(media_tint_color(MEDIA_JJARO), [0.10, 0.60, 0.60, 0.50]);
+        // Unknown type -> neutral, transparent.
+        assert_eq!(media_tint_color(99), [0.0, 0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn water_tint_is_bluish() {
+        // Sanity: water's blue channel dominates red/green.
+        let [r, g, b, _a] = media_tint_color(MEDIA_WATER);
+        assert!(b > r && b > g);
+    }
+
+    #[test]
+    fn lava_tint_is_reddish() {
+        // Sanity: lava's red channel dominates green/blue.
+        let [r, g, b, _a] = media_tint_color(MEDIA_LAVA);
+        assert!(r > g && r > b);
     }
 }

@@ -1,6 +1,13 @@
 use bytemuck::{Pod, Zeroable};
 use marathon_formats::MapData;
 
+/// High bit of `Vertex::texture_descriptor` flagging a media-surface vertex.
+/// Media vertices set this bit so the renderer/shader can distinguish them from
+/// opaque geometry (apply media height override + alpha-blended visuals). The
+/// real texture id lives in the low 31 bits; the shader masks this off before
+/// sampling.
+pub const MEDIA_VERTEX_FLAG: u32 = 0x8000_0000;
+
 /// GPU vertex format: position + UV + polygon index + texture descriptor.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
@@ -32,6 +39,14 @@ impl Vertex {
 pub struct LevelMesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
+    /// Number of indices belonging to opaque geometry (floors, ceilings, walls),
+    /// which are emitted FIRST. Indices in `0..opaque_index_count` are opaque;
+    /// indices in `opaque_index_count..indices.len()` are alpha-blended media
+    /// surfaces. Lets the renderer draw opaque-then-media in two sub-passes.
+    // Produced here (boxes 1.1-1.5); the viewer renderer that reads it lands
+    // in a later box, so the build sees it as write-only until then.
+    #[allow(dead_code)]
+    pub opaque_index_count: u32,
 }
 
 /// Convert Marathon world distance (i16, 1024 = 1 world unit) to f32.
@@ -44,6 +59,7 @@ pub fn build_level_mesh(map: &MapData) -> LevelMesh {
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
 
+    // --- Opaque pass: floors + ceilings for every polygon, then all walls. ---
     for (poly_idx, polygon) in map.polygons.iter().enumerate() {
         let vert_count = polygon.vertex_count as usize;
         if vert_count < 3 {
@@ -69,8 +85,24 @@ pub fn build_level_mesh(map: &MapData) -> LevelMesh {
             poly_idx,
             vert_count,
         );
+    }
 
-        // Media surface if present
+    // Walls from lines/sides
+    for line in &map.lines {
+        build_walls_for_line(&mut vertices, &mut indices, map, line);
+    }
+
+    // Boundary between opaque and media geometry: every index emitted so far is
+    // opaque; media surfaces are appended after this point.
+    let opaque_index_count = indices.len() as u32;
+
+    // --- Media pass: alpha-blended media surfaces for every polygon. ---
+    for (poly_idx, polygon) in map.polygons.iter().enumerate() {
+        let vert_count = polygon.vertex_count as usize;
+        if vert_count < 3 {
+            continue;
+        }
+
         if polygon.media_index >= 0 {
             if let Some(media) = map.media.get(polygon.media_index as usize) {
                 build_media_surface(
@@ -86,12 +118,11 @@ pub fn build_level_mesh(map: &MapData) -> LevelMesh {
         }
     }
 
-    // Walls from lines/sides
-    for line in &map.lines {
-        build_walls_for_line(&mut vertices, &mut indices, map, line);
+    LevelMesh {
+        vertices,
+        indices,
+        opaque_index_count,
     }
-
-    LevelMesh { vertices, indices }
 }
 
 fn build_floor(
@@ -194,7 +225,10 @@ fn build_media_surface(
 ) {
     let base = vertices.len() as u32;
     let media_y = world_to_f32(media.height);
-    let tex_desc = media.texture.0 as u32;
+    // Flag this as a media-surface vertex by setting bit 31 of the texture
+    // descriptor (low bits stay the real texture id). The shader masks bit 31
+    // off before sampling and uses it to apply media height/visual overrides.
+    let tex_desc = (media.texture.0 as u32) | MEDIA_VERTEX_FLAG;
 
     let mut actual_verts = 0u32;
     for i in 0..vert_count {
