@@ -42,7 +42,7 @@
 - [x] 4.1 Add `run_light_updates()` method on `SimWorld` in `tick.rs` that queries all `Light` entities and calls `update_single_light()` for each
 - [x] 4.2 Call `run_light_updates()` in `SimWorld::tick()` after player physics, in the world mechanics phase
 - [x] 4.3 Add `run_media_updates()` method on `SimWorld` that queries all `Media` entities, looks up the corresponding `Light` by `light_index`, and calls `compute_media_height()` to update `current_height`
-- [ ] 4.4 Call `run_media_updates()` in `SimWorld::tick()` after `run_light_updates()`
+- [x] 4.4 Call `run_media_updates()` in `SimWorld::tick()` after `run_light_updates()`
 - [x] 4.5 Add integration test: construct a SimWorld with a smooth-cycling light, tick 60 times, verify `current_intensity` changes over ticks
 - [x] 4.6 Add integration test: construct a SimWorld with a media entity linked to a cycling light, tick 60 times, verify `current_height` changes
 
